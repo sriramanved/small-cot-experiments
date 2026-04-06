@@ -45,6 +45,8 @@ wandb_project = 'owt'
 wandb_run_name = 'gpt2' # 'run' + str(time.time())
 # data
 dataset = 'openwebtext'
+s5_mode = 'cot'
+s5_m = 21
 gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
 batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
@@ -111,9 +113,22 @@ device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.aut
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
+# synthetic S5 task hooks
+if dataset == 's5_cot':
+    from data.s5_cot.task import get_batch as s5_get_batch
+    from data.s5_cot.task import VOCAB_SIZE as s5_vocab_size
+    from data.s5_cot.task import continuation_exact_from_logits
+
 # poor man's data loader
 data_dir = os.path.join('data', dataset)
 def get_batch(split):
+    if dataset == 's5_cot':
+        return s5_get_batch(
+            batch_size=batch_size,
+            device=device,
+            mode=s5_mode,
+            m=s5_m,
+        )
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
     if split == 'train':
@@ -135,13 +150,17 @@ iter_num = 0
 best_val_loss = 1e9
 
 # attempt to derive vocab_size from the dataset
-meta_path = os.path.join(data_dir, 'meta.pkl')
 meta_vocab_size = None
-if os.path.exists(meta_path):
-    with open(meta_path, 'rb') as f:
-        meta = pickle.load(f)
-    meta_vocab_size = meta['vocab_size']
-    print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
+if dataset == 's5_cot':
+    meta_vocab_size = s5_vocab_size
+    print(f"using synthetic vocab_size = {meta_vocab_size} for {dataset}")
+else:
+    meta_path = os.path.join(data_dir, 'meta.pkl')
+    if os.path.exists(meta_path):
+        with open(meta_path, 'rb') as f:
+            meta = pickle.load(f)
+        meta_vocab_size = meta['vocab_size']
+        print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
@@ -218,27 +237,41 @@ def estimate_loss():
     model.eval()
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
+        if dataset == 's5_cot':
+            exacts = torch.zeros(eval_iters)
+
         for k in range(eval_iters):
             X, Y = get_batch(split)
             with ctx:
                 logits, loss = model(X, Y)
             losses[k] = loss.item()
+
+            if dataset == 's5_cot':
+                exacts[k] = continuation_exact_from_logits(logits, Y)
+
         out[split] = losses.mean()
+        if dataset == 's5_cot':
+            out[f'{split}_cot_exact'] = exacts.mean()
+
     model.train()
     return out
 
 # learning rate decay scheduler (cosine with warmup)
 def get_lr(it):
-    # 1) linear warmup for warmup_iters steps
+    lr_start = 1e-6
+
+    # 1) linear warmup from 1e-6 to learning_rate
     if it < warmup_iters:
-        return learning_rate * (it + 1) / (warmup_iters + 1)
-    # 2) if it > lr_decay_iters, return min learning rate
+        return lr_start + (learning_rate - lr_start) * (it + 1) / (warmup_iters + 1)
+
+    # 2) after decay horizon, stay at min_lr
     if it > lr_decay_iters:
         return min_lr
-    # 3) in between, use cosine decay down to min learning rate
+
+    # 3) cosine decay
     decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
     assert 0 <= decay_ratio <= 1
-    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
     return min_lr + coeff * (learning_rate - min_lr)
 
 # logging
@@ -264,13 +297,19 @@ while True:
         losses = estimate_loss()
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         if wandb_log:
-            wandb.log({
+            log_dict = {
                 "iter": iter_num,
                 "train/loss": losses['train'],
                 "val/loss": losses['val'],
                 "lr": lr,
-                "mfu": running_mfu*100, # convert to percentage
-            })
+                "mfu": running_mfu * 100,
+            }
+            if dataset == 's5_cot':
+                if 'train_cot_exact' in losses:
+                    log_dict["train/cot_exact"] = losses['train_cot_exact']
+                if 'val_cot_exact' in losses:
+                    log_dict["val/cot_exact"] = losses['val_cot_exact']
+            wandb.log(log_dict)
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
             if iter_num > 0:
