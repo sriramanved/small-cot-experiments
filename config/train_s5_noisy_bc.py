@@ -1,11 +1,12 @@
-out_dir = 'out-s5-cot-len21-depth1'
+out_dir = 'out-s5-noisy-bc'
 eval_interval = 5000
 log_interval = 50
 eval_iters = 200
 always_save_checkpoint = True
 
 wandb_log = False
-dataset = 's5_cot'
+dataset = 's5_noisy_offline_eta_0p2' #placeholder
+init_from = 'scratch'
 
 # task-specific
 s5_mode = 'cot'

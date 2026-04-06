@@ -23,6 +23,7 @@ import pickle
 from contextlib import nullcontext
 
 import numpy as np
+import random
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
@@ -74,6 +75,12 @@ backend = 'nccl' # 'nccl', 'gloo', etc.
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
+
+# S5 evaluation/checkpoint extras
+s5_eval_metrics = False
+s5_eval_n = 256
+s5_eval_seed = 123
+save_every = 0  # 0 disables numbered checkpoints
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -105,7 +112,11 @@ print(f"tokens per iteration will be: {tokens_per_iter:,}")
 
 if master_process:
     os.makedirs(out_dir, exist_ok=True)
+random.seed(1337 + seed_offset)
+np.random.seed(1337 + seed_offset)
 torch.manual_seed(1337 + seed_offset)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(1337 + seed_offset)
 torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast
@@ -114,10 +125,14 @@ ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torc
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
 # synthetic S5 task hooks
-if dataset == 's5_cot':
+if dataset.startswith('s5_noisy_offline'):
+    from data.s5_cot.offline_dataset import get_batch as noisy_get_batch
+    from data.s5_cot.task import VOCAB_SIZE as s5_vocab_size
+    from data.s5_cot.task import evaluate_clean_s5_metrics
+elif dataset == 's5_cot':
     from data.s5_cot.task import get_batch as s5_get_batch
     from data.s5_cot.task import VOCAB_SIZE as s5_vocab_size
-    from data.s5_cot.task import continuation_exact_from_logits
+    from data.s5_cot.task import evaluate_clean_s5_metrics
 
 # poor man's data loader
 data_dir = os.path.join('data', dataset)
@@ -128,6 +143,13 @@ def get_batch(split):
             device=device,
             mode=s5_mode,
             m=s5_m,
+        )
+    elif dataset.startswith('s5_noisy_offline'):
+        return noisy_get_batch(
+            split=split,
+            batch_size=batch_size,
+            device=device,
+            data_dir=data_dir
         )
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
@@ -151,7 +173,8 @@ best_val_loss = 1e9
 
 # attempt to derive vocab_size from the dataset
 meta_vocab_size = None
-if dataset == 's5_cot':
+is_s5 = (dataset == 's5_cot' or dataset.startswith('s5_noisy_offline'))
+if is_s5:
     meta_vocab_size = s5_vocab_size
     print(f"using synthetic vocab_size = {meta_vocab_size} for {dataset}")
 else:
@@ -235,23 +258,29 @@ if ddp:
 def estimate_loss():
     out = {}
     model.eval()
+
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
-        if dataset == 's5_cot':
-            exacts = torch.zeros(eval_iters)
-
         for k in range(eval_iters):
             X, Y = get_batch(split)
             with ctx:
                 logits, loss = model(X, Y)
             losses[k] = loss.item()
-
-            if dataset == 's5_cot':
-                exacts[k] = continuation_exact_from_logits(logits, Y)
-
         out[split] = losses.mean()
-        if dataset == 's5_cot':
-            out[f'{split}_cot_exact'] = exacts.mean()
+
+    # clean-task metrics for both clean S5 and noisy offline BC runs
+    if is_s5 and s5_eval_metrics:
+        eval_model = raw_model if 'raw_model' in globals() else model
+        metrics = evaluate_clean_s5_metrics(
+            eval_model,
+            device=device,
+            n_eval=s5_eval_n,
+            m=s5_m,
+            seed=s5_eval_seed,
+        )
+        out["val_cot_exact"] = metrics["cot_exact"]
+        out["val_clean_full_exact"] = metrics["clean_full_exact"]
+        out["val_clean_final_exact"] = metrics["clean_final_exact"]
 
     model.train()
     return out
@@ -295,20 +324,31 @@ while True:
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss()
-        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        print_msg = f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
+        if is_s5 and s5_eval_metrics:
+            if "val_cot_exact" in losses:
+                print_msg += f", val cot_exact {losses['val_cot_exact']:.4f}"
+            if "val_clean_full_exact" in losses:
+                print_msg += f", val clean_full_exact {losses['val_clean_full_exact']:.4f}"
+            if "val_clean_final_exact" in losses:
+                print_msg += f", val clean_final_exact {losses['val_clean_final_exact']:.4f}"
+        print(print_msg)
+
         if wandb_log:
             log_dict = {
                 "iter": iter_num,
-                "train/loss": losses['train'],
-                "val/loss": losses['val'],
+                "train/loss": losses["train"],
+                "val/loss": losses["val"],
                 "lr": lr,
                 "mfu": running_mfu * 100,
             }
-            if dataset == 's5_cot':
-                if 'train_cot_exact' in losses:
-                    log_dict["train/cot_exact"] = losses['train_cot_exact']
-                if 'val_cot_exact' in losses:
-                    log_dict["val/cot_exact"] = losses['val_cot_exact']
+            if is_s5 and s5_eval_metrics:
+                if "val_cot_exact" in losses:
+                    log_dict["val/cot_exact"] = losses["val_cot_exact"]
+                if "val_clean_full_exact" in losses:
+                    log_dict["val/clean_full_exact"] = losses["val_clean_full_exact"]
+                if "val_clean_final_exact" in losses:
+                    log_dict["val/clean_final_exact"] = losses["val_clean_final_exact"]
             wandb.log(log_dict)
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
@@ -323,6 +363,10 @@ while True:
                 }
                 print(f"saving checkpoint to {out_dir}")
                 torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+                if save_every > 0 and iter_num % save_every == 0:
+                    numbered_path = os.path.join(out_dir, f'ckpt_{iter_num:07d}.pt')
+                    print(f"saving checkpoint to {numbered_path}")
+                    torch.save(checkpoint, numbered_path)
     if iter_num == 0 and eval_only:
         break
 
