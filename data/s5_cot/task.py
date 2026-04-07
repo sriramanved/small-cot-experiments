@@ -180,3 +180,55 @@ def evaluate_clean_s5_metrics(
         "clean_full_exact": ar_full_ok / n_eval,
         "clean_final_exact": ar_final_ok / n_eval,
     }
+
+import os
+
+@torch.no_grad()
+def evaluate_saved_clean_s5_metrics(
+    model,
+    device,
+    data_dir,
+    n_eval=None,
+):
+    prompt_ids_all = torch.load(os.path.join(data_dir, "clean_val_prompt_ids.pt"), map_location="cpu").long()
+    cot_ids_all = torch.load(os.path.join(data_dir, "clean_val_cot_ids.pt"), map_location="cpu").long()
+
+    if n_eval is not None:
+        prompt_ids_all = prompt_ids_all[:n_eval]
+        cot_ids_all = cot_ids_all[:n_eval]
+
+    tf_full_ok = 0
+    ar_full_ok = 0
+    ar_final_ok = 0
+    n = prompt_ids_all.size(0)
+
+    for i in range(n):
+        prompt_ids = prompt_ids_all[i].tolist()
+        cot_ids = cot_ids_all[i].tolist()
+
+        # teacher-forced full-CoT exact
+        seq = prompt_ids + cot_ids
+        x = torch.tensor([seq[:-1]], dtype=torch.long, device=device)
+        y = torch.tensor([seq[1:]], dtype=torch.long, device=device)
+        y[:, :len(prompt_ids)-1] = -1
+
+        logits, _ = model(x, y)
+        pred = logits.argmax(dim=-1)
+        mask = (y != -1)
+        tf_ok = torch.logical_or(pred.eq(y), ~mask).all(dim=1).item()
+        tf_full_ok += int(tf_ok)
+
+        # autoregressive full / final exact
+        out_ids = greedy_generate_ids(model, prompt_ids, len(cot_ids), device)
+        pred_ids = out_ids[len(prompt_ids):]
+
+        if pred_ids == cot_ids:
+            ar_full_ok += 1
+        if pred_ids[-7:] == cot_ids[-7:]:
+            ar_final_ok += 1
+
+    return {
+        "cot_exact": tf_full_ok / n,
+        "clean_full_exact": ar_full_ok / n,
+        "clean_final_exact": ar_final_ok / n,
+    }

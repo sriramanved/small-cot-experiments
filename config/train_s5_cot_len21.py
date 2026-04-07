@@ -1,4 +1,4 @@
-out_dir = 'out-s5-cot-len21-depth1'
+out_dir = 'out-s5-cot-len21-depth1-v2'
 eval_interval = 5000
 log_interval = 50
 eval_iters = 200

@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT))
 from model import GPTConfig, GPT
 from data.s5_cot.task import (
     encode,
-    sample_prompt_only,
+    sample_cot_example_from_rng,
     corrupt_token,
 )
 
@@ -56,13 +56,30 @@ def sample_next_token(model, idx, temperature=1.0, top_k=None):
     probs = F.softmax(logits, dim=-1)
     return torch.multinomial(probs, num_samples=1).squeeze(-1)
 
+def prompt_key(prompt_tokens):
+    return ''.join(prompt_tokens)
+
+def make_unique_prompt_pool(n_total, m, seed):
+    rng = random.Random(seed)
+    pool = []
+    seen = set()
+
+    while len(pool) < n_total:
+        prompt_toks, cot_toks = sample_cot_example_from_rng(rng, m=m)
+        key = prompt_key(prompt_toks)
+        if key in seen:
+            continue
+        seen.add(key)
+        pool.append((prompt_toks, cot_toks))
+
+    return pool
+
 @torch.no_grad()
-def build_example(model, m, eta, device, temperature, top_k):
-    prompt_tokens = sample_prompt_only(m=m)
+def build_example_from_prompt(model, prompt_tokens, m, eta, device, temperature, top_k):
     prompt_ids = encode(prompt_tokens)
     prompt_len = len(prompt_ids)
 
-    target_len = 7 * m  # full CoT length for S5
+    target_len = 7 * m
     idx = torch.tensor([prompt_ids], dtype=torch.long, device=device)
 
     generated = []
@@ -81,13 +98,22 @@ def build_example(model, m, eta, device, temperature, top_k):
     return x, y
 
 @torch.no_grad()
-def make_split(model, n, m, eta, device, temperature, top_k, split_name):
-    seq_len = 14 * m  # x/y length for S5 CoT
+def make_split_from_pairs(model, pairs, m, eta, device, temperature, top_k, split_name):
+    n = len(pairs)
+    seq_len = 14 * m
     x_all = torch.empty((n, seq_len), dtype=torch.uint8)
     y_all = torch.empty((n, seq_len), dtype=torch.int16)
 
-    for i in range(n):
-        x, y = build_example(model, m, eta, device, temperature, top_k)
+    for i, (prompt_toks, _) in enumerate(pairs):
+        x, y = build_example_from_prompt(
+            model=model,
+            prompt_tokens=prompt_toks,
+            m=m,
+            eta=eta,
+            device=device,
+            temperature=temperature,
+            top_k=top_k,
+        )
         x_all[i] = x
         y_all[i] = y
         if (i + 1) % 1000 == 0 or (i + 1) == n:
@@ -118,9 +144,17 @@ def main():
 
     model = load_model(args.teacher_out_dir, args.device)
 
-    train_x, train_y = make_split(
+    pairs = make_unique_prompt_pool(args.n_train + args.n_val, args.m, args.seed)
+    train_pairs = pairs[:args.n_train]
+    val_pairs = pairs[args.n_train:]
+
+    train_keys = {prompt_key(p) for p, _ in train_pairs}
+    val_keys = {prompt_key(p) for p, _ in val_pairs}
+    assert train_keys.isdisjoint(val_keys)
+
+    train_x, train_y = make_split_from_pairs(
         model=model,
-        n=args.n_train,
+        pairs=train_pairs,
         m=args.m,
         eta=args.eta,
         device=args.device,
@@ -129,9 +163,9 @@ def main():
         split_name="train",
     )
 
-    val_x, val_y = make_split(
+    val_x, val_y = make_split_from_pairs(
         model=model,
-        n=args.n_val,
+        pairs=val_pairs,
         m=args.m,
         eta=args.eta,
         device=args.device,
@@ -139,6 +173,30 @@ def main():
         top_k=args.top_k,
         split_name="val",
     )
+
+    clean_val_prompt_ids = torch.tensor(
+        [encode(prompt_toks) for prompt_toks, _ in val_pairs],
+        dtype=torch.uint8,
+    )
+    clean_val_cot_ids = torch.tensor(
+        [encode(cot_toks) for _, cot_toks in val_pairs],
+        dtype=torch.uint8,
+    )
+
+    torch.save(clean_val_prompt_ids, os.path.join(args.save_dir, "clean_val_prompt_ids.pt"))
+    torch.save(clean_val_cot_ids, os.path.join(args.save_dir, "clean_val_cot_ids.pt"))
+
+    clean_train_prompt_ids = torch.tensor(
+    [encode(prompt_toks) for prompt_toks, _ in train_pairs],
+    dtype=torch.uint8,
+    )
+    clean_train_cot_ids = torch.tensor(
+        [encode(cot_toks) for _, cot_toks in train_pairs],
+        dtype=torch.uint8,
+    )
+
+    torch.save(clean_train_prompt_ids, os.path.join(args.save_dir, "clean_train_prompt_ids.pt"))
+    torch.save(clean_train_cot_ids, os.path.join(args.save_dir, "clean_train_cot_ids.pt"))
 
     torch.save(train_x, os.path.join(args.save_dir, "train_x.pt"))
     torch.save(train_y, os.path.join(args.save_dir, "train_y.pt"))
@@ -153,6 +211,8 @@ def main():
         "temperature": args.temperature,
         "top_k": args.top_k,
         "teacher_out_dir": args.teacher_out_dir,
+        "seed": args.seed,
+        "train_val_disjoint": True,
     }
     with open(os.path.join(args.save_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)

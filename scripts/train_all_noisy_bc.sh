@@ -4,7 +4,7 @@ set -euo pipefail
 cd ~/small-cot-experiments/nanoGPT
 source .venv/bin/activate
 
-for ETA in 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9; do
+for ETA in 0.2 0.4 0.6 0.8; do
   ETA_TAG="${ETA/./p}"
   python -u train.py config/train_s5_noisy_bc.py \
     --dataset="s5_noisy_offline_eta_${ETA_TAG}" \

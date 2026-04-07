@@ -1,6 +1,6 @@
 out_dir = 'out-s5-noisy-bc'
-eval_interval = 5000
-log_interval = 50
+eval_interval = 50
+log_interval = 1
 eval_iters = 200
 always_save_checkpoint = True
 
@@ -43,6 +43,7 @@ dtype = 'float16'
 # system
 compile = True
 
+offline_single_epoch = True
 s5_eval_metrics = True
 s5_eval_n = 256
 s5_eval_seed = 123
