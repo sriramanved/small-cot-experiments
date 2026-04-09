@@ -8,16 +8,28 @@ if [[ -d .venv ]]; then
   source .venv/bin/activate
 fi
 
-TEACHER_CHECKPOINT="out-s5-cot-len21-depth1-400k"
-PROMPT_BANK_DIR="data/s5_clean_prompt_bank_m21_n6000000_val5000"
-SUBSET_SIZE=1000000  # set this after the clean-N sweep
-GEN_BATCH_SIZE=1024  # try 512, 1024, 2048, then 4096 on the dev node
-SEED=1337
+M="${M:-21}"
+N_TRAIN="${N_TRAIN:-6000000}"
+N_VAL="${N_VAL:-5000}"
+TEACHER_CHECKPOINT="${TEACHER_CHECKPOINT:-out-s5-cot-len21-depth1-400k}"
+PROMPT_BANK_DIR="${PROMPT_BANK_DIR:-data/s5_clean_prompt_bank_m${M}_n${N_TRAIN}_val${N_VAL}}"
+SUBSET_SIZE="${SUBSET_SIZE:-1000000}"  # set this after the clean-N sweep
+ETAS="${ETAS:-0.005 0.1 0.2}"
+GEN_BATCH_SIZE="${GEN_BATCH_SIZE:-1024}"  # try 512, 1024, 2048, then 4096 on the dev node
+SEED="${SEED:-1337}"
+LOG_DIR="${LOG_DIR:-logs/noisy_dataset_render}"
+mkdir -p "${LOG_DIR}"
 
-for ETA in 0.2 0.4 0.6 0.8; do
+for ETA in ${ETAS}; do
   ETA_TAG="${ETA/./p}"
   DATASET_NAME="s5_noisy_offline_n${SUBSET_SIZE}_eta_${ETA_TAG}"
   SAVE_DIR="data/${DATASET_NAME}"
+  LOG_PATH="${LOG_DIR}/${DATASET_NAME}.log"
+
+  if [[ -f "${SAVE_DIR}/train_x.pt" && -f "${SAVE_DIR}/train_y.pt" && -f "${SAVE_DIR}/val_x.pt" && -f "${SAVE_DIR}/val_y.pt" ]]; then
+    echo "Skipping ${DATASET_NAME}; found existing tensors in ${SAVE_DIR}"
+    continue
+  fi
 
   echo "Rendering ${DATASET_NAME}"
 
@@ -30,5 +42,6 @@ for ETA in 0.2 0.4 0.6 0.8; do
     --gen_batch_size="${GEN_BATCH_SIZE}" \
     --device="cuda" \
     --dtype="float16" \
-    --seed="${SEED}"
+    --seed="${SEED}" \
+    2>&1 | tee "${LOG_PATH}"
 done

@@ -14,6 +14,7 @@ BASE_DATASET="${BASE_DATASET:-s5_clean_offline_n${BASE_N}}"
 LOG_DIR="${LOG_DIR:-logs/clean_offline_sweep}"
 mkdir -p "${LOG_DIR}"
 BASE_DATASET_DIR="data/${BASE_DATASET}"
+EVAL_INTERVAL="${EVAL_INTERVAL:-}"
 
 if [[ ! -f "${BASE_DATASET_DIR}/train_x.pt" ]]; then
   echo "Missing ${BASE_DATASET_DIR}/train_x.pt"
@@ -54,6 +55,10 @@ for SUBSET_SIZE in ${SUBSET_SIZES}; do
     EXTRA_ARGS+=(--init_from=resume)
   else
     echo "Starting ${DATASET_NAME}"
+  fi
+
+  if [[ -n "${EVAL_INTERVAL}" ]]; then
+    EXTRA_ARGS+=(--eval_interval="${EVAL_INTERVAL}")
   fi
 
   python -u train.py config/train_s5_clean_offline_bc.py \

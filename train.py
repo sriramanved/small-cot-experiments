@@ -87,6 +87,7 @@ save_every = 0  # 0 disables numbered checkpoints
 offline_single_epoch = False
 offline_eval_full = True
 offline_train_subset_size = 0
+offline_train_shuffle = False
 final_eval_on_exit = False
 # -----------------------------------------------------------------------------
 config_keys = [k for k, v in globals().items() if not k.startswith(
@@ -458,7 +459,7 @@ if is_s5_offline_dataset(dataset) and offline_single_epoch:
     else:
         reset_train_epoch(
             data_dir,
-            shuffle=True,
+            shuffle=offline_train_shuffle,
             seed=1337 + seed_offset,
             subset_size=offline_train_subset_size,
         )

@@ -1,7 +1,7 @@
 out_dir = 'out-s5-noisy-bc'
-eval_interval = 50
-log_interval = 1
-eval_iters = 200
+eval_interval = 10000
+log_interval = 50
+eval_iters = 50
 always_save_checkpoint = True
 
 wandb_log = False
@@ -44,7 +44,12 @@ dtype = 'float16'
 compile = True
 
 offline_single_epoch = True
+offline_eval_full = False
+offline_train_subset_size = 0
+offline_train_shuffle = False
+final_eval_on_exit = True
 s5_eval_metrics = True
-s5_eval_n = 256
+s5_eval_n = 5000
+s5_eval_batch_size = 256
 s5_eval_seed = 123
-save_every = 50000
+save_every = 0
