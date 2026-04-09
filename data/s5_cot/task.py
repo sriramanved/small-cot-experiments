@@ -1,3 +1,4 @@
+import itertools
 import random
 import torch
 
@@ -5,6 +6,16 @@ TOKENS = ['(', ')', '='] + [str(i) for i in range(1, 6)]
 stoi = {t: i for i, t in enumerate(TOKENS)}
 itos = {i: t for t, i in stoi.items()}
 VOCAB_SIZE = len(TOKENS)  # 8
+LPAREN_ID = stoi['(']
+RPAREN_ID = stoi[')']
+EQUALS_ID = stoi['=']
+DIGIT_START_ID = stoi['1']
+DIGIT_END_ID = stoi['5']
+ALL_PERMS = tuple(itertools.permutations(range(1, 6)))
+ENCODED_ALL_PERMS = tuple(
+    (LPAREN_ID, *(digit + 2 for digit in perm), RPAREN_ID)
+    for perm in ALL_PERMS
+)
 
 def encode(tokens):
     return [stoi[t] for t in tokens]
@@ -102,10 +113,48 @@ def corrupt_token(tok_id, eta):
         return random.choice(CORRUPTIBLE_IDS)
     return tok_id
 
+def corrupt_ids(ids, eta):
+    if eta <= 0:
+        return ids
+
+    corruptible = (ids >= DIGIT_START_ID) & (ids <= DIGIT_END_ID)
+    if not torch.any(corruptible):
+        return ids
+
+    should_corrupt = corruptible & (torch.rand(ids.shape, device=ids.device) < eta)
+    if not torch.any(should_corrupt):
+        return ids
+
+    corrupted = ids.clone()
+    replacements = torch.randint(
+        DIGIT_START_ID,
+        DIGIT_END_ID + 1,
+        size=(int(should_corrupt.sum().item()),),
+        device=ids.device,
+    )
+    corrupted[should_corrupt] = replacements
+    return corrupted
+
 def sample_perm_from_rng(rng):
     p = [1, 2, 3, 4, 5]
     rng.shuffle(p)
     return p
+
+def compose_perm(sigma, pi):
+    return tuple(sigma[j - 1] for j in pi)
+
+def sample_cot_example_ids_from_rng(rng, m=21):
+    prompt_ids = []
+    cot_ids = []
+    running = None
+    for _ in range(m):
+        perm_idx = rng.randrange(len(ALL_PERMS))
+        sigma = ALL_PERMS[perm_idx]
+        prompt_ids.extend(ENCODED_ALL_PERMS[perm_idx])
+        running = sigma if running is None else compose_perm(running, sigma)
+        cot_ids.extend((LPAREN_ID, *(digit + 2 for digit in running), RPAREN_ID))
+    prompt_ids.append(EQUALS_ID)
+    return prompt_ids, cot_ids
 
 def sample_cot_example_from_rng(rng, m=21):
     prompt = []
@@ -129,6 +178,43 @@ def greedy_generate_ids(model, prompt_ids, max_new_tokens, device):
         idx = torch.cat([idx, next_id], dim=1)
     return idx[0].tolist()
 
+
+@torch.no_grad()
+def greedy_generate_target_ids_batched(model, prompt_ids_batch, max_new_tokens, device):
+    idx = prompt_ids_batch.to(device=device, dtype=torch.long)
+    prompt_len = idx.size(1)
+    for _ in range(max_new_tokens):
+        idx_cond = idx[:, -model.config.block_size:]
+        logits, _ = model(idx_cond)
+        next_id = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
+        idx = torch.cat([idx, next_id], dim=1)
+    return idx[:, prompt_len:].to(device="cpu", dtype=torch.long)
+
+
+@torch.no_grad()
+def teacher_forced_exact_batch(model, prompt_ids_batch, cot_ids_batch, device):
+    seq = torch.cat((prompt_ids_batch, cot_ids_batch), dim=1).to(device=device, dtype=torch.long)
+    x = seq[:, :-1].clone()
+    y = seq[:, 1:].clone()
+    y[:, :prompt_ids_batch.size(1) - 1] = -1
+
+    logits, _ = model(x, y)
+    pred = logits.argmax(dim=-1)
+    mask = (y != -1)
+    return torch.logical_or(pred.eq(y), ~mask).all(dim=1).to(device="cpu")
+
+
+def _sample_eval_batch_from_rng(rng, batch_n, m):
+    prompt_batches = []
+    cot_batches = []
+    for _ in range(batch_n):
+        prompt_ids, cot_ids = sample_cot_example_ids_from_rng(rng, m=m)
+        prompt_batches.append(prompt_ids)
+        cot_batches.append(cot_ids)
+    prompt_ids_batch = torch.tensor(prompt_batches, dtype=torch.long)
+    cot_ids_batch = torch.tensor(cot_batches, dtype=torch.long)
+    return prompt_ids_batch, cot_ids_batch
+
 @torch.no_grad()
 def evaluate_clean_s5_metrics(
     model,
@@ -136,6 +222,7 @@ def evaluate_clean_s5_metrics(
     n_eval=256,
     m=21,
     seed=123,
+    batch_size=256,
 ):
     """
     Returns three clean-task metrics:
@@ -149,31 +236,21 @@ def evaluate_clean_s5_metrics(
     ar_full_ok = 0
     ar_final_ok = 0
 
-    for _ in range(n_eval):
-        prompt_toks, cot_toks = sample_cot_example_from_rng(rng, m=m)
-        prompt_ids = encode(prompt_toks)
-        cot_ids = encode(cot_toks)
+    for start in range(0, n_eval, batch_size):
+        end = min(start + batch_size, n_eval)
+        prompt_ids_batch, cot_ids_batch = _sample_eval_batch_from_rng(rng, end - start, m)
 
-        # teacher-forced full-CoT exact
-        seq = prompt_ids + cot_ids
-        x = torch.tensor([seq[:-1]], dtype=torch.long, device=device)
-        y = torch.tensor([seq[1:]], dtype=torch.long, device=device)
-        y[:, :len(prompt_ids)-1] = -1
+        tf_ok = teacher_forced_exact_batch(model, prompt_ids_batch, cot_ids_batch, device)
+        tf_full_ok += int(tf_ok.sum().item())
 
-        logits, _ = model(x, y)
-        pred = logits.argmax(dim=-1)
-        mask = (y != -1)
-        tf_ok = torch.logical_or(pred.eq(y), ~mask).all(dim=1).item()
-        tf_full_ok += int(tf_ok)
-
-        # autoregressive full / final exact
-        out_ids = greedy_generate_ids(model, prompt_ids, len(cot_ids), device)
-        pred_ids = out_ids[len(prompt_ids):]
-
-        if pred_ids == cot_ids:
-            ar_full_ok += 1
-        if pred_ids[-7:] == cot_ids[-7:]:
-            ar_final_ok += 1
+        pred_ids_batch = greedy_generate_target_ids_batched(
+            model,
+            prompt_ids_batch,
+            cot_ids_batch.size(1),
+            device,
+        )
+        ar_full_ok += int(pred_ids_batch.eq(cot_ids_batch).all(dim=1).sum().item())
+        ar_final_ok += int(pred_ids_batch[:, -7:].eq(cot_ids_batch[:, -7:]).all(dim=1).sum().item())
 
     return {
         "cot_exact": tf_full_ok / n_eval,
@@ -189,6 +266,7 @@ def evaluate_saved_clean_s5_metrics(
     device,
     data_dir,
     n_eval=None,
+    batch_size=256,
 ):
     prompt_ids_all = torch.load(os.path.join(data_dir, "clean_val_prompt_ids.pt"), map_location="cpu").long()
     cot_ids_all = torch.load(os.path.join(data_dir, "clean_val_cot_ids.pt"), map_location="cpu").long()
@@ -202,30 +280,22 @@ def evaluate_saved_clean_s5_metrics(
     ar_final_ok = 0
     n = prompt_ids_all.size(0)
 
-    for i in range(n):
-        prompt_ids = prompt_ids_all[i].tolist()
-        cot_ids = cot_ids_all[i].tolist()
+    for start in range(0, n, batch_size):
+        end = min(start + batch_size, n)
+        prompt_ids_batch = prompt_ids_all[start:end]
+        cot_ids_batch = cot_ids_all[start:end]
 
-        # teacher-forced full-CoT exact
-        seq = prompt_ids + cot_ids
-        x = torch.tensor([seq[:-1]], dtype=torch.long, device=device)
-        y = torch.tensor([seq[1:]], dtype=torch.long, device=device)
-        y[:, :len(prompt_ids)-1] = -1
+        tf_ok = teacher_forced_exact_batch(model, prompt_ids_batch, cot_ids_batch, device)
+        tf_full_ok += int(tf_ok.sum().item())
 
-        logits, _ = model(x, y)
-        pred = logits.argmax(dim=-1)
-        mask = (y != -1)
-        tf_ok = torch.logical_or(pred.eq(y), ~mask).all(dim=1).item()
-        tf_full_ok += int(tf_ok)
-
-        # autoregressive full / final exact
-        out_ids = greedy_generate_ids(model, prompt_ids, len(cot_ids), device)
-        pred_ids = out_ids[len(prompt_ids):]
-
-        if pred_ids == cot_ids:
-            ar_full_ok += 1
-        if pred_ids[-7:] == cot_ids[-7:]:
-            ar_final_ok += 1
+        pred_ids_batch = greedy_generate_target_ids_batched(
+            model,
+            prompt_ids_batch,
+            cot_ids_batch.size(1),
+            device,
+        )
+        ar_full_ok += int(pred_ids_batch.eq(cot_ids_batch).all(dim=1).sum().item())
+        ar_final_ok += int(pred_ids_batch[:, -7:].eq(cot_ids_batch[:, -7:]).all(dim=1).sum().item())
 
     return {
         "cot_exact": tf_full_ok / n,

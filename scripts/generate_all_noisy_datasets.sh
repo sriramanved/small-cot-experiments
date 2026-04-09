@@ -1,29 +1,34 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd ~/small-cot-experiments/nanoGPT
-source .venv/bin/activate
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT}"
 
-TEACHER_OUT="out-s5-cot-len21-depth1-400k"
-M=21
-N_TRAIN=50000
-N_VAL=5000
-TEMP=1.0
+if [[ -d .venv ]]; then
+  source .venv/bin/activate
+fi
+
+TEACHER_CHECKPOINT="out-s5-cot-len21-depth1-400k"
+PROMPT_BANK_DIR="data/s5_clean_prompt_bank_m21_n6000000_val5000"
+SUBSET_SIZE=1000000  # set this after the clean-N sweep
+GEN_BATCH_SIZE=1024  # try 512, 1024, 2048, then 4096 on the dev node
 SEED=1337
 
 for ETA in 0.2 0.4 0.6 0.8; do
   ETA_TAG="${ETA/./p}"
-  SAVE_DIR="data/s5_noisy_offline_eta_${ETA_TAG}"
+  DATASET_NAME="s5_noisy_offline_n${SUBSET_SIZE}_eta_${ETA_TAG}"
+  SAVE_DIR="data/${DATASET_NAME}"
 
-  echo "Generating noisy dataset for eta=${ETA} -> ${SAVE_DIR}"
+  echo "Rendering ${DATASET_NAME}"
 
   python -u data/s5_cot/generate_noisy_rollouts.py \
-    --teacher_out_dir="${TEACHER_OUT}" \
+    --teacher_checkpoint="${TEACHER_CHECKPOINT}" \
+    --prompt_bank_dir="${PROMPT_BANK_DIR}" \
     --save_dir="${SAVE_DIR}" \
+    --subset_size="${SUBSET_SIZE}" \
     --eta="${ETA}" \
-    --m="${M}" \
-    --n_train="${N_TRAIN}" \
-    --n_val="${N_VAL}" \
-    --temperature="${TEMP}" \
+    --gen_batch_size="${GEN_BATCH_SIZE}" \
+    --device="cuda" \
+    --dtype="float16" \
     --seed="${SEED}"
 done

@@ -81,9 +81,13 @@ compile = True  # use PyTorch 2.0 to compile the model to be faster
 # S5 evaluation/checkpoint extras
 s5_eval_metrics = False
 s5_eval_n = 256
+s5_eval_batch_size = 256
 s5_eval_seed = 123
 save_every = 0  # 0 disables numbered checkpoints
 offline_single_epoch = False
+offline_eval_full = True
+offline_train_subset_size = 0
+final_eval_on_exit = False
 # -----------------------------------------------------------------------------
 config_keys = [k for k, v in globals().items() if not k.startswith(
     '_') and isinstance(v, (int, float, bool, str))]
@@ -134,9 +138,20 @@ ptdtype = {'float32': torch.float32,
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(
     device_type=device_type, dtype=ptdtype)
 
+
+def is_s5_offline_dataset(name):
+    return name.startswith('s5_clean_offline') or name.startswith('s5_noisy_offline')
+
 # synthetic S5 task hooks
-if dataset.startswith('s5_noisy_offline'):
-    from data.s5_cot.offline_dataset import reset_train_epoch, get_train_batch_once, iter_eval_batches
+if is_s5_offline_dataset(dataset):
+    from data.s5_cot.offline_dataset import get_batch as s5_offline_get_batch
+    from data.s5_cot.offline_dataset import (
+        get_train_batch_once,
+        get_train_epoch_state,
+        iter_eval_batches,
+        reset_train_epoch,
+        set_train_epoch_state,
+    )
     from data.s5_cot.task import VOCAB_SIZE as s5_vocab_size
     from data.s5_cot.task import evaluate_saved_clean_s5_metrics
 elif dataset == 's5_cot':
@@ -146,6 +161,9 @@ elif dataset == 's5_cot':
 
 # poor man's data loader
 data_dir = os.path.join('data', dataset)
+if is_s5_offline_dataset(dataset):
+    subset_msg = offline_train_subset_size if offline_train_subset_size > 0 else "full"
+    print(f"offline dataset dir: {data_dir}, requested train subset: {subset_msg}")
 
 
 def get_batch(split):
@@ -156,12 +174,13 @@ def get_batch(split):
             mode=s5_mode,
             m=s5_m,
         )
-    elif dataset.startswith('s5_noisy_offline'):
-        return noisy_get_batch(
+    elif is_s5_offline_dataset(dataset):
+        return s5_offline_get_batch(
             split=split,
             batch_size=batch_size,
             device=device,
-            data_dir=data_dir
+            data_dir=data_dir,
+            subset_size=offline_train_subset_size,
         )
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
@@ -191,7 +210,7 @@ best_val_loss = 1e9
 
 # attempt to derive vocab_size from the dataset
 meta_vocab_size = None
-is_s5 = (dataset == 's5_cot' or dataset.startswith('s5_noisy_offline'))
+is_s5 = (dataset == 's5_cot' or is_s5_offline_dataset(dataset))
 if is_s5:
     meta_vocab_size = s5_vocab_size
     print(f"using synthetic vocab_size = {meta_vocab_size} for {dataset}")
@@ -260,8 +279,10 @@ scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 # optimizer
 optimizer = model.configure_optimizers(
     weight_decay, learning_rate, (beta1, beta2), device_type)
+resume_offline_train_state = None
 if init_from == 'resume':
     optimizer.load_state_dict(checkpoint['optimizer'])
+    resume_offline_train_state = checkpoint.get('offline_train_state')
 checkpoint = None  # free up memory
 
 # compile the model
@@ -281,14 +302,29 @@ def estimate_loss():
     out = {}
     model.eval()
 
-    if dataset.startswith('s5_noisy_offline'):
+    if is_s5_offline_dataset(dataset):
         for split in ['train', 'val']:
-            losses = []
-            for X, Y in iter_eval_batches(split, batch_size=batch_size, device=device, data_dir=data_dir):
-                with ctx:
-                    logits, loss = model(X, Y)
-                losses.append(loss.item())
-            out[split] = sum(losses) / len(losses)
+            if offline_eval_full:
+                losses = []
+                for X, Y in iter_eval_batches(
+                    split,
+                    batch_size=batch_size,
+                    device=device,
+                    data_dir=data_dir,
+                    subset_size=offline_train_subset_size,
+                ):
+                    with ctx:
+                        logits, loss = model(X, Y)
+                    losses.append(loss.item())
+                out[split] = sum(losses) / len(losses)
+            else:
+                losses = torch.zeros(eval_iters)
+                for k in range(eval_iters):
+                    X, Y = get_batch(split)
+                    with ctx:
+                        logits, loss = model(X, Y)
+                    losses[k] = loss.item()
+                out[split] = losses.mean()
 
         if s5_eval_metrics:
             eval_model = raw_model if 'raw_model' in globals() else model
@@ -297,6 +333,7 @@ def estimate_loss():
                 device=device,
                 data_dir=data_dir,
                 n_eval=s5_eval_n,
+                batch_size=s5_eval_batch_size,
             )
             out["val_cot_exact"] = metrics["cot_exact"]
             out["val_clean_full_exact"] = metrics["clean_full_exact"]
@@ -320,6 +357,7 @@ def estimate_loss():
                 n_eval=s5_eval_n,
                 m=s5_m,
                 seed=s5_eval_seed,
+                batch_size=s5_eval_batch_size,
             )
             out["val_cot_exact"] = metrics["cot_exact"]
             out["val_clean_full_exact"] = metrics["clean_full_exact"]
@@ -354,11 +392,76 @@ if wandb_log and master_process:
     import wandb
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
+
+def run_eval_and_checkpoint(reason="periodic", force_save=False):
+    global best_val_loss
+
+    losses = estimate_loss()
+    print_msg = f"{reason} step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
+    if is_s5 and s5_eval_metrics:
+        if "val_cot_exact" in losses:
+            print_msg += f", val cot_exact {losses['val_cot_exact']:.4f}"
+        if "val_clean_full_exact" in losses:
+            print_msg += f", val clean_full_exact {losses['val_clean_full_exact']:.4f}"
+        if "val_clean_final_exact" in losses:
+            print_msg += f", val clean_final_exact {losses['val_clean_final_exact']:.4f}"
+    print(print_msg)
+
+    if wandb_log:
+        eval_log = {
+            "iter": iter_num,
+            "eval/reason": reason,
+            "train/loss_eval": losses["train"],
+            "val/loss": losses["val"],
+        }
+        if is_s5 and s5_eval_metrics:
+            if "val_cot_exact" in losses:
+                eval_log["val/cot_exact"] = losses["val_cot_exact"]
+            if "val_clean_full_exact" in losses:
+                eval_log["val/clean_full_exact"] = losses["val_clean_full_exact"]
+            if "val_clean_final_exact" in losses:
+                eval_log["val/clean_final_exact"] = losses["val_clean_final_exact"]
+        wandb.log(eval_log)
+
+    if losses['val'] < best_val_loss or always_save_checkpoint or force_save:
+        best_val_loss = min(best_val_loss, losses['val'])
+        if iter_num > 0 or force_save:
+            checkpoint = {
+                'model': raw_model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'model_args': model_args,
+                'iter_num': iter_num,
+                'best_val_loss': best_val_loss,
+                'config': config,
+            }
+            if is_s5_offline_dataset(dataset) and offline_single_epoch:
+                checkpoint['offline_train_state'] = get_train_epoch_state(data_dir)
+            print(f"saving checkpoint to {out_dir}")
+            torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+            if save_every > 0 and iter_num % save_every == 0:
+                numbered_path = os.path.join(
+                    out_dir, f'ckpt_{iter_num:07d}.pt')
+                print(f"saving checkpoint to {numbered_path}")
+                torch.save(checkpoint, numbered_path)
+
+
+def mark_run_complete():
+    completed_path = os.path.join(out_dir, 'completed.txt')
+    with open(completed_path, 'w', encoding='utf-8') as f:
+        f.write(f"iter_num={iter_num}\n")
+
 # training loop
-if dataset.startswith('s5_noisy_offline') and offline_single_epoch:
+if is_s5_offline_dataset(dataset) and offline_single_epoch:
     assert gradient_accumulation_steps == 1
-    reset_train_epoch(data_dir, shuffle=True, seed=1337 + seed_offset)
-    X, Y = get_train_batch_once(batch_size=batch_size, device=device, data_dir=data_dir)
+    if init_from == 'resume' and resume_offline_train_state is not None:
+        set_train_epoch_state(data_dir, resume_offline_train_state)
+    else:
+        reset_train_epoch(
+            data_dir,
+            shuffle=True,
+            seed=1337 + seed_offset,
+            subset_size=offline_train_subset_size,
+        )
 else:
     X, Y = get_batch('train')
 t0 = time.time()
@@ -374,52 +477,24 @@ while True:
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
-        losses = estimate_loss()
-        print_msg = f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
-        if is_s5 and s5_eval_metrics:
-            if "val_cot_exact" in losses:
-                print_msg += f", val cot_exact {losses['val_cot_exact']:.4f}"
-            if "val_clean_full_exact" in losses:
-                print_msg += f", val clean_full_exact {losses['val_clean_full_exact']:.4f}"
-            if "val_clean_final_exact" in losses:
-                print_msg += f", val clean_final_exact {losses['val_clean_final_exact']:.4f}"
-        print(print_msg)
-
-        if wandb_log:
-            eval_log = {
-                "iter": iter_num,
-                "val/loss": losses["val"],
-            }
-            if is_s5 and s5_eval_metrics:
-                if "val_cot_exact" in losses:
-                    eval_log["val/cot_exact"] = losses["val_cot_exact"]
-                if "val_clean_full_exact" in losses:
-                    eval_log["val/clean_full_exact"] = losses["val_clean_full_exact"]
-                if "val_clean_final_exact" in losses:
-                    eval_log["val/clean_final_exact"] = losses["val_clean_final_exact"]
-            wandb.log(eval_log)
-
-        if losses['val'] < best_val_loss or always_save_checkpoint:
-            best_val_loss = losses['val']
-            if iter_num > 0:
-                checkpoint = {
-                    'model': raw_model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'model_args': model_args,
-                    'iter_num': iter_num,
-                    'best_val_loss': best_val_loss,
-                    'config': config,
-                }
-                print(f"saving checkpoint to {out_dir}")
-                torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
-                if save_every > 0 and iter_num % save_every == 0:
-                    numbered_path = os.path.join(
-                        out_dir, f'ckpt_{iter_num:07d}.pt')
-                    print(f"saving checkpoint to {numbered_path}")
-                    torch.save(checkpoint, numbered_path)
+        run_eval_and_checkpoint(reason="periodic")
 
     if iter_num == 0 and eval_only:
         break
+
+    if is_s5_offline_dataset(dataset) and offline_single_epoch:
+        try:
+            X, Y = get_train_batch_once(
+                batch_size=batch_size,
+                device=device,
+                data_dir=data_dir,
+                subset_size=offline_train_subset_size,
+            )
+        except StopIteration:
+            if final_eval_on_exit and master_process:
+                run_eval_and_checkpoint(reason="final", force_save=True)
+                mark_run_complete()
+            break
 
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16
@@ -436,7 +511,7 @@ while True:
             # scale the loss to account for gradient accumulation
             loss = loss / gradient_accumulation_steps
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
-        if dataset.startswith('s5_noisy_offline') and offline_single_epoch:
+        if is_s5_offline_dataset(dataset) and offline_single_epoch:
             pass
         else:
             X, Y = get_batch('train')
@@ -451,11 +526,6 @@ while True:
     scaler.update()
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
-    if dataset.startswith('s5_noisy_offline') and offline_single_epoch:
-        try:
-            X, Y = get_train_batch_once(batch_size=batch_size, device=device, data_dir=data_dir)
-        except StopIteration:
-            break
 
     # timing and logging
     t1 = time.time()
@@ -483,6 +553,8 @@ while True:
 
     # termination conditions
     if iter_num > max_iters:
+        if final_eval_on_exit and master_process:
+            run_eval_and_checkpoint(reason="final", force_save=True)
         break
 
 if ddp:
