@@ -80,6 +80,7 @@ compile = True  # use PyTorch 2.0 to compile the model to be faster
 
 # S5 evaluation/checkpoint extras
 s5_eval_metrics = False
+s5_eval_clean_train_loss = False
 s5_eval_n = 256
 s5_eval_batch_size = 256
 s5_eval_seed = 123
@@ -154,7 +155,10 @@ if is_s5_offline_dataset(dataset):
         set_train_epoch_state,
     )
     from data.s5_cot.task import VOCAB_SIZE as s5_vocab_size
-    from data.s5_cot.task import evaluate_saved_clean_s5_metrics
+    from data.s5_cot.task import (
+        estimate_saved_clean_train_loss,
+        evaluate_saved_clean_s5_metrics,
+    )
 elif dataset == 's5_cot':
     from data.s5_cot.task import get_batch as s5_get_batch
     from data.s5_cot.task import VOCAB_SIZE as s5_vocab_size
@@ -240,7 +244,14 @@ elif init_from == 'resume':
     print(f"Resuming training from {out_dir}")
     # resume training from a checkpoint.
     ckpt_path = os.path.join(out_dir, 'ckpt.pt')
-    checkpoint = torch.load(ckpt_path, map_location=device)
+    checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
+    checkpoint_config = checkpoint.get('config', {})
+    for key in ['dataset', 's5_mode', 's5_m', 'offline_single_epoch', 'offline_train_subset_size', 'offline_train_shuffle']:
+        if key in checkpoint_config and checkpoint_config[key] != globals()[key]:
+            raise ValueError(
+                f"Resume mismatch for {key}: checkpoint has {checkpoint_config[key]!r}, "
+                f"current config requests {globals()[key]!r}"
+            )
     checkpoint_model_args = checkpoint['model_args']
     # force these config attributes to be equal otherwise we can't even resume training
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
@@ -339,6 +350,16 @@ def estimate_loss():
             out["val_cot_exact"] = metrics["cot_exact"]
             out["val_clean_full_exact"] = metrics["clean_full_exact"]
             out["val_clean_final_exact"] = metrics["clean_final_exact"]
+        if s5_eval_clean_train_loss:
+            eval_model = raw_model if 'raw_model' in globals() else model
+            out["train_clean_oracle"] = estimate_saved_clean_train_loss(
+                eval_model,
+                device=device,
+                data_dir=data_dir,
+                eval_iters=eval_iters,
+                batch_size=batch_size,
+                subset_size=offline_train_subset_size,
+            )
 
     else:
         for split in ['train', 'val']:
@@ -399,6 +420,8 @@ def run_eval_and_checkpoint(reason="periodic", force_save=False):
 
     losses = estimate_loss()
     print_msg = f"{reason} step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
+    if "train_clean_oracle" in losses:
+        print_msg += f", train clean_oracle_loss {losses['train_clean_oracle']:.4f}"
     if is_s5 and s5_eval_metrics:
         if "val_cot_exact" in losses:
             print_msg += f", val cot_exact {losses['val_cot_exact']:.4f}"
@@ -415,6 +438,8 @@ def run_eval_and_checkpoint(reason="periodic", force_save=False):
             "train/loss_eval": losses["train"],
             "val/loss": losses["val"],
         }
+        if "train_clean_oracle" in losses:
+            eval_log["train/clean_oracle_loss_eval"] = losses["train_clean_oracle"]
         if is_s5 and s5_eval_metrics:
             if "val_cot_exact" in losses:
                 eval_log["val/cot_exact"] = losses["val_cot_exact"]

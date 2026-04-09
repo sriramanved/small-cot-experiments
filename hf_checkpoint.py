@@ -21,8 +21,12 @@ from typing import Any, Mapping
 import torch
 from transformers import GPT2Config, GPT2LMHeadModel
 
+from nanogpt_checkpoint import (
+    load_nanogpt_checkpoint,
+    normalize_nanogpt_state_dict,
+    resolve_checkpoint_path,
+)
 
-UNWANTED_PREFIX = "_orig_mod."
 TRANSPOSED_WEIGHTS = (
     "attn.c_attn.weight",
     "attn.c_proj.weight",
@@ -36,33 +40,13 @@ DTYPE_LOOKUP = {
     "bfloat16": torch.bfloat16,
 }
 
-
-def resolve_checkpoint_path(checkpoint_or_dir: str | Path) -> Path:
-    path = Path(checkpoint_or_dir)
-    if path.is_dir():
-        path = path / "ckpt.pt"
-    if not path.exists():
-        raise FileNotFoundError(f"Could not find checkpoint at {path}")
-    return path
-
-
-def load_nanogpt_checkpoint(
-    checkpoint_or_dir: str | Path,
-    map_location: str | torch.device = "cpu",
-) -> dict[str, Any]:
-    ckpt_path = resolve_checkpoint_path(checkpoint_or_dir)
-    return torch.load(ckpt_path, map_location=map_location)
-
-
 def clean_nanogpt_state_dict(state_dict: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    cleaned: dict[str, torch.Tensor] = {}
-    for key, value in state_dict.items():
-        if key.startswith(UNWANTED_PREFIX):
-            key = key[len(UNWANTED_PREFIX):]
-        if any(key.endswith(suffix) for suffix in IGNORED_NANOGPT_KEYS):
-            continue
-        cleaned[key] = value
-    return cleaned
+    cleaned = normalize_nanogpt_state_dict(state_dict)
+    return {
+        key: value
+        for key, value in cleaned.items()
+        if not any(key.endswith(suffix) for suffix in IGNORED_NANOGPT_KEYS)
+    }
 
 
 def nanogpt_model_args_to_hf_config(

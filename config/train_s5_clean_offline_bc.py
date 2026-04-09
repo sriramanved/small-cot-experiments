@@ -39,6 +39,7 @@ offline_train_subset_size = 0
 offline_train_shuffle = False
 final_eval_on_exit = True
 s5_eval_metrics = True
+s5_eval_clean_train_loss = True
 s5_eval_n = 5000
 s5_eval_batch_size = 256
 s5_eval_seed = 123

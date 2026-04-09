@@ -1,6 +1,9 @@
 import itertools
+import os
 import random
 import torch
+
+from data.s5_cot.prompt_bank import build_xy_from_prompt_and_target
 
 TOKENS = ['(', ')', '='] + [str(i) for i in range(1, 6)]
 stoi = {t: i for i, t in enumerate(TOKENS)}
@@ -258,8 +261,6 @@ def evaluate_clean_s5_metrics(
         "clean_final_exact": ar_final_ok / n_eval,
     }
 
-import os
-
 @torch.no_grad()
 def evaluate_saved_clean_s5_metrics(
     model,
@@ -302,3 +303,35 @@ def evaluate_saved_clean_s5_metrics(
         "clean_full_exact": ar_full_ok / n,
         "clean_final_exact": ar_final_ok / n,
     }
+
+
+@torch.no_grad()
+def estimate_saved_clean_train_loss(
+    model,
+    device,
+    data_dir,
+    eval_iters,
+    batch_size,
+    subset_size=None,
+):
+    prompt_ids_all = torch.load(os.path.join(data_dir, "clean_train_prompt_ids.pt"), map_location="cpu").long()
+    cot_ids_all = torch.load(os.path.join(data_dir, "clean_train_cot_ids.pt"), map_location="cpu").long()
+
+    if subset_size is not None and subset_size > 0:
+        prompt_ids_all = prompt_ids_all[:subset_size]
+        cot_ids_all = cot_ids_all[:subset_size]
+
+    n = prompt_ids_all.size(0)
+    losses = torch.zeros(eval_iters)
+
+    for k in range(eval_iters):
+        idx = torch.randint(n, (batch_size,))
+        prompt_ids = prompt_ids_all.index_select(0, idx)
+        cot_ids = cot_ids_all.index_select(0, idx)
+        x, y = build_xy_from_prompt_and_target(prompt_ids, cot_ids)
+        x = x.to(device=device, dtype=torch.long)
+        y = y.to(device=device, dtype=torch.long)
+        _, loss = model(x, y)
+        losses[k] = loss.item()
+
+    return float(losses.mean().item())

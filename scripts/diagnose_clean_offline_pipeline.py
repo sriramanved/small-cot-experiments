@@ -17,10 +17,7 @@ from data.s5_cot.task import (
     greedy_generate_target_ids_batched,
 )
 from hf_checkpoint import DTYPE_LOOKUP, load_nanogpt_checkpoint_as_hf
-from model import GPT, GPTConfig
-
-
-UNWANTED_PREFIX = "_orig_mod."
+from nanogpt_checkpoint import load_nanogpt_model
 
 
 def parse_args():
@@ -42,20 +39,12 @@ def parse_args():
 
 
 def load_nanogpt_teacher(checkpoint_or_dir: str, device: str):
-    ckpt_path = Path(checkpoint_or_dir)
-    if ckpt_path.is_dir():
-        ckpt_path = ckpt_path / "ckpt.pt"
-    checkpoint = torch.load(ckpt_path, map_location="cpu")
-    model_args = checkpoint["model_args"]
-    model = GPT(GPTConfig(**model_args))
-    state_dict = checkpoint["model"]
-    for key, value in list(state_dict.items()):
-        if key.startswith(UNWANTED_PREFIX):
-            state_dict[key[len(UNWANTED_PREFIX):]] = state_dict.pop(key)
-    model.load_state_dict(state_dict)
-    model.to(device)
-    model.eval()
-    return model
+    return load_nanogpt_model(
+        checkpoint_or_dir,
+        map_location="cpu",
+        device=device,
+        eval_mode=True,
+    )
 
 
 def hf_clean_metrics(model, source_dir: Path, n_eval: int, batch_size: int, device: str):

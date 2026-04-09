@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -12,36 +11,14 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from data.s5_cot.prompt_bank import (
+    PromptBank,
+    build_xy_from_prompt_and_target,
+    load_prompt_bank,
+    select_train_subset,
+)
 from data.s5_cot.task import corrupt_ids
 from hf_checkpoint import DTYPE_LOOKUP, load_nanogpt_checkpoint_as_hf
-
-
-@dataclass
-class PromptBank:
-    clean_train_prompt_ids: torch.Tensor
-    clean_train_cot_ids: torch.Tensor
-    clean_val_prompt_ids: torch.Tensor
-    clean_val_cot_ids: torch.Tensor
-    train_order: torch.Tensor
-    meta: dict[str, Any]
-
-    @property
-    def prompt_len(self) -> int:
-        return int(self.clean_train_prompt_ids.size(1))
-
-    @property
-    def cot_len(self) -> int:
-        return int(self.clean_train_cot_ids.size(1))
-
-    @property
-    def xy_len(self) -> int:
-        return self.prompt_len + self.cot_len - 1
-
-    @property
-    def m(self) -> int:
-        if "m" in self.meta:
-            return int(self.meta["m"])
-        return (self.prompt_len - 1) // 7
 
 
 def resolve_torch_dtype(dtype_name: str | None, device: str | torch.device) -> torch.dtype:
@@ -50,25 +27,6 @@ def resolve_torch_dtype(dtype_name: str | None, device: str | torch.device) -> t
     if "cuda" in str(device):
         return torch.float16
     return torch.float32
-
-
-def load_prompt_bank(prompt_bank_dir: str | Path) -> PromptBank:
-    prompt_bank_dir = Path(prompt_bank_dir)
-    meta_path = prompt_bank_dir / "meta.json"
-    meta = {}
-    if meta_path.exists():
-        with open(meta_path, "r", encoding="utf-8") as f:
-            meta = json.load(f)
-
-    return PromptBank(
-        clean_train_prompt_ids=torch.load(prompt_bank_dir / "clean_train_prompt_ids.pt", map_location="cpu"),
-        clean_train_cot_ids=torch.load(prompt_bank_dir / "clean_train_cot_ids.pt", map_location="cpu"),
-        clean_val_prompt_ids=torch.load(prompt_bank_dir / "clean_val_prompt_ids.pt", map_location="cpu"),
-        clean_val_cot_ids=torch.load(prompt_bank_dir / "clean_val_cot_ids.pt", map_location="cpu"),
-        train_order=torch.load(prompt_bank_dir / "train_order.pt", map_location="cpu"),
-        meta=meta,
-    )
-
 
 def load_hf_teacher(
     teacher_checkpoint: str | Path,
@@ -88,18 +46,7 @@ def load_hf_teacher(
     return model
 
 
-def build_xy_from_prompt_and_target(
-    prompt_ids: torch.Tensor,
-    target_ids: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    prompt_ids = prompt_ids.to(dtype=torch.uint8)
-    target_ids = target_ids.to(dtype=torch.uint8)
-    seq = torch.cat((prompt_ids, target_ids), dim=1)
-    x = seq[:, :-1].contiguous()
-    y = seq[:, 1:].to(dtype=torch.int16).contiguous()
-    y[:, :prompt_ids.size(1) - 1] = -1
-    return x, y
-
+ROLLOUT_MODE_CHOICES = ("greedy_then_corrupt", "sample_then_corrupt")
 
 @torch.inference_mode()
 def generate_teacher_targets(
@@ -108,8 +55,12 @@ def generate_teacher_targets(
     *,
     target_len: int,
     eta: float,
+    rollout_mode: str,
     device: str | torch.device,
 ) -> torch.Tensor:
+    if rollout_mode not in ROLLOUT_MODE_CHOICES:
+        raise ValueError(f"unknown rollout_mode={rollout_mode!r}")
+
     input_ids = prompt_ids.to(device=device, dtype=torch.long, non_blocking=True)
     generated = torch.empty((prompt_ids.size(0), target_len), dtype=torch.long, device=device)
     past_key_values = None
@@ -120,7 +71,11 @@ def generate_teacher_targets(
             past_key_values=past_key_values,
             use_cache=True,
         )
-        next_ids = torch.argmax(outputs.logits[:, -1, :], dim=-1)
+        if rollout_mode == "greedy_then_corrupt":
+            next_ids = torch.argmax(outputs.logits[:, -1, :], dim=-1)
+        else:
+            probs = torch.softmax(outputs.logits[:, -1, :].float(), dim=-1)
+            next_ids = torch.multinomial(probs, num_samples=1).squeeze(1)
         next_ids = corrupt_ids(next_ids, eta)
         generated[:, step] = next_ids
         input_ids = next_ids.unsqueeze(1)
@@ -135,6 +90,7 @@ def render_train_split(
     subset_idx: torch.Tensor,
     *,
     eta: float,
+    rollout_mode: str,
     gen_batch_size: int,
     device: str | torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -151,6 +107,7 @@ def render_train_split(
             batch_prompt_ids,
             target_len=prompt_bank.cot_len,
             eta=eta,
+            rollout_mode=rollout_mode,
             device=device,
         )
         batch_x, batch_y = build_xy_from_prompt_and_target(batch_prompt_ids, batch_target_ids)
@@ -208,6 +165,7 @@ def build_dataset_meta(
     teacher_checkpoint: str | Path,
     subset_size: int,
     eta: float,
+    rollout_mode: str,
     gen_batch_size: int,
     device: str | torch.device,
     dtype_name: str | None,
@@ -224,7 +182,7 @@ def build_dataset_meta(
         "prompt_bank_dir": str(prompt_bank_dir),
         "teacher_checkpoint": str(teacher_checkpoint),
         "train_targets_source": "teacher_rollout_with_optional_eta_corruption",
-        "train_decode_mode": "greedy_hf_cached",
+        "train_decode_mode": rollout_mode,
         "val_targets_source": "fixed_clean_oracle",
         "nested_subset_order_saved": True,
     }
@@ -237,19 +195,14 @@ def render_offline_dataset(
     save_dir: str | Path,
     subset_size: int,
     eta: float,
+    rollout_mode: str,
     gen_batch_size: int,
     device: str | torch.device,
     dtype_name: str | None,
     seed: int,
 ) -> None:
     prompt_bank = load_prompt_bank(prompt_bank_dir)
-    if subset_size > prompt_bank.clean_train_prompt_ids.size(0):
-        raise ValueError(
-            f"subset_size={subset_size} exceeds prompt bank size "
-            f"{prompt_bank.clean_train_prompt_ids.size(0)}"
-        )
-
-    subset_idx = prompt_bank.train_order[:subset_size]
+    subset_idx = select_train_subset(prompt_bank, subset_size)
     model = load_hf_teacher(
         teacher_checkpoint,
         device=device,
@@ -261,6 +214,7 @@ def render_offline_dataset(
         prompt_bank,
         subset_idx,
         eta=eta,
+        rollout_mode=rollout_mode,
         gen_batch_size=gen_batch_size,
         device=device,
     )
@@ -272,6 +226,7 @@ def render_offline_dataset(
         teacher_checkpoint=teacher_checkpoint,
         subset_size=subset_size,
         eta=eta,
+        rollout_mode=rollout_mode,
         gen_batch_size=gen_batch_size,
         device=device,
         dtype_name=dtype_name,

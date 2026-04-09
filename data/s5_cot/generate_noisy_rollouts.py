@@ -9,7 +9,11 @@ import torch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from data.s5_cot.offline_render import DTYPE_LOOKUP, render_offline_dataset
+from data.s5_cot.offline_render import (
+    DTYPE_LOOKUP,
+    ROLLOUT_MODE_CHOICES,
+    render_offline_dataset,
+)
 
 
 def parse_args():
@@ -31,6 +35,11 @@ def parse_args():
     parser.add_argument("--save_dir", type=str, required=True)
     parser.add_argument("--subset_size", type=int, required=True)
     parser.add_argument("--eta", type=float, default=0.0)
+    parser.add_argument(
+        "--rollout_mode",
+        choices=ROLLOUT_MODE_CHOICES,
+        default="greedy_then_corrupt",
+    )
     parser.add_argument("--gen_batch_size", type=int, default=1024)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--dtype", choices=sorted(DTYPE_LOOKUP), default=None)
@@ -53,6 +62,7 @@ def main():
         save_dir=args.save_dir,
         subset_size=args.subset_size,
         eta=args.eta,
+        rollout_mode=args.rollout_mode,
         gen_batch_size=args.gen_batch_size,
         device=args.device,
         dtype_name=args.dtype,
