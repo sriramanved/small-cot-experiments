@@ -13,11 +13,13 @@ import torch
 
 from data.s5_cot.opd import (
     FixedPromptCycle,
-    compute_teacher_log_probs,
+    cached_teacher_token_probs,
     evaluate_clean_ce_loss,
     extract_answer_logits,
     gather_action_log_probs,
     rollout_student,
+    sample_teacher_actions,
+    teacher_forward_kl,
 )
 from data.s5_cot.prompt_bank import load_prompt_bank, select_train_subset
 from data.s5_cot.task import evaluate_saved_clean_s5_metrics
@@ -32,8 +34,8 @@ from nanogpt_checkpoint import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Train an S5 student from scratch with on-policy reverse-KL "
-            "distillation against a noisy teacher derived from a clean expert."
+            "Train an S5 student from scratch with on-policy distillation "
+            "against a noisy teacher derived from a clean expert."
         )
     )
     parser.add_argument("--teacher_checkpoint", type=str, required=True)
@@ -44,6 +46,11 @@ def parse_args() -> argparse.Namespace:
         "--teacher_law",
         choices=("distributional_noise", "corrupted_greedy"),
         default="distributional_noise",
+    )
+    parser.add_argument(
+        "--objective",
+        choices=("reverse_kl_tm", "forward_kl_simple", "forward_kl_full"),
+        default="reverse_kl_tm",
     )
     parser.add_argument("--out_dir", type=str, required=True)
     parser.add_argument("--init_from", choices=("scratch", "resume"), default="scratch")
@@ -66,12 +73,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--dtype", choices=sorted(DTYPE_LOOKUP), default=None)
+    parser.add_argument("--compile", action="store_true")
     parser.add_argument("--eps", type=float, default=1e-10)
 
     parser.add_argument("--wandb_log", action="store_true")
     parser.add_argument("--wandb_project", type=str, default="small-cot-experiments")
     parser.add_argument("--wandb_run_name", type=str, default=None)
     return parser.parse_args()
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    if args.objective != "reverse_kl_tm" and args.student_temperature <= 0:
+        raise ValueError(
+            "student_temperature must be > 0 for forward-KL objectives because "
+            "the loss is defined against the temperature-adjusted student policy."
+        )
+    if getattr(args, "compile", False) and not hasattr(torch, "compile"):
+        raise ValueError("--compile requires a PyTorch build with torch.compile support.")
 
 
 def resolve_device(device_arg: str | None) -> str:
@@ -148,13 +166,17 @@ def validate_resume_metadata(out_dir: Path, metadata: dict[str, object]) -> None
         "subset_size",
         "eta",
         "teacher_law",
+        "objective",
         "student_temperature",
         "shuffle_prompts",
         "seed",
     ):
-        if saved.get(key) != metadata.get(key):
+        saved_value = saved.get(key)
+        if key == "objective" and saved_value is None:
+            saved_value = "reverse_kl_tm"
+        if saved_value != metadata.get(key):
             raise ValueError(
-                f"Resume mismatch for {key}: saved={saved.get(key)!r} "
+            f"Resume mismatch for {key}: saved={saved_value!r} "
                 f"current={metadata.get(key)!r}"
             )
 
@@ -270,8 +292,9 @@ def save_checkpoint(
 
 def main() -> None:
     args = parse_args()
+    validate_args(args)
     if int(os.environ.get("WORLD_SIZE", "1")) != 1:
-        raise RuntimeError("train_TM_opd.py is single-GPU only in v1.")
+        raise RuntimeError("train_opd.py is single-GPU only in v1.")
 
     device = resolve_device(args.device)
     torch_dtype = resolve_dtype(args.dtype, device)
@@ -286,7 +309,7 @@ def main() -> None:
         eta_tag = str(args.eta).replace(".", "p")
         temp_tag = "greedy" if args.student_temperature == 0 else f"t{args.student_temperature}".replace(".", "p")
         args.wandb_run_name = (
-            f"s5-tm-opd-n{args.subset_size}-eta{eta_tag}-"
+            f"s5-opd-{args.objective}-n{args.subset_size}-eta{eta_tag}-"
             f"{args.teacher_law}-{temp_tag}"
         )
 
@@ -308,11 +331,13 @@ def main() -> None:
         "subset_size": args.subset_size,
         "eta": args.eta,
         "teacher_law": args.teacher_law,
+        "objective": args.objective,
         "student_temperature": args.student_temperature,
         "shuffle_prompts": args.shuffle_prompts,
         "seed": args.seed,
         "device": device,
         "dtype": str(torch_dtype).replace("torch.", ""),
+        "compile": bool(args.compile),
     }
     if args.init_from == "resume":
         validate_resume_metadata(out_dir, run_metadata)
@@ -354,6 +379,10 @@ def main() -> None:
         optimizer.load_state_dict(checkpoint["optimizer"])
         del checkpoint
 
+    if args.compile:
+        print("compiling the student model... (takes a ~minute)")
+        student = torch.compile(student)
+
     config = vars(args).copy()
     config.update(
         {
@@ -365,10 +394,8 @@ def main() -> None:
     )
     wandb = maybe_init_wandb(args, config)
 
-    running_loss = 0.0
-    running_advantage = 0.0
-    running_log_q = 0.0
-    running_log_teacher = 0.0
+    policy_temperature = args.student_temperature if args.student_temperature > 0 else None
+    running_metrics: dict[str, float] = {}
     running_steps = 0
     t0 = time.time()
 
@@ -418,7 +445,7 @@ def main() -> None:
 
         student.eval()
         with torch.no_grad():
-            full_seq, actions = rollout_student(
+            full_seq, actions, log_q = rollout_student(
                 student,
                 prompt_ids,
                 target_len=prompt_bank.cot_len,
@@ -427,33 +454,23 @@ def main() -> None:
                 autocast_context=autocast_context,
             )
             rollout_inputs = full_seq[:, :-1]
-            with autocast_context:
-                q_logits, _ = student(rollout_inputs, return_full_logits=True)
-                teacher_logits, _ = teacher(rollout_inputs, return_full_logits=True)
-            q_answer_logits = extract_answer_logits(
-                q_logits,
-                prompt_len=prompt_bank.prompt_len,
-                target_len=prompt_bank.cot_len,
-            )
-            teacher_answer_logits = extract_answer_logits(
-                teacher_logits,
-                prompt_len=prompt_bank.prompt_len,
-                target_len=prompt_bank.cot_len,
-            )
-            q_temperature = args.student_temperature if args.student_temperature > 0 else None
-            log_q = gather_action_log_probs(
-                q_answer_logits,
-                actions,
-                temperature=q_temperature,
-            )
-            log_teacher = compute_teacher_log_probs(
-                teacher_answer_logits,
+            teacher_probs = cached_teacher_token_probs(
+                teacher,
+                prompt_ids,
                 actions,
                 eta=args.eta,
                 teacher_law=args.teacher_law,
-                eps=args.eps,
+                device=device,
+                autocast_context=autocast_context,
             )
-            advantage = log_teacher - log_q
+            if args.objective == "reverse_kl_tm":
+                teacher_action_probs = teacher_probs.gather(2, actions.unsqueeze(-1)).squeeze(-1)
+                log_teacher = torch.log(teacher_action_probs.clamp_min(args.eps))
+                advantage = log_teacher - log_q
+            elif args.objective == "forward_kl_simple":
+                teacher_targets = sample_teacher_actions(teacher_probs)
+                teacher_target_probs = teacher_probs.gather(2, teacher_targets.unsqueeze(-1)).squeeze(-1)
+                log_teacher_target = torch.log(teacher_target_probs.clamp_min(args.eps))
         student.train()
 
         with autocast_context:
@@ -463,9 +480,42 @@ def main() -> None:
                 prompt_len=prompt_bank.prompt_len,
                 target_len=prompt_bank.cot_len,
             )
-            log_p = gather_action_log_probs(p_answer_logits, actions)
-            importance_weight = torch.exp(log_p - log_q.detach())
-            loss = -(importance_weight * advantage.detach()).mean()
+            if args.objective == "reverse_kl_tm":
+                log_p = gather_action_log_probs(p_answer_logits, actions)
+                importance_weight = torch.exp(log_p - log_q.detach())
+                loss = -(importance_weight * advantage.detach()).mean()
+                step_metrics = {
+                    "train/loss": float(loss.item()),
+                    "train/advantage": float(advantage.mean().item()),
+                    "train/log_q": float(log_q.mean().item()),
+                    "train/log_teacher": float(log_teacher.mean().item()),
+                }
+            elif args.objective == "forward_kl_simple":
+                log_student_target = gather_action_log_probs(
+                    p_answer_logits,
+                    teacher_targets,
+                    temperature=policy_temperature,
+                )
+                loss = -log_student_target.mean()
+                step_metrics = {
+                    "train/loss": float(loss.item()),
+                    "train/log_student_target": float(log_student_target.mean().item()),
+                    "train/log_teacher_target": float(log_teacher_target.mean().item()),
+                }
+            else:
+                token_kl, teacher_ce, teacher_entropy = teacher_forward_kl(
+                    teacher_probs,
+                    p_answer_logits,
+                    temperature=policy_temperature,
+                    eps=args.eps,
+                )
+                loss = token_kl.mean()
+                step_metrics = {
+                    "train/loss": float(loss.item()),
+                    "train/forward_kl": float(token_kl.mean().item()),
+                    "train/teacher_ce": float(teacher_ce.mean().item()),
+                    "train/teacher_entropy": float(teacher_entropy.mean().item()),
+                }
 
         scaler.scale(loss).backward()
         if args.grad_clip > 0:
@@ -475,37 +525,26 @@ def main() -> None:
         scaler.update()
         optimizer.zero_grad(set_to_none=True)
 
-        running_loss += float(loss.item())
-        running_advantage += float(advantage.mean().item())
-        running_log_q += float(log_q.mean().item())
-        running_log_teacher += float(log_teacher.mean().item())
+        for key, value in step_metrics.items():
+            running_metrics[key] = running_metrics.get(key, 0.0) + value
         running_steps += 1
 
         if iter_num % args.log_interval == 0:
             dt = time.time() - t0
             t0 = time.time()
             denom = max(1, running_steps)
-            train_stats = {
-                "train/loss": running_loss / denom,
-                "train/advantage": running_advantage / denom,
-                "train/log_q": running_log_q / denom,
-                "train/log_teacher": running_log_teacher / denom,
-                "lr": lr,
-                "iter": iter_num,
-            }
-            print(
-                f"iter {iter_num}: loss {train_stats['train/loss']:.4f}, "
-                f"advantage {train_stats['train/advantage']:.4f}, "
-                f"log_q {train_stats['train/log_q']:.4f}, "
-                f"log_teacher {train_stats['train/log_teacher']:.4f}, "
-                f"time {dt*1000:.2f}ms"
+            train_stats = {key: value / denom for key, value in running_metrics.items()}
+            train_stats["lr"] = lr
+            train_stats["iter"] = iter_num
+            metric_str = ", ".join(
+                f"{key.split('/')[-1]} {train_stats[key]:.4f}"
+                for key in train_stats
+                if key.startswith("train/")
             )
+            print(f"iter {iter_num}: {metric_str}, time {dt*1000:.2f}ms")
             if wandb is not None:
                 wandb.log(train_stats)
-            running_loss = 0.0
-            running_advantage = 0.0
-            running_log_q = 0.0
-            running_log_teacher = 0.0
+            running_metrics = {}
             running_steps = 0
 
         iter_num += 1

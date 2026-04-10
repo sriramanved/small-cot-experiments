@@ -49,7 +49,7 @@ class CausalSelfAttention(nn.Module):
             self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
                                         .view(1, 1, config.block_size, config.block_size))
 
-    def forward(self, x):
+    def forward(self, x, past_key_value=None, use_cache=False):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
@@ -58,14 +58,49 @@ class CausalSelfAttention(nn.Module):
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
+        past_len = 0
+        if past_key_value is not None:
+            past_k, past_v = past_key_value
+            past_len = past_k.size(-2)
+            k = torch.cat((past_k, k), dim=-2)
+            v = torch.cat((past_v, v), dim=-2)
+
+        present = (k, v) if use_cache else None
+
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
-            # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+            if past_len == 0:
+                # efficient attention using Flash Attention CUDA kernels
+                y = torch.nn.functional.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    attn_mask=None,
+                    dropout_p=self.dropout if self.training else 0,
+                    is_causal=True,
+                )
+            else:
+                total_len = k.size(-2)
+                causal_mask = torch.ones((T, total_len), device=x.device, dtype=torch.bool).tril(diagonal=past_len)
+                attn_bias = torch.zeros((T, total_len), device=x.device, dtype=q.dtype)
+                attn_bias.masked_fill_(~causal_mask, float("-inf"))
+                y = torch.nn.functional.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    attn_mask=attn_bias,
+                    dropout_p=self.dropout if self.training else 0,
+                    is_causal=False,
+                )
         else:
             # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+            if past_len == 0:
+                att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+            else:
+                total_len = k.size(-2)
+                causal_mask = torch.ones((T, total_len), device=x.device, dtype=torch.bool).tril(diagonal=past_len)
+                att = att.masked_fill(~causal_mask.view(1, 1, T, total_len), float('-inf'))
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
             y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
@@ -73,7 +108,7 @@ class CausalSelfAttention(nn.Module):
 
         # output projection
         y = self.resid_dropout(self.c_proj(y))
-        return y
+        return y, present
 
 class MLP(nn.Module):
 
@@ -100,10 +135,11 @@ class Block(nn.Module):
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
-    def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
+    def forward(self, x, past_key_value=None, use_cache=False):
+        attn_out, present = self.attn(self.ln_1(x), past_key_value=past_key_value, use_cache=use_cache)
+        x = x + attn_out
         x = x + self.mlp(self.ln_2(x))
-        return x
+        return x, present
 
 @dataclass
 class GPTConfig:
@@ -167,18 +203,42 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None, return_full_logits=False):
+    def forward(
+        self,
+        idx,
+        targets=None,
+        return_full_logits=False,
+        past_key_values=None,
+        use_cache=False,
+    ):
         device = idx.device
         b, t = idx.size()
-        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
+        if past_key_values is None:
+            past_key_values = [None] * len(self.transformer.h)
+            past_length = 0
+        else:
+            assert len(past_key_values) == len(self.transformer.h), (
+                f"Expected {len(self.transformer.h)} past_key_values entries, "
+                f"got {len(past_key_values)}"
+            )
+            first_past = past_key_values[0]
+            past_length = 0 if first_past is None else first_past[0].size(-2)
+        total_length = past_length + t
+        assert total_length <= self.config.block_size, (
+            f"Cannot forward sequence of length {total_length}, "
+            f"block size is only {self.config.block_size}"
+        )
+        pos = torch.arange(past_length, total_length, dtype=torch.long, device=device) # shape (t)
 
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
-        for block in self.transformer.h:
-            x = block(x)
+        present_key_values = [] if use_cache else None
+        for block, layer_past in zip(self.transformer.h, past_key_values):
+            x, present = block(x, past_key_value=layer_past, use_cache=use_cache)
+            if use_cache:
+                present_key_values.append(present)
         x = self.transformer.ln_f(x)
 
         if targets is not None or return_full_logits:
@@ -192,6 +252,8 @@ class GPT(nn.Module):
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
             loss = None
 
+        if use_cache:
+            return logits, loss, tuple(present_key_values)
         return logits, loss
 
     def crop_block_size(self, block_size):

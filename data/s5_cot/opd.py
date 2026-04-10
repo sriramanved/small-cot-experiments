@@ -83,6 +83,7 @@ class FixedPromptCycle:
             return batches[0]
         return torch.cat(batches, dim=0)
 
+
 @torch.no_grad()
 def rollout_student(
     model,
@@ -92,14 +93,24 @@ def rollout_student(
     temperature: float,
     device: str | torch.device,
     autocast_context=nullcontext(),
-) -> tuple[torch.Tensor, torch.Tensor]:
-    seq = prompt_ids.to(device=device, dtype=torch.long, non_blocking=True)
-    actions = torch.empty((seq.size(0), target_len), dtype=torch.long, device=device)
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    prompt = prompt_ids.to(device=device, dtype=torch.long, non_blocking=True)
+    batch_size, prompt_len = prompt.shape
+    full_seq = torch.empty((batch_size, prompt_len + target_len), dtype=torch.long, device=device)
+    full_seq[:, :prompt_len] = prompt
+    actions = full_seq[:, prompt_len:]
+    log_q = torch.empty((batch_size, target_len), dtype=torch.float32, device=device)
+    q_temperature = temperature if temperature > 0 else None
+    input_ids = prompt
+    past_key_values = None
 
     for step in range(target_len):
-        idx_cond = seq[:, -model.config.block_size:]
         with autocast_context:
-            logits, _ = model(idx_cond)
+            logits, _, past_key_values = model(
+                input_ids,
+                past_key_values=past_key_values,
+                use_cache=True,
+            )
         next_logits = logits[:, -1, :]
         if temperature > 0:
             probs = F.softmax(next_logits.float() / temperature, dim=-1)
@@ -107,9 +118,14 @@ def rollout_student(
         else:
             next_ids = torch.argmax(next_logits, dim=-1)
         actions[:, step] = next_ids
-        seq = torch.cat((seq, next_ids.unsqueeze(1)), dim=1)
+        log_q[:, step] = gather_action_log_probs(
+            next_logits.unsqueeze(1),
+            next_ids.unsqueeze(1),
+            temperature=q_temperature,
+        ).squeeze(1)
+        input_ids = next_ids.unsqueeze(1)
 
-    return seq, actions
+    return full_seq, actions, log_q
 
 
 def gather_action_log_probs(
@@ -118,11 +134,19 @@ def gather_action_log_probs(
     *,
     temperature: float | None = None,
 ) -> torch.Tensor:
+    log_probs = log_probs_from_logits(logits, temperature=temperature)
+    return log_probs.gather(2, actions.unsqueeze(-1)).squeeze(-1)
+
+
+def log_probs_from_logits(
+    logits: torch.Tensor,
+    *,
+    temperature: float | None = None,
+) -> torch.Tensor:
     work_logits = logits.float()
     if temperature is not None and temperature > 0:
         work_logits = work_logits / temperature
-    log_probs = F.log_softmax(work_logits, dim=-1)
-    return log_probs.gather(2, actions.unsqueeze(-1)).squeeze(-1)
+    return F.log_softmax(work_logits, dim=-1)
 
 
 def extract_answer_logits(
@@ -134,63 +158,62 @@ def extract_answer_logits(
     return full_logits[:, prompt_len - 1:prompt_len + target_len - 1, :]
 
 
-def distributional_noisy_teacher_log_probs(
+def distributional_noisy_teacher_probs(
     clean_logits: torch.Tensor,
-    actions: torch.Tensor,
     *,
     eta: float,
-    eps: float = 1e-10,
 ) -> torch.Tensor:
     clean_probs = F.softmax(clean_logits.float(), dim=-1)
-    p_clean_action = clean_probs.gather(2, actions.unsqueeze(-1)).squeeze(-1)
-
-    digit_ids = torch.tensor(CORRUPTIBLE_IDS, device=clean_logits.device, dtype=torch.long)
-    digit_mass = clean_probs.index_select(2, digit_ids).sum(dim=-1)
-    is_digit = (actions >= DIGIT_START_ID) & (actions <= DIGIT_END_ID)
+    if eta <= 0:
+        return clean_probs
 
     num_digits = len(CORRUPTIBLE_IDS)
-    noisy_probs = torch.where(
-        is_digit,
-        (1.0 - eta) * p_clean_action + (eta / num_digits) * digit_mass,
-        p_clean_action,
+    noisy_probs = clean_probs.clone()
+    noisy_probs[..., DIGIT_START_ID:DIGIT_END_ID + 1] = (
+        (1.0 - eta) * clean_probs[..., DIGIT_START_ID:DIGIT_END_ID + 1]
+        + (eta / num_digits) * clean_probs[..., DIGIT_START_ID:DIGIT_END_ID + 1].sum(dim=-1, keepdim=True)
     )
-    return torch.log(noisy_probs.clamp_min(eps))
+    return noisy_probs
 
 
-def corrupted_greedy_teacher_log_probs(
+def corrupted_greedy_teacher_probs(
     clean_logits: torch.Tensor,
-    actions: torch.Tensor,
     *,
     eta: float,
-    eps: float = 1e-10,
 ) -> torch.Tensor:
     greedy_actions = torch.argmax(clean_logits, dim=-1)
     is_greedy_digit = (greedy_actions >= DIGIT_START_ID) & (greedy_actions <= DIGIT_END_ID)
-    is_action_digit = (actions >= DIGIT_START_ID) & (actions <= DIGIT_END_ID)
-    same_as_greedy = actions.eq(greedy_actions)
-
-    probs = torch.zeros(actions.shape, device=clean_logits.device, dtype=torch.float32)
-    probs = torch.where(
-        (~is_greedy_digit) & same_as_greedy,
-        torch.ones_like(probs),
-        probs,
-    )
-
+    probs = torch.zeros_like(clean_logits, dtype=torch.float32)
     num_digits = len(CORRUPTIBLE_IDS)
-    greedy_digit_prob = 1.0 - eta + (eta / num_digits)
-    other_digit_prob = eta / num_digits
+    probs[..., DIGIT_START_ID:DIGIT_END_ID + 1] = (
+        is_greedy_digit.unsqueeze(-1).to(dtype=torch.float32) * (eta / num_digits)
+    )
+    base_mass = torch.where(
+        is_greedy_digit,
+        torch.full_like(greedy_actions, 1.0 - eta, dtype=torch.float32),
+        torch.ones_like(greedy_actions, dtype=torch.float32),
+    )
+    probs.scatter_add_(2, greedy_actions.unsqueeze(-1), base_mass.unsqueeze(-1))
+    return probs
 
-    probs = torch.where(
-        is_greedy_digit & is_action_digit & same_as_greedy,
-        torch.full_like(probs, greedy_digit_prob),
-        probs,
-    )
-    probs = torch.where(
-        is_greedy_digit & is_action_digit & (~same_as_greedy),
-        torch.full_like(probs, other_digit_prob),
-        probs,
-    )
-    return torch.log(probs.clamp_min(eps))
+
+def compute_teacher_token_probs(
+    clean_logits: torch.Tensor,
+    *,
+    eta: float,
+    teacher_law: str,
+) -> torch.Tensor:
+    if teacher_law == "distributional_noise":
+        return distributional_noisy_teacher_probs(
+            clean_logits,
+            eta=eta,
+        )
+    if teacher_law == "corrupted_greedy":
+        return corrupted_greedy_teacher_probs(
+            clean_logits,
+            eta=eta,
+        )
+    raise ValueError(f"Unknown teacher_law: {teacher_law}")
 
 
 def compute_teacher_log_probs(
@@ -201,21 +224,112 @@ def compute_teacher_log_probs(
     teacher_law: str,
     eps: float = 1e-10,
 ) -> torch.Tensor:
-    if teacher_law == "distributional_noise":
-        return distributional_noisy_teacher_log_probs(
-            clean_logits,
-            actions,
+    teacher_probs = compute_teacher_token_probs(
+        clean_logits,
+        eta=eta,
+        teacher_law=teacher_law,
+    )
+    teacher_action_probs = teacher_probs.gather(2, actions.unsqueeze(-1)).squeeze(-1)
+    return torch.log(teacher_action_probs.clamp_min(eps))
+
+
+def sample_teacher_actions(teacher_probs: torch.Tensor) -> torch.Tensor:
+    batch_size, target_len, vocab_size = teacher_probs.shape
+    flat_samples = torch.multinomial(
+        teacher_probs.reshape(batch_size * target_len, vocab_size),
+        num_samples=1,
+    )
+    return flat_samples.reshape(batch_size, target_len)
+
+
+def teacher_cross_entropy(
+    teacher_probs: torch.Tensor,
+    student_logits: torch.Tensor,
+    *,
+    temperature: float | None = None,
+) -> torch.Tensor:
+    student_log_probs = log_probs_from_logits(student_logits, temperature=temperature)
+    return -(teacher_probs * student_log_probs).sum(dim=-1)
+
+
+def teacher_forward_kl(
+    teacher_probs: torch.Tensor,
+    student_logits: torch.Tensor,
+    *,
+    temperature: float | None = None,
+    eps: float = 1e-10,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    teacher_log_probs = torch.log(teacher_probs.clamp_min(eps))
+    ce = teacher_cross_entropy(
+        teacher_probs,
+        student_logits,
+        temperature=temperature,
+    )
+    entropy = -(teacher_probs * teacher_log_probs).sum(dim=-1)
+    return ce - entropy, ce, entropy
+
+
+@torch.no_grad()
+def cached_teacher_token_probs(
+    model,
+    prompt_ids: torch.Tensor,
+    actions: torch.Tensor,
+    *,
+    eta: float,
+    teacher_law: str,
+    device: str | torch.device,
+    autocast_context=nullcontext(),
+) -> torch.Tensor:
+    prompt = prompt_ids.to(device=device, dtype=torch.long, non_blocking=True)
+    actions = actions.to(device=device, dtype=torch.long, non_blocking=True)
+    teacher_probs = torch.empty(
+        (*actions.shape, model.config.vocab_size),
+        dtype=torch.float32,
+        device=device,
+    )
+    input_ids = prompt
+    past_key_values = None
+
+    for step in range(actions.size(1)):
+        with autocast_context:
+            logits, _, past_key_values = model(
+                input_ids,
+                past_key_values=past_key_values,
+                use_cache=True,
+            )
+        teacher_probs[:, step, :] = compute_teacher_token_probs(
+            logits[:, -1:, :],
             eta=eta,
-            eps=eps,
-        )
-    if teacher_law == "corrupted_greedy":
-        return corrupted_greedy_teacher_log_probs(
-            clean_logits,
-            actions,
-            eta=eta,
-            eps=eps,
-        )
-    raise ValueError(f"Unknown teacher_law: {teacher_law}")
+            teacher_law=teacher_law,
+        ).squeeze(1)
+        input_ids = actions[:, step:step + 1]
+
+    return teacher_probs
+
+
+@torch.no_grad()
+def cached_teacher_log_probs(
+    model,
+    prompt_ids: torch.Tensor,
+    actions: torch.Tensor,
+    *,
+    eta: float,
+    teacher_law: str,
+    eps: float,
+    device: str | torch.device,
+    autocast_context=nullcontext(),
+) -> torch.Tensor:
+    teacher_probs = cached_teacher_token_probs(
+        model,
+        prompt_ids,
+        actions,
+        eta=eta,
+        teacher_law=teacher_law,
+        device=device,
+        autocast_context=autocast_context,
+    )
+    teacher_action_probs = teacher_probs.gather(2, actions.to(device=device).unsqueeze(-1)).squeeze(-1)
+    return torch.log(teacher_action_probs.clamp_min(eps))
 
 
 @torch.no_grad()

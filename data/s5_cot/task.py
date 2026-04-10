@@ -173,25 +173,43 @@ def sample_cot_example_from_rng(rng, m=21):
 
 @torch.no_grad()
 def greedy_generate_ids(model, prompt_ids, max_new_tokens, device):
-    idx = torch.tensor([prompt_ids], dtype=torch.long, device=device)
-    for _ in range(max_new_tokens):
-        idx_cond = idx[:, -model.config.block_size:]
-        logits, _ = model(idx_cond)
+    prompt = torch.tensor([prompt_ids], dtype=torch.long, device=device)
+    full_seq = torch.empty((1, prompt.size(1) + max_new_tokens), dtype=torch.long, device=device)
+    full_seq[:, :prompt.size(1)] = prompt
+    input_ids = prompt
+    past_key_values = None
+
+    for step in range(max_new_tokens):
+        logits, _, past_key_values = model(
+            input_ids,
+            past_key_values=past_key_values,
+            use_cache=True,
+        )
         next_id = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
-        idx = torch.cat([idx, next_id], dim=1)
-    return idx[0].tolist()
+        full_seq[:, prompt.size(1) + step] = next_id.squeeze(1)
+        input_ids = next_id
+
+    return full_seq[0].tolist()
 
 
 @torch.no_grad()
 def greedy_generate_target_ids_batched(model, prompt_ids_batch, max_new_tokens, device):
-    idx = prompt_ids_batch.to(device=device, dtype=torch.long)
-    prompt_len = idx.size(1)
-    for _ in range(max_new_tokens):
-        idx_cond = idx[:, -model.config.block_size:]
-        logits, _ = model(idx_cond)
-        next_id = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
-        idx = torch.cat([idx, next_id], dim=1)
-    return idx[:, prompt_len:].to(device="cpu", dtype=torch.long)
+    prompt = prompt_ids_batch.to(device=device, dtype=torch.long)
+    generated = torch.empty((prompt.size(0), max_new_tokens), dtype=torch.long, device=device)
+    input_ids = prompt
+    past_key_values = None
+
+    for step in range(max_new_tokens):
+        logits, _, past_key_values = model(
+            input_ids,
+            past_key_values=past_key_values,
+            use_cache=True,
+        )
+        next_id = torch.argmax(logits[:, -1, :], dim=-1)
+        generated[:, step] = next_id
+        input_ids = next_id.unsqueeze(1)
+
+    return generated.to(device="cpu", dtype=torch.long)
 
 
 @torch.no_grad()

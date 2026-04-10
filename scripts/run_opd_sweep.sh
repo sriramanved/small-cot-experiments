@@ -9,13 +9,14 @@ if [[ -d .venv ]]; then
 fi
 
 M="${M:-21}"
-N_TRAIN="${N_TRAIN:-6000000}"
+N_TRAIN="${N_TRAIN:-15000000}"
 N_VAL="${N_VAL:-5000}"
 PROMPT_BANK_DIR="${PROMPT_BANK_DIR:-data/s5_clean_prompt_bank_m${M}_n${N_TRAIN}_val${N_VAL}}"
 TEACHER_CHECKPOINT="${TEACHER_CHECKPOINT:-out-s5-cot-len21-depth1-400k}"
-SUBSET_SIZE="${SUBSET_SIZE:?Set SUBSET_SIZE to the chosen prompt subset size N}"
+SUBSET_SIZE="${SUBSET_SIZE:-8000000}"
 ETAS="${ETAS:-0.05 0.1 0.2}"
 TEACHER_LAW="${TEACHER_LAW:-distributional_noise}"
+OBJECTIVE="${OBJECTIVE:-reverse_kl_tm}"
 STUDENT_TEMPERATURE="${STUDENT_TEMPERATURE:-1.0}"
 BATCH_SIZE="${BATCH_SIZE:-64}"
 MAX_ITERS="${MAX_ITERS:-110000}"
@@ -33,7 +34,7 @@ EPS="${EPS:-1e-10}"
 SHUFFLE_PROMPTS="${SHUFFLE_PROMPTS:-0}"
 WANDB_LOG="${WANDB_LOG:-1}"
 WANDB_PROJECT="${WANDB_PROJECT:-small-cot-experiments}"
-LOG_DIR="${LOG_DIR:-logs/tm_opd}"
+LOG_DIR="${LOG_DIR:-logs/opd}"
 
 mkdir -p "${LOG_DIR}"
 
@@ -45,8 +46,8 @@ fi
 
 for ETA in ${ETAS}; do
   ETA_TAG="${ETA/./p}"
-  OUT_DIR="out-s5-tm-opd-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}"
-  LOG_PATH="${LOG_DIR}/s5_tm_opd_n${SUBSET_SIZE}_eta${ETA_TAG}_${TEACHER_LAW}_${TEMP_TAG}.log"
+  OUT_DIR="out-s5-opd-${OBJECTIVE}-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}"
+  LOG_PATH="${LOG_DIR}/s5_opd_${OBJECTIVE}_n${SUBSET_SIZE}_eta${ETA_TAG}_${TEACHER_LAW}_${TEMP_TAG}.log"
   EXTRA_ARGS=()
 
   if [[ -f "${OUT_DIR}/completed.txt" ]]; then
@@ -66,12 +67,13 @@ for ETA in ${ETAS}; do
     EXTRA_ARGS+=(--wandb_log)
   fi
 
-  python -u train_TM_opd.py \
+  python -u train_opd.py \
     --teacher_checkpoint="${TEACHER_CHECKPOINT}" \
     --prompt_bank_dir="${PROMPT_BANK_DIR}" \
     --subset_size="${SUBSET_SIZE}" \
     --eta="${ETA}" \
     --teacher_law="${TEACHER_LAW}" \
+    --objective="${OBJECTIVE}" \
     --out_dir="${OUT_DIR}" \
     --batch_size="${BATCH_SIZE}" \
     --max_iters="${MAX_ITERS}" \
@@ -88,7 +90,7 @@ for ETA in ${ETAS}; do
     --dtype="${DTYPE}" \
     --eps="${EPS}" \
     --wandb_project="${WANDB_PROJECT}" \
-    --wandb_run_name="s5-tm-opd-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}" \
+    --wandb_run_name="s5-opd-${OBJECTIVE}-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}" \
     "${EXTRA_ARGS[@]}" \
     2>&1 | tee "${LOG_PATH}"
 done
