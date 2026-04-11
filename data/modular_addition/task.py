@@ -16,7 +16,15 @@ from data.synthetic.eval import (
 )
 
 
+def validate_task_params(*, p: int, m: int | None = None) -> None:
+    if int(p) < 2:
+        raise ValueError(f"p must be >= 2, got {p}")
+    if m is not None and int(m) < 1:
+        raise ValueError(f"m must be >= 1, got {m}")
+
+
 def tokens_for_p(p: int) -> list[str]:
+    validate_task_params(p=p)
     return [str(i) for i in range(p)] + ["="]
 
 
@@ -30,14 +38,17 @@ def itos_for_p(p: int) -> dict[int, str]:
 
 
 def vocab_size(p: int) -> int:
+    validate_task_params(p=p)
     return int(p) + 1
 
 
 def equals_token_id(p: int) -> int:
+    validate_task_params(p=p)
     return int(p)
 
 
 def corruptible_token_ids(p: int) -> tuple[int, ...]:
+    validate_task_params(p=p)
     return tuple(range(int(p)))
 
 
@@ -52,6 +63,7 @@ def decode(ids, *, p: int) -> list[str]:
 
 
 def sample_cot_example_ids_from_rng(rng: random.Random, *, p: int, m: int) -> tuple[list[int], list[int]]:
+    validate_task_params(p=p, m=m)
     prompt_ids = []
     cot_ids = []
     running = 0
@@ -70,6 +82,7 @@ def sample_cot_example(*, p: int, m: int) -> tuple[list[str], list[str]]:
 
 
 def sample_xy(*, p: int = 7, m: int = 21):
+    validate_task_params(p=p, m=m)
     prompt_ids, target_ids = sample_cot_example_ids_from_rng(random, p=p, m=m)
     seq = prompt_ids + target_ids
 
@@ -82,6 +95,7 @@ def sample_xy(*, p: int = 7, m: int = 21):
 
 
 def get_batch(batch_size, device, *, p: int = 7, m: int = 21):
+    validate_task_params(p=p, m=m)
     xs, ys = [], []
     for _ in range(batch_size):
         x, y = sample_xy(p=p, m=m)
@@ -100,6 +114,7 @@ def continuation_exact_from_logits(logits, y):
 
 
 def corrupt_token(tok_id, eta, *, p: int):
+    validate_task_params(p=p)
     return generic_corrupt_token(
         tok_id,
         eta,
@@ -108,6 +123,7 @@ def corrupt_token(tok_id, eta, *, p: int):
 
 
 def corrupt_ids(ids, eta, *, p: int):
+    validate_task_params(p=p)
     return generic_corrupt_ids(
         ids,
         eta,
@@ -116,6 +132,7 @@ def corrupt_ids(ids, eta, *, p: int):
 
 
 def _sample_eval_batch_from_rng(rng, batch_n, *, p: int, m: int):
+    validate_task_params(p=p, m=m)
     prompt_batches = []
     cot_batches = []
     for _ in range(batch_n):
@@ -138,6 +155,7 @@ def evaluate_clean_modadd_metrics(
     seed=123,
     batch_size=256,
 ):
+    validate_task_params(p=p, m=m)
     rng = random.Random(seed)
 
     tf_full_ok = 0

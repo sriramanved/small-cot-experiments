@@ -11,6 +11,7 @@ from data.modular_addition.prompt_bank import load_prompt_bank
 from data.modular_addition.task import (
     corrupt_ids,
     corruptible_token_ids,
+    get_batch,
     sample_cot_example_ids_from_rng,
 )
 from data.s5_cot.opd import compute_teacher_token_probs
@@ -18,6 +19,12 @@ from train_opd import validate_resume_metadata
 
 
 class ModularAdditionTests(unittest.TestCase):
+    def test_invalid_task_params_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "p must be >= 2"):
+            sample_cot_example_ids_from_rng(__import__("random").Random(0), p=1, m=4)
+        with self.assertRaisesRegex(ValueError, "m must be >= 1"):
+            get_batch(batch_size=2, device="cpu", p=7, m=0)
+
     def test_sample_cot_example_ids_have_expected_running_sums(self):
         prompt_ids, cot_ids = sample_cot_example_ids_from_rng(__import__("random").Random(0), p=7, m=4)
         self.assertEqual(len(prompt_ids), 5)

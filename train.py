@@ -220,6 +220,10 @@ if is_modadd_offline_dataset(dataset):
             modadd_meta = json.load(f)
         resolved_modadd_p = int(modadd_meta.get('p', resolved_modadd_p))
         resolved_modadd_m = int(modadd_meta.get('m', resolved_modadd_m))
+modadd_p = resolved_modadd_p
+modadd_m = resolved_modadd_m
+config['modadd_p'] = modadd_p
+config['modadd_m'] = modadd_m
 config['resolved_modadd_p'] = resolved_modadd_p
 config['resolved_modadd_m'] = resolved_modadd_m
 
@@ -518,6 +522,20 @@ if wandb_log and master_process:
 
 
 def save_eval_summary(reason, losses):
+    aliases = {}
+    if "train" in losses:
+        aliases["train/loss_eval"] = float(losses["train"])
+    if "val" in losses:
+        aliases["val/loss"] = float(losses["val"])
+    if "train_clean_oracle" in losses:
+        aliases["train/clean_oracle_loss_eval"] = float(losses["train_clean_oracle"])
+    if "val_cot_exact" in losses:
+        aliases["val/cot_exact"] = float(losses["val_cot_exact"])
+    if "val_clean_full_exact" in losses:
+        aliases["val/clean_full_exact"] = float(losses["val_clean_full_exact"])
+    if "val_clean_final_exact" in losses:
+        aliases["val/clean_final_exact"] = float(losses["val_clean_final_exact"])
+
     summary = {
         "iter": int(iter_num),
         "reason": reason,
@@ -525,6 +543,7 @@ def save_eval_summary(reason, losses):
             key: float(value)
             for key, value in losses.items()
         },
+        **aliases,
     }
     with open(os.path.join(out_dir, 'last_eval.json'), 'w', encoding='utf-8') as f:
         json.dump(summary, f, indent=2)

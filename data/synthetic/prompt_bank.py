@@ -128,6 +128,8 @@ def load_prompt_bank(prompt_bank_dir: str | Path) -> PromptBank:
 
 
 def select_train_subset(prompt_bank: PromptBank, subset_size: int) -> torch.Tensor:
+    if subset_size < 0:
+        raise ValueError(f"subset_size={subset_size} must be non-negative")
     if subset_size > prompt_bank.clean_train_prompt_ids.size(0):
         raise ValueError(
             f"subset_size={subset_size} exceeds prompt bank size "
@@ -145,7 +147,7 @@ def build_xy_from_prompt_and_target(
     prompt_ids = prompt_ids.to(dtype=token_dtype)
     target_ids = target_ids.to(dtype=token_dtype)
     seq = torch.cat((prompt_ids, target_ids), dim=1)
-    x = seq[:, :-1].contiguous()
-    y = seq[:, 1:].to(dtype=label_dtype).contiguous()
+    x = seq[:, :-1].clone().contiguous()
+    y = seq[:, 1:].to(dtype=label_dtype).clone().contiguous()
     y[:, :prompt_ids.size(1) - 1] = -1
     return x, y
