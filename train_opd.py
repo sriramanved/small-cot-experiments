@@ -20,10 +20,12 @@ from data.s5_cot.opd import (
     cached_teacher_token_probs,
     evaluate_clean_ce_loss,
     extract_answer_logits,
+    forward_kl_full_loss,
+    forward_kl_simple_loss,
     gather_action_log_probs,
+    reverse_kl_tm_loss,
     rollout_student,
     sample_teacher_actions,
-    teacher_forward_kl,
 )
 from data.s5_cot.task import CORRUPTIBLE_IDS as S5_CORRUPTIBLE_IDS
 from data.s5_cot.task import evaluate_saved_clean_s5_metrics
@@ -546,40 +548,44 @@ def main() -> None:
                 target_len=prompt_bank.cot_len,
             )
             if args.objective == "reverse_kl_tm":
-                log_p = gather_action_log_probs(p_answer_logits, actions)
-                importance_weight = torch.exp(log_p - log_q.detach())
-                loss = -(importance_weight * advantage.detach()).mean()
+                loss, objective_stats = reverse_kl_tm_loss(
+                    p_answer_logits,
+                    actions,
+                    log_q=log_q,
+                    teacher_probs=teacher_probs,
+                    eps=args.eps,
+                )
                 step_metrics = {
                     "train/loss": float(loss.item()),
-                    "train/advantage": float(advantage.mean().item()),
+                    "train/advantage": float(objective_stats["advantage"].mean().item()),
                     "train/log_q": float(log_q.mean().item()),
-                    "train/log_teacher": float(log_teacher.mean().item()),
+                    "train/log_teacher": float(objective_stats["log_teacher"].mean().item()),
                 }
             elif args.objective == "forward_kl_simple":
-                log_student_target = gather_action_log_probs(
+                loss, objective_stats = forward_kl_simple_loss(
                     p_answer_logits,
                     teacher_targets,
-                    temperature=policy_temperature,
-                )
-                loss = -log_student_target.mean()
-                step_metrics = {
-                    "train/loss": float(loss.item()),
-                    "train/log_student_target": float(log_student_target.mean().item()),
-                    "train/log_teacher_target": float(log_teacher_target.mean().item()),
-                }
-            else:
-                token_kl, teacher_ce, teacher_entropy = teacher_forward_kl(
-                    teacher_probs,
-                    p_answer_logits,
+                    teacher_probs=teacher_probs,
                     temperature=policy_temperature,
                     eps=args.eps,
                 )
-                loss = token_kl.mean()
                 step_metrics = {
                     "train/loss": float(loss.item()),
-                    "train/forward_kl": float(token_kl.mean().item()),
-                    "train/teacher_ce": float(teacher_ce.mean().item()),
-                    "train/teacher_entropy": float(teacher_entropy.mean().item()),
+                    "train/log_student_target": float(objective_stats["log_student_target"].mean().item()),
+                    "train/log_teacher_target": float(objective_stats["log_teacher_target"].mean().item()),
+                }
+            else:
+                loss, objective_stats = forward_kl_full_loss(
+                    p_answer_logits,
+                    teacher_probs=teacher_probs,
+                    temperature=policy_temperature,
+                    eps=args.eps,
+                )
+                step_metrics = {
+                    "train/loss": float(loss.item()),
+                    "train/forward_kl": float(objective_stats["forward_kl"].mean().item()),
+                    "train/teacher_ce": float(objective_stats["teacher_ce"].mean().item()),
+                    "train/teacher_entropy": float(objective_stats["teacher_entropy"].mean().item()),
                 }
 
         scaler.scale(loss).backward()

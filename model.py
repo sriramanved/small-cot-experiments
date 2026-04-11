@@ -15,6 +15,20 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+
+def causal_lm_loss(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    *,
+    ignore_index: int = -1,
+) -> torch.Tensor:
+    return F.cross_entropy(
+        logits.view(-1, logits.size(-1)),
+        targets.view(-1),
+        ignore_index=ignore_index,
+    )
+
+
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
 
@@ -244,7 +258,7 @@ class GPT(nn.Module):
         if targets is not None or return_full_logits:
             logits = self.lm_head(x)
             if targets is not None:
-                loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+                loss = causal_lm_loss(logits, targets, ignore_index=-1)
             else:
                 loss = None
         else:

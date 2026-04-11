@@ -285,6 +285,71 @@ def teacher_forward_kl(
     return ce - entropy, ce, entropy
 
 
+def reverse_kl_tm_loss(
+    student_logits: torch.Tensor,
+    actions: torch.Tensor,
+    *,
+    log_q: torch.Tensor,
+    teacher_probs: torch.Tensor,
+    eps: float = 1e-10,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    teacher_action_probs = teacher_probs.gather(2, actions.unsqueeze(-1)).squeeze(-1)
+    log_teacher = torch.log(teacher_action_probs.clamp_min(eps))
+    advantage = log_teacher - log_q
+    log_p = gather_action_log_probs(student_logits, actions)
+    importance_weight = torch.exp(log_p - log_q.detach())
+    loss = -(importance_weight * advantage.detach()).mean()
+    return loss, {
+        "log_p": log_p,
+        "log_teacher": log_teacher,
+        "advantage": advantage,
+        "importance_weight": importance_weight,
+    }
+
+
+def forward_kl_simple_loss(
+    student_logits: torch.Tensor,
+    teacher_targets: torch.Tensor,
+    *,
+    teacher_probs: torch.Tensor,
+    temperature: float | None = None,
+    eps: float = 1e-10,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    teacher_target_probs = teacher_probs.gather(2, teacher_targets.unsqueeze(-1)).squeeze(-1)
+    log_teacher_target = torch.log(teacher_target_probs.clamp_min(eps))
+    log_student_target = gather_action_log_probs(
+        student_logits,
+        teacher_targets,
+        temperature=temperature,
+    )
+    loss = -log_student_target.mean()
+    return loss, {
+        "log_student_target": log_student_target,
+        "log_teacher_target": log_teacher_target,
+    }
+
+
+def forward_kl_full_loss(
+    student_logits: torch.Tensor,
+    *,
+    teacher_probs: torch.Tensor,
+    temperature: float | None = None,
+    eps: float = 1e-10,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    token_kl, teacher_ce, teacher_entropy = teacher_forward_kl(
+        teacher_probs,
+        student_logits,
+        temperature=temperature,
+        eps=eps,
+    )
+    loss = token_kl.mean()
+    return loss, {
+        "forward_kl": token_kl,
+        "teacher_ce": teacher_ce,
+        "teacher_entropy": teacher_entropy,
+    }
+
+
 @torch.no_grad()
 def cached_teacher_token_probs(
     model,
