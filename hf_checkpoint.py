@@ -15,11 +15,14 @@ This utility converts the repo's saved `ckpt.pt` format into a
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 from typing import Any, Mapping
 
 import torch
+import torch.nn as nn
 from transformers import GPT2Config, GPT2LMHeadModel
+from transformers.pytorch_utils import Conv1D
 
 from nanogpt_checkpoint import (
     load_nanogpt_checkpoint,
@@ -60,7 +63,7 @@ def nanogpt_model_args_to_hf_config(
     n_embd = int(model_args["n_embd"])
     block_size = int(model_args["block_size"])
 
-    return GPT2Config(
+    config = GPT2Config(
         vocab_size=int(model_args["vocab_size"]),
         n_positions=block_size,
         n_ctx=block_size,
@@ -78,6 +81,98 @@ def nanogpt_model_args_to_hf_config(
         pad_token_id=pad_token_id,
         use_cache=True,
     )
+    config.loss_type = "ForCausalLM"
+    return config
+
+
+def init_hf_model_like_nanogpt(
+    hf_model: GPT2LMHeadModel,
+    *,
+    has_bias: bool,
+) -> None:
+    for module in hf_model.modules():
+        if isinstance(module, (nn.Linear, Conv1D)):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        elif isinstance(module, nn.LayerNorm):
+            nn.init.ones_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+
+    for name, param in hf_model.named_parameters():
+        if name.endswith("c_proj.weight"):
+            nn.init.normal_(
+                param,
+                mean=0.0,
+                std=0.02 / math.sqrt(2 * hf_model.config.n_layer),
+            )
+
+    apply_nanogpt_bias_policy(
+        hf_model,
+        has_bias=has_bias,
+    )
+    hf_model.tie_weights()
+
+
+def set_hf_causal_lm_loss(hf_model: GPT2LMHeadModel) -> None:
+    hf_model.loss_type = "ForCausalLM"
+
+
+def apply_nanogpt_bias_policy(
+    hf_model: GPT2LMHeadModel,
+    *,
+    has_bias: bool,
+) -> None:
+    if not has_bias:
+        for name, param in hf_model.named_parameters():
+            if name.endswith(".bias"):
+                with torch.no_grad():
+                    param.zero_()
+                param.requires_grad = False
+    else:
+        for name, param in hf_model.named_parameters():
+            if name.endswith(".bias"):
+                param.requires_grad = True
+
+
+def build_hf_model_from_nanogpt_args(
+    model_args: Mapping[str, Any],
+    *,
+    device: str | torch.device | None = None,
+    torch_dtype: torch.dtype | None = None,
+    eval_mode: bool = False,
+    bos_token_id: int | None = None,
+    eos_token_id: int | None = None,
+    pad_token_id: int | None = None,
+) -> GPT2LMHeadModel:
+    hf_config = nanogpt_model_args_to_hf_config(
+        model_args,
+        bos_token_id=bos_token_id,
+        eos_token_id=eos_token_id,
+        pad_token_id=pad_token_id,
+    )
+    hf_config.nanogpt_bias = bool(model_args.get("bias", True))
+    hf_model = GPT2LMHeadModel(hf_config)
+    set_hf_causal_lm_loss(hf_model)
+    init_hf_model_like_nanogpt(
+        hf_model,
+        has_bias=bool(model_args.get("bias", True)),
+    )
+
+    if eval_mode:
+        hf_model.eval()
+
+    if torch_dtype is not None and device is not None:
+        hf_model.to(device=device, dtype=torch_dtype)
+    elif torch_dtype is not None:
+        hf_model.to(dtype=torch_dtype)
+    elif device is not None:
+        hf_model.to(device=device)
+
+    return hf_model
 
 
 def convert_nanogpt_state_dict_to_hf(
@@ -143,6 +238,7 @@ def load_nanogpt_checkpoint_as_hf(
         pad_token_id=pad_token_id,
     )
     hf_model = GPT2LMHeadModel(hf_config)
+    set_hf_causal_lm_loss(hf_model)
 
     cleaned_state_dict = clean_nanogpt_state_dict(checkpoint["model"])
     converted_state_dict = convert_nanogpt_state_dict_to_hf(

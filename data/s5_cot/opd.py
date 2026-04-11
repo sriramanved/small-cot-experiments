@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 
 from data.s5_cot.prompt_bank import PromptBank, build_xy_from_prompt_and_target
-from data.s5_cot.task import CORRUPTIBLE_IDS, DIGIT_END_ID, DIGIT_START_ID
+from data.s5_cot.task import CORRUPTIBLE_IDS
 
 
 class FixedPromptCycle:
@@ -162,17 +162,24 @@ def distributional_noisy_teacher_probs(
     clean_logits: torch.Tensor,
     *,
     eta: float,
+    corruptible_token_ids: tuple[int, ...] | list[int] = CORRUPTIBLE_IDS,
 ) -> torch.Tensor:
     clean_probs = F.softmax(clean_logits.float(), dim=-1)
     if eta <= 0:
         return clean_probs
 
-    num_digits = len(CORRUPTIBLE_IDS)
+    corruptible_ids = torch.as_tensor(corruptible_token_ids, dtype=torch.long, device=clean_probs.device)
+    num_digits = int(corruptible_ids.numel())
+    if num_digits == 0:
+        return clean_probs
+
+    selected_probs = clean_probs.index_select(dim=-1, index=corruptible_ids)
     noisy_probs = clean_probs.clone()
-    noisy_probs[..., DIGIT_START_ID:DIGIT_END_ID + 1] = (
-        (1.0 - eta) * clean_probs[..., DIGIT_START_ID:DIGIT_END_ID + 1]
-        + (eta / num_digits) * clean_probs[..., DIGIT_START_ID:DIGIT_END_ID + 1].sum(dim=-1, keepdim=True)
+    noisy_selected_probs = (
+        (1.0 - eta) * selected_probs
+        + (eta / num_digits) * selected_probs.sum(dim=-1, keepdim=True)
     )
+    noisy_probs.index_copy_(dim=-1, index=corruptible_ids, source=noisy_selected_probs)
     return noisy_probs
 
 
@@ -180,14 +187,18 @@ def corrupted_greedy_teacher_probs(
     clean_logits: torch.Tensor,
     *,
     eta: float,
+    corruptible_token_ids: tuple[int, ...] | list[int] = CORRUPTIBLE_IDS,
 ) -> torch.Tensor:
     greedy_actions = torch.argmax(clean_logits, dim=-1)
-    is_greedy_digit = (greedy_actions >= DIGIT_START_ID) & (greedy_actions <= DIGIT_END_ID)
+    corruptible_ids = torch.as_tensor(corruptible_token_ids, dtype=torch.long, device=clean_logits.device)
+    is_greedy_digit = greedy_actions.unsqueeze(-1).eq(
+        corruptible_ids.view(*([1] * greedy_actions.ndim), -1)
+    ).any(dim=-1)
     probs = torch.zeros_like(clean_logits, dtype=torch.float32)
-    num_digits = len(CORRUPTIBLE_IDS)
-    probs[..., DIGIT_START_ID:DIGIT_END_ID + 1] = (
-        is_greedy_digit.unsqueeze(-1).to(dtype=torch.float32) * (eta / num_digits)
-    )
+    num_digits = int(corruptible_ids.numel())
+    if num_digits > 0:
+        uniform_noise = is_greedy_digit.unsqueeze(-1).to(dtype=torch.float32).expand(*greedy_actions.shape, num_digits)
+        probs.index_copy_(dim=-1, index=corruptible_ids, source=uniform_noise * (eta / num_digits))
     base_mass = torch.where(
         is_greedy_digit,
         torch.full_like(greedy_actions, 1.0 - eta, dtype=torch.float32),
@@ -202,16 +213,19 @@ def compute_teacher_token_probs(
     *,
     eta: float,
     teacher_law: str,
+    corruptible_token_ids: tuple[int, ...] | list[int] = CORRUPTIBLE_IDS,
 ) -> torch.Tensor:
     if teacher_law == "distributional_noise":
         return distributional_noisy_teacher_probs(
             clean_logits,
             eta=eta,
+            corruptible_token_ids=corruptible_token_ids,
         )
     if teacher_law == "corrupted_greedy":
         return corrupted_greedy_teacher_probs(
             clean_logits,
             eta=eta,
+            corruptible_token_ids=corruptible_token_ids,
         )
     raise ValueError(f"Unknown teacher_law: {teacher_law}")
 
@@ -222,12 +236,14 @@ def compute_teacher_log_probs(
     *,
     eta: float,
     teacher_law: str,
+    corruptible_token_ids: tuple[int, ...] | list[int] = CORRUPTIBLE_IDS,
     eps: float = 1e-10,
 ) -> torch.Tensor:
     teacher_probs = compute_teacher_token_probs(
         clean_logits,
         eta=eta,
         teacher_law=teacher_law,
+        corruptible_token_ids=corruptible_token_ids,
     )
     teacher_action_probs = teacher_probs.gather(2, actions.unsqueeze(-1)).squeeze(-1)
     return torch.log(teacher_action_probs.clamp_min(eps))
@@ -277,6 +293,7 @@ def cached_teacher_token_probs(
     *,
     eta: float,
     teacher_law: str,
+    corruptible_token_ids: tuple[int, ...] | list[int] = CORRUPTIBLE_IDS,
     device: str | torch.device,
     autocast_context=nullcontext(),
 ) -> torch.Tensor:
@@ -301,6 +318,7 @@ def cached_teacher_token_probs(
             logits[:, -1:, :],
             eta=eta,
             teacher_law=teacher_law,
+            corruptible_token_ids=corruptible_token_ids,
         ).squeeze(1)
         input_ids = actions[:, step:step + 1]
 
@@ -315,6 +333,7 @@ def cached_teacher_log_probs(
     *,
     eta: float,
     teacher_law: str,
+    corruptible_token_ids: tuple[int, ...] | list[int] = CORRUPTIBLE_IDS,
     eps: float,
     device: str | torch.device,
     autocast_context=nullcontext(),
@@ -325,6 +344,7 @@ def cached_teacher_log_probs(
         actions,
         eta=eta,
         teacher_law=teacher_law,
+        corruptible_token_ids=corruptible_token_ids,
         device=device,
         autocast_context=autocast_context,
     )

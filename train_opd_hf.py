@@ -1,49 +1,54 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 import random
+import shutil
 import time
 from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
 import torch
+from transformers import GPT2LMHeadModel
 
-from data.modular_addition.task import (
-    corruptible_token_ids as modadd_corruptible_token_ids,
-    evaluate_saved_clean_modadd_metrics,
-)
 from data.s5_cot.opd import (
     FixedPromptCycle,
-    cached_teacher_token_probs,
-    evaluate_clean_ce_loss,
     extract_answer_logits,
     gather_action_log_probs,
-    rollout_student,
     sample_teacher_actions,
     teacher_forward_kl,
 )
-from data.s5_cot.task import CORRUPTIBLE_IDS as S5_CORRUPTIBLE_IDS
-from data.s5_cot.task import evaluate_saved_clean_s5_metrics
-from data.synthetic.prompt_bank import load_prompt_bank, select_train_subset
-from hf_checkpoint import DTYPE_LOOKUP
-from nanogpt_checkpoint import (
-    build_nanogpt_model,
-    load_nanogpt_checkpoint,
-    load_nanogpt_model,
+from data.s5_cot.opd_hf import (
+    cached_teacher_token_probs_hf,
+    evaluate_clean_ce_loss_hf,
+    evaluate_saved_clean_s5_metrics_hf,
+    rollout_student_hf,
 )
+from data.s5_cot.prompt_bank import load_prompt_bank, select_train_subset
+from hf_checkpoint import (
+    DTYPE_LOOKUP,
+    apply_nanogpt_bias_policy,
+    build_hf_model_from_nanogpt_args,
+    load_nanogpt_checkpoint,
+    load_nanogpt_checkpoint_as_hf,
+    set_hf_causal_lm_loss,
+)
+
+
+HF_MODEL_DIRNAME = "hf_model"
+TRAINING_STATE_NAME = "training_state.pt"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Train a synthetic-task student from scratch with on-policy "
-            "distillation against a noisy teacher derived from a clean expert."
+            "Train an S5 student from scratch with on-policy distillation "
+            "against a noisy teacher derived from a clean expert using a Hugging Face GPT-2 backend."
         )
     )
-    parser.add_argument("--task", choices=("s5", "modadd"), default="s5")
     parser.add_argument("--teacher_checkpoint", type=str, required=True)
     parser.add_argument("--prompt_bank_dir", type=str, required=True)
     parser.add_argument("--subset_size", type=int, required=True)
@@ -144,10 +149,6 @@ def restore_rng_state(state: dict[str, object], device: str) -> None:
         torch.cuda.set_rng_state_all(state["torch_cuda"])
 
 
-def normalize_state_dict_for_save(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    return {key: value.detach().cpu() for key, value in state_dict.items()}
-
-
 def save_run_metadata(
     out_dir: Path,
     *,
@@ -167,9 +168,7 @@ def validate_resume_metadata(out_dir: Path, metadata: dict[str, object]) -> None
     with open(meta_path, "r", encoding="utf-8") as f:
         saved = json.load(f)
     for key in (
-        "task",
-        "p",
-        "m",
+        "backend",
         "teacher_checkpoint",
         "prompt_bank_dir",
         "subset_size",
@@ -180,27 +179,10 @@ def validate_resume_metadata(out_dir: Path, metadata: dict[str, object]) -> None
         "shuffle_prompts",
         "seed",
     ):
-        current_value = metadata.get(key)
-        current_task = metadata.get("task", "s5")
-        if key == "task" and current_value is None:
-            current_value = "s5"
-        if key == "p" and current_value is None and current_task == "s5":
-            current_value = 5
-        if key == "m" and current_value is None and current_task == "s5":
-            current_value = saved.get("m")
-        saved_value = saved.get(key)
-        if key == "task" and saved_value is None:
-            saved_value = "s5"
-        if key == "p" and saved_value is None and current_task == "s5":
-            saved_value = 5
-        if key == "m" and saved_value is None and current_task == "s5":
-            saved_value = current_value
-        if key == "objective" and saved_value is None:
-            saved_value = "reverse_kl_tm"
-        if saved_value != current_value:
+        if saved.get(key) != metadata.get(key):
             raise ValueError(
-            f"Resume mismatch for {key}: saved={saved_value!r} "
-                f"current={current_value!r}"
+                f"Resume mismatch for {key}: saved={saved.get(key)!r} "
+                f"current={metadata.get(key)!r}"
             )
 
 
@@ -209,36 +191,41 @@ def mark_complete(out_dir: Path, iter_num: int) -> None:
         f.write(f"iter_num={iter_num}\n")
 
 
-def load_student(
-    args: argparse.Namespace,
+def configure_hf_optimizer(
+    model: GPT2LMHeadModel,
     *,
-    device: str,
-) -> tuple[torch.nn.Module, dict[str, object], int, float, dict[str, object] | None, dict[str, object] | None]:
-    if args.init_from == "resume":
-        model, checkpoint = load_nanogpt_model(
-            args.out_dir,
-            map_location="cpu",
-            device=device,
-            eval_mode=False,
-            return_checkpoint=True,
-        )
-        iter_num = int(checkpoint["iter_num"])
-        best_val_loss = float(checkpoint.get("best_val_loss", float("inf")))
-        return (
-            model,
-            dict(checkpoint["model_args"]),
-            iter_num,
-            best_val_loss,
-            checkpoint.get("prompt_cycle_state"),
-            checkpoint.get("rng_state"),
-        )
+    weight_decay: float,
+    learning_rate: float,
+    betas: tuple[float, float],
+    device_type: str,
+) -> torch.optim.Optimizer:
+    param_dict = {
+        name: param
+        for name, param in model.named_parameters()
+        if param.requires_grad
+    }
+    decay_params = [param for _, param in param_dict.items() if param.dim() >= 2]
+    nodecay_params = [param for _, param in param_dict.items() if param.dim() < 2]
+    optim_groups = [
+        {"params": decay_params, "weight_decay": weight_decay},
+        {"params": nodecay_params, "weight_decay": 0.0},
+    ]
+    num_decay_params = sum(param.numel() for param in decay_params)
+    num_nodecay_params = sum(param.numel() for param in nodecay_params)
+    print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
+    print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
 
-    teacher_checkpoint = load_nanogpt_checkpoint(args.teacher_checkpoint, map_location="cpu")
-    model_args = dict(teacher_checkpoint["model_args"])
-    model = build_nanogpt_model(model_args)
-    model.to(device)
-    model.train()
-    return model, model_args, 0, float("inf"), None, None
+    fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
+    use_fused = fused_available and device_type == "cuda"
+    extra_args = {"fused": True} if use_fused else {}
+    optimizer = torch.optim.AdamW(
+        optim_groups,
+        lr=learning_rate,
+        betas=betas,
+        **extra_args,
+    )
+    print(f"using fused AdamW: {use_fused}")
+    return optimizer
 
 
 def maybe_init_wandb(args: argparse.Namespace, config: dict[str, object]):
@@ -254,52 +241,31 @@ def maybe_init_wandb(args: argparse.Namespace, config: dict[str, object]):
     return wandb
 
 
-def resolve_task_helpers(task_name: str, *, p: int):
-    if task_name == "s5":
-        return tuple(S5_CORRUPTIBLE_IDS), evaluate_saved_clean_s5_metrics
-    if task_name == "modadd":
-        return tuple(modadd_corruptible_token_ids(p)), evaluate_saved_clean_modadd_metrics
-    raise ValueError(f"unknown task {task_name!r}")
-
-
-def save_eval_summary(out_dir: Path, *, iter_num: int, reason: str, metrics: dict[str, float]) -> None:
-    payload = {
-        "iter": int(iter_num),
-        "reason": reason,
-        **{key: float(value) for key, value in metrics.items()},
-    }
-    with open(out_dir / "last_eval.json", "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
-    with open(out_dir / "eval_history.jsonl", "a", encoding="utf-8") as f:
-        f.write(json.dumps(payload) + "\n")
-
-
 def run_eval(
     *,
     model,
     prompt_bank,
     prompt_bank_dir: str,
-    task_name: str,
     device: str,
     autocast_context,
     eval_n: int,
     eval_batch_size: int,
 ) -> dict[str, float]:
     model.eval()
-    val_loss = evaluate_clean_ce_loss(
+    val_loss = evaluate_clean_ce_loss_hf(
         model,
         prompt_bank,
         batch_size=eval_batch_size,
         device=device,
         autocast_context=autocast_context,
     )
-    _, evaluate_saved_metrics = resolve_task_helpers(task_name, p=prompt_bank.p)
-    metrics = evaluate_saved_metrics(
+    metrics = evaluate_saved_clean_s5_metrics_hf(
         model,
         device=device,
         data_dir=prompt_bank_dir,
         n_eval=eval_n,
         batch_size=eval_batch_size,
+        autocast_context=autocast_context,
     )
     model.train()
     return {
@@ -310,11 +276,11 @@ def run_eval(
     }
 
 
-def save_checkpoint(
+def save_hf_checkpoint(
+    checkpoint_dir: Path,
     *,
-    out_dir: Path,
-    model,
-    optimizer,
+    model: GPT2LMHeadModel,
+    optimizer: torch.optim.Optimizer,
     model_args: dict[str, object],
     iter_num: int,
     best_val_loss: float,
@@ -322,8 +288,9 @@ def save_checkpoint(
     prompt_cycle: FixedPromptCycle,
     device: str,
 ) -> None:
-    checkpoint = {
-        "model": normalize_state_dict_for_save(model.state_dict()),
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(checkpoint_dir / HF_MODEL_DIRNAME, safe_serialization=False)
+    training_state = {
         "optimizer": optimizer.state_dict(),
         "model_args": model_args,
         "iter_num": iter_num,
@@ -332,14 +299,92 @@ def save_checkpoint(
         "prompt_cycle_state": prompt_cycle.state_dict(),
         "rng_state": capture_rng_state(device),
     }
-    torch.save(checkpoint, out_dir / "ckpt.pt")
+    torch.save(training_state, checkpoint_dir / TRAINING_STATE_NAME)
+
+
+def maybe_save_snapshot(
+    *,
+    out_dir: Path,
+    model: GPT2LMHeadModel,
+    optimizer: torch.optim.Optimizer,
+    model_args: dict[str, object],
+    iter_num: int,
+    best_val_loss: float,
+    config: dict[str, object],
+    prompt_cycle: FixedPromptCycle,
+    device: str,
+) -> None:
+    snapshot_dir = out_dir / f"checkpoint_{iter_num:07d}"
+    if snapshot_dir.exists():
+        shutil.rmtree(snapshot_dir)
+    save_hf_checkpoint(
+        snapshot_dir,
+        model=model,
+        optimizer=optimizer,
+        model_args=model_args,
+        iter_num=iter_num,
+        best_val_loss=best_val_loss,
+        config=config,
+        prompt_cycle=prompt_cycle,
+        device=device,
+    )
+
+
+def load_student(
+    args: argparse.Namespace,
+    *,
+    device: str,
+    torch_dtype: torch.dtype,
+) -> tuple[GPT2LMHeadModel, dict[str, object], int, float, dict[str, object] | None, dict[str, object] | None]:
+    del torch_dtype  # student weights stay in fp32; autocast controls activation dtype.
+    if args.init_from == "resume":
+        training_state = torch.load(
+            Path(args.out_dir) / TRAINING_STATE_NAME,
+            map_location="cpu",
+            weights_only=False,
+        )
+        model = GPT2LMHeadModel.from_pretrained(
+            Path(args.out_dir) / HF_MODEL_DIRNAME,
+        )
+        set_hf_causal_lm_loss(model)
+        apply_nanogpt_bias_policy(
+            model,
+            has_bias=bool(training_state["model_args"].get("bias", True)),
+        )
+        model.to(device)
+        model.train()
+        return (
+            model,
+            dict(training_state["model_args"]),
+            int(training_state["iter_num"]),
+            float(training_state.get("best_val_loss", float("inf"))),
+            training_state.get("prompt_cycle_state"),
+            training_state.get("rng_state"),
+        )
+
+    teacher_checkpoint = load_nanogpt_checkpoint(args.teacher_checkpoint, map_location="cpu")
+    model_args = dict(teacher_checkpoint["model_args"])
+    del teacher_checkpoint
+    model = build_hf_model_from_nanogpt_args(
+        model_args,
+        device=device,
+        eval_mode=False,
+    )
+    model.train()
+    return model, model_args, 0, float("inf"), None, None
+
+
+def set_mode(model: torch.nn.Module, compiled_model: torch.nn.Module, train: bool) -> None:
+    model.train(train)
+    if compiled_model is not model:
+        compiled_model.train(train)
 
 
 def main() -> None:
     args = parse_args()
     validate_args(args)
     if int(os.environ.get("WORLD_SIZE", "1")) != 1:
-        raise RuntimeError("train_opd.py is single-GPU only in v1.")
+        raise RuntimeError("train_opd_hf.py is single-GPU only in v1.")
 
     device = resolve_device(args.device)
     torch_dtype = resolve_dtype(args.dtype, device)
@@ -350,19 +395,11 @@ def main() -> None:
         enabled=("cuda" in device and torch_dtype == torch.float16),
     )
 
-    prompt_bank = load_prompt_bank(args.prompt_bank_dir)
-    if prompt_bank.task != args.task:
-        raise ValueError(
-            f"Prompt bank task mismatch: prompt bank has task={prompt_bank.task!r} "
-            f"but --task={args.task!r}"
-        )
-    corruptible_ids, _ = resolve_task_helpers(args.task, p=prompt_bank.p)
-
     if args.wandb_run_name is None:
         eta_tag = str(args.eta).replace(".", "p")
         temp_tag = "greedy" if args.student_temperature == 0 else f"t{args.student_temperature}".replace(".", "p")
         args.wandb_run_name = (
-            f"{args.task}-opd-{args.objective}-p{prompt_bank.p}-m{prompt_bank.m}-n{args.subset_size}-eta{eta_tag}-"
+            f"s5-opd-hf-{args.objective}-n{args.subset_size}-eta{eta_tag}-"
             f"{args.teacher_law}-{temp_tag}"
         )
 
@@ -375,15 +412,11 @@ def main() -> None:
     if "cuda" in device and torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
 
+    prompt_bank = load_prompt_bank(args.prompt_bank_dir)
     subset_indices = select_train_subset(prompt_bank, args.subset_size)
 
     run_metadata = {
-        "task": args.task,
-        "p": prompt_bank.p,
-        "m": prompt_bank.m,
-        "prompt_len": prompt_bank.prompt_len,
-        "cot_len": prompt_bank.cot_len,
-        "final_answer_len": prompt_bank.final_answer_len,
+        "backend": "hf",
         "teacher_checkpoint": args.teacher_checkpoint,
         "prompt_bank_dir": args.prompt_bank_dir,
         "subset_size": args.subset_size,
@@ -404,11 +437,13 @@ def main() -> None:
     student, model_args, iter_num, best_val_loss, prompt_cycle_state, rng_state = load_student(
         args,
         device=device,
+        torch_dtype=torch_dtype,
     )
-    teacher = load_nanogpt_model(
+    teacher = load_nanogpt_checkpoint_as_hf(
         args.teacher_checkpoint,
         map_location="cpu",
         device=device,
+        torch_dtype=torch_dtype,
         eval_mode=True,
     )
     for param in teacher.parameters():
@@ -426,32 +461,35 @@ def main() -> None:
     if rng_state is not None:
         restore_rng_state(rng_state, device)
 
-    optimizer = student.configure_optimizers(
-        args.weight_decay,
-        args.learning_rate,
-        (args.beta1, args.beta2),
-        "cuda" if "cuda" in device else "cpu",
+    optimizer = configure_hf_optimizer(
+        student,
+        weight_decay=args.weight_decay,
+        learning_rate=args.learning_rate,
+        betas=(args.beta1, args.beta2),
+        device_type="cuda" if "cuda" in device else "cpu",
     )
     if args.init_from == "resume":
-        checkpoint = torch.load(out_dir / "ckpt.pt", map_location="cpu", weights_only=False)
-        optimizer.load_state_dict(checkpoint["optimizer"])
-        del checkpoint
+        training_state = torch.load(
+            out_dir / TRAINING_STATE_NAME,
+            map_location="cpu",
+            weights_only=False,
+        )
+        optimizer.load_state_dict(training_state["optimizer"])
+        del training_state
 
+    train_student = student
     if args.compile:
-        print("compiling the student model... (takes a ~minute)")
-        student = torch.compile(student)
+        print("compiling the student train path... (takes a ~minute)")
+        train_student = torch.compile(student)
 
     config = vars(args).copy()
     config.update(
         {
-            "task": args.task,
-            "p": prompt_bank.p,
-            "m": prompt_bank.m,
             "resolved_device": device,
             "resolved_dtype": str(torch_dtype).replace("torch.", ""),
             "prompt_len": prompt_bank.prompt_len,
             "cot_len": prompt_bank.cot_len,
-            "final_answer_len": prompt_bank.final_answer_len,
+            "backend": "hf",
         }
     )
     wandb = maybe_init_wandb(args, config)
@@ -471,14 +509,12 @@ def main() -> None:
                 model=student,
                 prompt_bank=prompt_bank,
                 prompt_bank_dir=args.prompt_bank_dir,
-                task_name=args.task,
                 device=device,
                 autocast_context=autocast_context,
                 eval_n=args.eval_n,
                 eval_batch_size=args.eval_batch_size,
             )
             best_val_loss = min(best_val_loss, eval_stats["val/loss"])
-            save_eval_summary(out_dir, iter_num=iter_num, reason="periodic", metrics=eval_stats)
             msg = (
                 f"eval step {iter_num}: val loss {eval_stats['val/loss']:.4f}, "
                 f"val cot_exact {eval_stats['val/cot_exact']:.4f}, "
@@ -486,8 +522,8 @@ def main() -> None:
                 f"val clean_final_exact {eval_stats['val/clean_final_exact']:.4f}"
             )
             print(msg)
-            save_checkpoint(
-                out_dir=out_dir,
+            save_hf_checkpoint(
+                out_dir,
                 model=student,
                 optimizer=optimizer,
                 model_args=model_args,
@@ -498,18 +534,25 @@ def main() -> None:
                 device=device,
             )
             if args.save_interval > 0 and iter_num > 0 and iter_num % args.save_interval == 0:
-                torch.save(
-                    torch.load(out_dir / "ckpt.pt", map_location="cpu", weights_only=False),
-                    out_dir / f"ckpt_{iter_num:07d}.pt",
+                maybe_save_snapshot(
+                    out_dir=out_dir,
+                    model=student,
+                    optimizer=optimizer,
+                    model_args=model_args,
+                    iter_num=iter_num,
+                    best_val_loss=best_val_loss,
+                    config=config,
+                    prompt_cycle=prompt_cycle,
+                    device=device,
                 )
             if wandb is not None:
                 wandb.log({"iter": iter_num, **eval_stats})
 
         prompt_ids = prompt_cycle.next_batch()
 
-        student.eval()
+        set_mode(student, train_student, train=False)
         with torch.no_grad():
-            full_seq, actions, log_q = rollout_student(
+            full_seq, actions, log_q = rollout_student_hf(
                 student,
                 prompt_ids,
                 target_len=prompt_bank.cot_len,
@@ -518,13 +561,12 @@ def main() -> None:
                 autocast_context=autocast_context,
             )
             rollout_inputs = full_seq[:, :-1]
-            teacher_probs = cached_teacher_token_probs(
+            teacher_probs = cached_teacher_token_probs_hf(
                 teacher,
                 prompt_ids,
                 actions,
                 eta=args.eta,
                 teacher_law=args.teacher_law,
-                corruptible_token_ids=corruptible_ids,
                 device=device,
                 autocast_context=autocast_context,
             )
@@ -536,12 +578,15 @@ def main() -> None:
                 teacher_targets = sample_teacher_actions(teacher_probs)
                 teacher_target_probs = teacher_probs.gather(2, teacher_targets.unsqueeze(-1)).squeeze(-1)
                 log_teacher_target = torch.log(teacher_target_probs.clamp_min(args.eps))
-        student.train()
+        set_mode(student, train_student, train=True)
 
         with autocast_context:
-            p_logits, _ = student(rollout_inputs, return_full_logits=True)
+            outputs = train_student(
+                input_ids=rollout_inputs,
+                use_cache=False,
+            )
             p_answer_logits = extract_answer_logits(
-                p_logits,
+                outputs.logits,
                 prompt_len=prompt_bank.prompt_len,
                 target_len=prompt_bank.cot_len,
             )
@@ -618,22 +663,20 @@ def main() -> None:
         model=student,
         prompt_bank=prompt_bank,
         prompt_bank_dir=args.prompt_bank_dir,
-        task_name=args.task,
         device=device,
         autocast_context=autocast_context,
         eval_n=args.eval_n,
         eval_batch_size=args.eval_batch_size,
     )
     best_val_loss = min(best_val_loss, final_stats["val/loss"])
-    save_eval_summary(out_dir, iter_num=iter_num, reason="final", metrics=final_stats)
     print(
         f"final step {iter_num}: val loss {final_stats['val/loss']:.4f}, "
         f"val cot_exact {final_stats['val/cot_exact']:.4f}, "
         f"val clean_full_exact {final_stats['val/clean_full_exact']:.4f}, "
         f"val clean_final_exact {final_stats['val/clean_final_exact']:.4f}"
     )
-    save_checkpoint(
-        out_dir=out_dir,
+    save_hf_checkpoint(
+        out_dir,
         model=student,
         optimizer=optimizer,
         model_args=model_args,

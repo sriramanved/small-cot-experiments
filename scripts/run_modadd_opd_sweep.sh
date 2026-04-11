@@ -8,12 +8,14 @@ if [[ -d .venv ]]; then
   source .venv/bin/activate
 fi
 
+P="${P:-7}"
 M="${M:-21}"
-N_TRAIN="${N_TRAIN:-15000000}"
+N_TRAIN="${N_TRAIN:-6000000}"
 N_VAL="${N_VAL:-5000}"
-PROMPT_BANK_DIR="${PROMPT_BANK_DIR:-data/s5_clean_prompt_bank_m${M}_n${N_TRAIN}_val${N_VAL}}"
-TEACHER_CHECKPOINT="${TEACHER_CHECKPOINT:-out-s5-cot-len21-depth1-400k}"
-SUBSET_SIZE="${SUBSET_SIZE:-8000000}"
+PROMPT_BANK_DIR="${PROMPT_BANK_DIR:-data/modadd_clean_prompt_bank_p${P}_m${M}_n${N_TRAIN}_val${N_VAL}}"
+TEACHER_CHECKPOINT="${TEACHER_CHECKPOINT:-out-modadd-cot-p${P}-m${M}-depth1}"
+THRESHOLD_FILE="${THRESHOLD_FILE:-modadd_clean_threshold_p${P}_m${M}.json}"
+SUBSET_SIZE="${SUBSET_SIZE:-}"
 ETAS="${ETAS:-0.05 0.1 0.2}"
 TEACHER_LAW="${TEACHER_LAW:-distributional_noise}"
 OBJECTIVE="${OBJECTIVE:-reverse_kl_tm}"
@@ -35,9 +37,21 @@ SHUFFLE_PROMPTS="${SHUFFLE_PROMPTS:-0}"
 COMPILE="${COMPILE:-0}"
 WANDB_LOG="${WANDB_LOG:-1}"
 WANDB_PROJECT="${WANDB_PROJECT:-small-cot-experiments}"
-LOG_DIR="${LOG_DIR:-logs/opd}"
+LOG_DIR="${LOG_DIR:-logs/modadd_opd}"
 
 mkdir -p "${LOG_DIR}"
+
+if [[ -z "${SUBSET_SIZE}" ]]; then
+  if [[ ! -f "${THRESHOLD_FILE}" ]]; then
+    echo "Set SUBSET_SIZE or create ${THRESHOLD_FILE} with scripts/find_modadd_clean_threshold.py."
+    exit 1
+  fi
+  SUBSET_SIZE="$(python - <<PY
+import json
+print(json.load(open("${THRESHOLD_FILE}", "r", encoding="utf-8"))["threshold_subset_size"])
+PY
+)"
+fi
 
 if [[ "${STUDENT_TEMPERATURE}" == "0" || "${STUDENT_TEMPERATURE}" == "0.0" ]]; then
   TEMP_TAG="greedy"
@@ -47,8 +61,8 @@ fi
 
 for ETA in ${ETAS}; do
   ETA_TAG="${ETA/./p}"
-  OUT_DIR="out-s5-opd-${OBJECTIVE}-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}"
-  LOG_PATH="${LOG_DIR}/s5_opd_${OBJECTIVE}_n${SUBSET_SIZE}_eta${ETA_TAG}_${TEACHER_LAW}_${TEMP_TAG}.log"
+  OUT_DIR="out-modadd-opd-${OBJECTIVE}-p${P}-m${M}-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}"
+  LOG_PATH="${LOG_DIR}/modadd_opd_${OBJECTIVE}_p${P}_m${M}_n${SUBSET_SIZE}_eta${ETA_TAG}_${TEACHER_LAW}_${TEMP_TAG}.log"
   EXTRA_ARGS=()
 
   if [[ -f "${OUT_DIR}/completed.txt" ]]; then
@@ -72,6 +86,7 @@ for ETA in ${ETAS}; do
   fi
 
   python -u train_opd.py \
+    --task="modadd" \
     --teacher_checkpoint="${TEACHER_CHECKPOINT}" \
     --prompt_bank_dir="${PROMPT_BANK_DIR}" \
     --subset_size="${SUBSET_SIZE}" \
@@ -94,7 +109,7 @@ for ETA in ${ETAS}; do
     --dtype="${DTYPE}" \
     --eps="${EPS}" \
     --wandb_project="${WANDB_PROJECT}" \
-    --wandb_run_name="s5-opd-${OBJECTIVE}-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}" \
+    --wandb_run_name="modadd-opd-${OBJECTIVE}-p${P}-m${M}-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}" \
     "${EXTRA_ARGS[@]}" \
     2>&1 | tee "${LOG_PATH}"
 done

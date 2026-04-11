@@ -20,6 +20,7 @@ import os
 import time
 import math
 import pickle
+import json
 from contextlib import nullcontext
 
 import numpy as np
@@ -48,6 +49,8 @@ wandb_run_name = 'gpt2'  # 'run' + str(time.time())
 dataset = 'openwebtext'
 s5_mode = 'cot'
 s5_m = 21
+modadd_p = 7
+modadd_m = 21
 gradient_accumulation_steps = 5 * 8  # used to simulate larger batch sizes
 batch_size = 12  # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
@@ -81,6 +84,8 @@ compile = True  # use PyTorch 2.0 to compile the model to be faster
 # S5 evaluation/checkpoint extras
 s5_eval_metrics = False
 s5_eval_clean_train_loss = False
+modadd_eval_metrics = False
+modadd_eval_clean_train_loss = False
 s5_eval_n = 256
 s5_eval_batch_size = 256
 s5_eval_seed = 123
@@ -141,34 +146,82 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(
     device_type=device_type, dtype=ptdtype)
 
 
+def synthetic_task_name(dataset_name):
+    if dataset_name == 's5_cot' or dataset_name.startswith('s5_clean_offline') or dataset_name.startswith('s5_noisy_offline'):
+        return 's5'
+    if dataset_name == 'modadd_cot' or dataset_name.startswith('modadd_clean_offline') or dataset_name.startswith('modadd_noisy_offline'):
+        return 'modadd'
+    return None
+
+
 def is_s5_offline_dataset(name):
     return name.startswith('s5_clean_offline') or name.startswith('s5_noisy_offline')
 
-# synthetic S5 task hooks
-if is_s5_offline_dataset(dataset):
-    from data.s5_cot.offline_dataset import get_batch as s5_offline_get_batch
-    from data.s5_cot.offline_dataset import (
+
+def is_modadd_offline_dataset(name):
+    return name.startswith('modadd_clean_offline') or name.startswith('modadd_noisy_offline')
+
+
+def is_synthetic_offline_dataset(name):
+    return is_s5_offline_dataset(name) or is_modadd_offline_dataset(name)
+
+
+def synthetic_eval_metrics_enabled(task_name):
+    return (task_name == 's5' and s5_eval_metrics) or (task_name == 'modadd' and modadd_eval_metrics)
+
+
+def synthetic_clean_train_loss_enabled(task_name):
+    return (task_name == 's5' and s5_eval_clean_train_loss) or (task_name == 'modadd' and modadd_eval_clean_train_loss)
+
+
+synthetic_task = synthetic_task_name(dataset)
+
+# synthetic task hooks
+if is_synthetic_offline_dataset(dataset):
+    from data.synthetic.offline_dataset import get_batch as synthetic_offline_get_batch
+    from data.synthetic.offline_dataset import (
         get_train_batch_once,
         get_train_epoch_state,
         iter_eval_batches,
         reset_train_epoch,
         set_train_epoch_state,
     )
+if synthetic_task == 's5':
     from data.s5_cot.task import VOCAB_SIZE as s5_vocab_size
     from data.s5_cot.task import (
-        estimate_saved_clean_train_loss,
+        estimate_saved_clean_train_loss as s5_estimate_saved_clean_train_loss,
         evaluate_saved_clean_s5_metrics,
     )
-elif dataset == 's5_cot':
-    from data.s5_cot.task import get_batch as s5_get_batch
-    from data.s5_cot.task import VOCAB_SIZE as s5_vocab_size
-    from data.s5_cot.task import evaluate_clean_s5_metrics
+    if dataset == 's5_cot':
+        from data.s5_cot.task import evaluate_clean_s5_metrics
+        from data.s5_cot.task import get_batch as s5_get_batch
+elif synthetic_task == 'modadd':
+    from data.modular_addition.task import (
+        estimate_saved_clean_train_loss as modadd_estimate_saved_clean_train_loss,
+        evaluate_saved_clean_modadd_metrics,
+        vocab_size as modadd_vocab_size,
+    )
+    if dataset == 'modadd_cot':
+        from data.modular_addition.task import evaluate_clean_modadd_metrics
+        from data.modular_addition.task import get_batch as modadd_get_batch
 
 # poor man's data loader
 data_dir = os.path.join('data', dataset)
-if is_s5_offline_dataset(dataset):
+if is_synthetic_offline_dataset(dataset):
     subset_msg = offline_train_subset_size if offline_train_subset_size > 0 else "full"
     print(f"offline dataset dir: {data_dir}, requested train subset: {subset_msg}")
+
+resolved_modadd_p = modadd_p
+resolved_modadd_m = modadd_m
+if is_modadd_offline_dataset(dataset):
+    meta_path = os.path.join(data_dir, 'meta.json')
+    if os.path.exists(meta_path):
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            modadd_meta = json.load(f)
+        resolved_modadd_p = int(modadd_meta.get('p', resolved_modadd_p))
+        resolved_modadd_m = int(modadd_meta.get('m', resolved_modadd_m))
+config['resolved_modadd_p'] = resolved_modadd_p
+config['resolved_modadd_m'] = resolved_modadd_m
 
 
 def get_batch(split):
@@ -179,8 +232,15 @@ def get_batch(split):
             mode=s5_mode,
             m=s5_m,
         )
-    elif is_s5_offline_dataset(dataset):
-        return s5_offline_get_batch(
+    elif dataset == 'modadd_cot':
+        return modadd_get_batch(
+            batch_size=batch_size,
+            device=device,
+            p=resolved_modadd_p,
+            m=resolved_modadd_m,
+        )
+    elif is_synthetic_offline_dataset(dataset):
+        return synthetic_offline_get_batch(
             split=split,
             batch_size=batch_size,
             device=device,
@@ -215,10 +275,13 @@ best_val_loss = 1e9
 
 # attempt to derive vocab_size from the dataset
 meta_vocab_size = None
-is_s5 = (dataset == 's5_cot' or is_s5_offline_dataset(dataset))
-if is_s5:
+is_synthetic = synthetic_task is not None
+if synthetic_task == 's5':
     meta_vocab_size = s5_vocab_size
     print(f"using synthetic vocab_size = {meta_vocab_size} for {dataset}")
+elif synthetic_task == 'modadd':
+    meta_vocab_size = modadd_vocab_size(resolved_modadd_p)
+    print(f"using modular-addition vocab_size = {meta_vocab_size} for {dataset} (p={resolved_modadd_p}, m={resolved_modadd_m})")
 else:
     meta_path = os.path.join(data_dir, 'meta.pkl')
     if os.path.exists(meta_path):
@@ -246,7 +309,16 @@ elif init_from == 'resume':
     ckpt_path = os.path.join(out_dir, 'ckpt.pt')
     checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
     checkpoint_config = checkpoint.get('config', {})
-    for key in ['dataset', 's5_mode', 's5_m', 'offline_single_epoch', 'offline_train_subset_size', 'offline_train_shuffle']:
+    for key in [
+        'dataset',
+        's5_mode',
+        's5_m',
+        'modadd_p',
+        'modadd_m',
+        'offline_single_epoch',
+        'offline_train_subset_size',
+        'offline_train_shuffle',
+    ]:
         if key in checkpoint_config and checkpoint_config[key] != globals()[key]:
             raise ValueError(
                 f"Resume mismatch for {key}: checkpoint has {checkpoint_config[key]!r}, "
@@ -314,7 +386,7 @@ def estimate_loss():
     out = {}
     model.eval()
 
-    if is_s5_offline_dataset(dataset):
+    if is_synthetic_offline_dataset(dataset):
         for split in ['train', 'val']:
             if offline_eval_full:
                 losses = []
@@ -338,28 +410,47 @@ def estimate_loss():
                     losses[k] = loss.item()
                 out[split] = losses.mean()
 
-        if s5_eval_metrics:
+        if synthetic_eval_metrics_enabled(synthetic_task):
             eval_model = raw_model if 'raw_model' in globals() else model
-            metrics = evaluate_saved_clean_s5_metrics(
-                eval_model,
-                device=device,
-                data_dir=data_dir,
-                n_eval=s5_eval_n,
-                batch_size=s5_eval_batch_size,
-            )
+            if synthetic_task == 's5':
+                metrics = evaluate_saved_clean_s5_metrics(
+                    eval_model,
+                    device=device,
+                    data_dir=data_dir,
+                    n_eval=s5_eval_n,
+                    batch_size=s5_eval_batch_size,
+                )
+            else:
+                metrics = evaluate_saved_clean_modadd_metrics(
+                    eval_model,
+                    device=device,
+                    data_dir=data_dir,
+                    n_eval=s5_eval_n,
+                    batch_size=s5_eval_batch_size,
+                )
             out["val_cot_exact"] = metrics["cot_exact"]
             out["val_clean_full_exact"] = metrics["clean_full_exact"]
             out["val_clean_final_exact"] = metrics["clean_final_exact"]
-        if s5_eval_clean_train_loss:
+        if synthetic_clean_train_loss_enabled(synthetic_task):
             eval_model = raw_model if 'raw_model' in globals() else model
-            out["train_clean_oracle"] = estimate_saved_clean_train_loss(
-                eval_model,
-                device=device,
-                data_dir=data_dir,
-                eval_iters=eval_iters,
-                batch_size=batch_size,
-                subset_size=offline_train_subset_size,
-            )
+            if synthetic_task == 's5':
+                out["train_clean_oracle"] = s5_estimate_saved_clean_train_loss(
+                    eval_model,
+                    device=device,
+                    data_dir=data_dir,
+                    eval_iters=eval_iters,
+                    batch_size=batch_size,
+                    subset_size=offline_train_subset_size,
+                )
+            else:
+                out["train_clean_oracle"] = modadd_estimate_saved_clean_train_loss(
+                    eval_model,
+                    device=device,
+                    data_dir=data_dir,
+                    eval_iters=eval_iters,
+                    batch_size=batch_size,
+                    subset_size=offline_train_subset_size,
+                )
 
     else:
         for split in ['train', 'val']:
@@ -371,16 +462,27 @@ def estimate_loss():
                 losses[k] = loss.item()
             out[split] = losses.mean()
 
-        if is_s5 and s5_eval_metrics:
+        if synthetic_eval_metrics_enabled(synthetic_task):
             eval_model = raw_model if 'raw_model' in globals() else model
-            metrics = evaluate_clean_s5_metrics(
-                eval_model,
-                device=device,
-                n_eval=s5_eval_n,
-                m=s5_m,
-                seed=s5_eval_seed,
-                batch_size=s5_eval_batch_size,
-            )
+            if synthetic_task == 's5':
+                metrics = evaluate_clean_s5_metrics(
+                    eval_model,
+                    device=device,
+                    n_eval=s5_eval_n,
+                    m=s5_m,
+                    seed=s5_eval_seed,
+                    batch_size=s5_eval_batch_size,
+                )
+            else:
+                metrics = evaluate_clean_modadd_metrics(
+                    eval_model,
+                    device=device,
+                    p=resolved_modadd_p,
+                    m=resolved_modadd_m,
+                    n_eval=s5_eval_n,
+                    seed=s5_eval_seed,
+                    batch_size=s5_eval_batch_size,
+                )
             out["val_cot_exact"] = metrics["cot_exact"]
             out["val_clean_full_exact"] = metrics["clean_full_exact"]
             out["val_clean_final_exact"] = metrics["clean_final_exact"]
@@ -415,14 +517,30 @@ if wandb_log and master_process:
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
 
+def save_eval_summary(reason, losses):
+    summary = {
+        "iter": int(iter_num),
+        "reason": reason,
+        **{
+            key: float(value)
+            for key, value in losses.items()
+        },
+    }
+    with open(os.path.join(out_dir, 'last_eval.json'), 'w', encoding='utf-8') as f:
+        json.dump(summary, f, indent=2)
+    with open(os.path.join(out_dir, 'eval_history.jsonl'), 'a', encoding='utf-8') as f:
+        f.write(json.dumps(summary) + '\n')
+
+
 def run_eval_and_checkpoint(reason="periodic", force_save=False):
     global best_val_loss
 
     losses = estimate_loss()
+    save_eval_summary(reason, losses)
     print_msg = f"{reason} step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
     if "train_clean_oracle" in losses:
         print_msg += f", train clean_oracle_loss {losses['train_clean_oracle']:.4f}"
-    if is_s5 and s5_eval_metrics:
+    if synthetic_eval_metrics_enabled(synthetic_task):
         if "val_cot_exact" in losses:
             print_msg += f", val cot_exact {losses['val_cot_exact']:.4f}"
         if "val_clean_full_exact" in losses:
@@ -440,7 +558,7 @@ def run_eval_and_checkpoint(reason="periodic", force_save=False):
         }
         if "train_clean_oracle" in losses:
             eval_log["train/clean_oracle_loss_eval"] = losses["train_clean_oracle"]
-        if is_s5 and s5_eval_metrics:
+        if synthetic_eval_metrics_enabled(synthetic_task):
             if "val_cot_exact" in losses:
                 eval_log["val/cot_exact"] = losses["val_cot_exact"]
             if "val_clean_full_exact" in losses:
@@ -460,7 +578,7 @@ def run_eval_and_checkpoint(reason="periodic", force_save=False):
                 'best_val_loss': best_val_loss,
                 'config': config,
             }
-            if is_s5_offline_dataset(dataset) and offline_single_epoch:
+            if is_synthetic_offline_dataset(dataset) and offline_single_epoch:
                 checkpoint['offline_train_state'] = get_train_epoch_state(data_dir)
             print(f"saving checkpoint to {out_dir}")
             torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
@@ -477,7 +595,7 @@ def mark_run_complete():
         f.write(f"iter_num={iter_num}\n")
 
 # training loop
-if is_s5_offline_dataset(dataset) and offline_single_epoch:
+if is_synthetic_offline_dataset(dataset) and offline_single_epoch:
     assert gradient_accumulation_steps == 1
     if init_from == 'resume' and resume_offline_train_state is not None:
         set_train_epoch_state(data_dir, resume_offline_train_state)
@@ -508,7 +626,7 @@ while True:
     if iter_num == 0 and eval_only:
         break
 
-    if is_s5_offline_dataset(dataset) and offline_single_epoch:
+    if is_synthetic_offline_dataset(dataset) and offline_single_epoch:
         try:
             X, Y = get_train_batch_once(
                 batch_size=batch_size,
@@ -537,7 +655,7 @@ while True:
             # scale the loss to account for gradient accumulation
             loss = loss / gradient_accumulation_steps
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
-        if is_s5_offline_dataset(dataset) and offline_single_epoch:
+        if is_synthetic_offline_dataset(dataset) and offline_single_epoch:
             pass
         else:
             X, Y = get_batch('train')

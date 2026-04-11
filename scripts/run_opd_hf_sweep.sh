@@ -35,7 +35,7 @@ SHUFFLE_PROMPTS="${SHUFFLE_PROMPTS:-0}"
 COMPILE="${COMPILE:-0}"
 WANDB_LOG="${WANDB_LOG:-1}"
 WANDB_PROJECT="${WANDB_PROJECT:-small-cot-experiments}"
-LOG_DIR="${LOG_DIR:-logs/opd}"
+LOG_DIR="${LOG_DIR:-logs/opd_hf}"
 
 mkdir -p "${LOG_DIR}"
 
@@ -47,15 +47,15 @@ fi
 
 for ETA in ${ETAS}; do
   ETA_TAG="${ETA/./p}"
-  OUT_DIR="out-s5-opd-${OBJECTIVE}-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}"
-  LOG_PATH="${LOG_DIR}/s5_opd_${OBJECTIVE}_n${SUBSET_SIZE}_eta${ETA_TAG}_${TEACHER_LAW}_${TEMP_TAG}.log"
+  OUT_DIR="out-s5-opd-hf-${OBJECTIVE}-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}"
+  LOG_PATH="${LOG_DIR}/s5_opd_hf_${OBJECTIVE}_n${SUBSET_SIZE}_eta${ETA_TAG}_${TEACHER_LAW}_${TEMP_TAG}.log"
   EXTRA_ARGS=()
 
   if [[ -f "${OUT_DIR}/completed.txt" ]]; then
     echo "Skipping ${OUT_DIR}; found completed.txt"
     continue
-  elif [[ -f "${OUT_DIR}/ckpt.pt" ]]; then
-    echo "Resuming ${OUT_DIR} from ckpt.pt"
+  elif [[ -f "${OUT_DIR}/training_state.pt" ]]; then
+    echo "Resuming ${OUT_DIR} from training_state.pt"
     EXTRA_ARGS+=(--init_from=resume)
   else
     echo "Starting ${OUT_DIR}"
@@ -71,7 +71,7 @@ for ETA in ${ETAS}; do
     EXTRA_ARGS+=(--wandb_log)
   fi
 
-  python -u train_opd.py \
+  python -u train_opd_hf.py \
     --teacher_checkpoint="${TEACHER_CHECKPOINT}" \
     --prompt_bank_dir="${PROMPT_BANK_DIR}" \
     --subset_size="${SUBSET_SIZE}" \
@@ -94,7 +94,7 @@ for ETA in ${ETAS}; do
     --dtype="${DTYPE}" \
     --eps="${EPS}" \
     --wandb_project="${WANDB_PROJECT}" \
-    --wandb_run_name="s5-opd-${OBJECTIVE}-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}" \
+    --wandb_run_name="s5-opd-hf-${OBJECTIVE}-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}" \
     "${EXTRA_ARGS[@]}" \
     2>&1 | tee "${LOG_PATH}"
 done

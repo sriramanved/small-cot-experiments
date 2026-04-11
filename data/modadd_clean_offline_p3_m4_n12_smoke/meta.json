@@ -1,0 +1,20 @@
+{
+  "task": "modadd",
+  "p": 3,
+  "m": 4,
+  "prompt_len": 5,
+  "cot_len": 4,
+  "final_answer_len": 1,
+  "subset_size": 12,
+  "eta": 0.0,
+  "gen_batch_size": 4,
+  "device": "cpu",
+  "dtype": "float32",
+  "seed": 7,
+  "prompt_bank_dir": "data/modadd_clean_prompt_bank_p3_m4_n12_val6_smoke",
+  "teacher_checkpoint": "/tmp/modadd_smoke_teacher",
+  "train_targets_source": "teacher_rollout_with_optional_eta_corruption",
+  "train_decode_mode": "greedy_then_corrupt",
+  "val_targets_source": "fixed_clean_oracle",
+  "nested_subset_order_saved": true
+}

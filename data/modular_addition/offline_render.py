@@ -4,8 +4,8 @@ from pathlib import Path
 
 import torch
 
-from data.s5_cot.prompt_bank import PromptBank, load_prompt_bank, select_train_subset
-from data.s5_cot.task import corrupt_ids
+from data.modular_addition.prompt_bank import PromptBank, load_prompt_bank, select_train_subset
+from data.modular_addition.task import corrupt_ids
 from data.synthetic.offline_render import (
     DTYPE_LOOKUP,
     ROLLOUT_MODE_CHOICES,
@@ -28,6 +28,7 @@ def generate_teacher_targets(
     eta: float,
     rollout_mode: str,
     device: str | torch.device,
+    p: int,
 ) -> torch.Tensor:
     return shared_generate_teacher_targets(
         model,
@@ -36,7 +37,7 @@ def generate_teacher_targets(
         eta=eta,
         rollout_mode=rollout_mode,
         device=device,
-        corrupt_ids_fn=corrupt_ids,
+        corrupt_ids_fn=lambda ids, noise: corrupt_ids(ids, noise, p=p),
     )
 
 
@@ -58,7 +59,7 @@ def render_train_split(
         rollout_mode=rollout_mode,
         gen_batch_size=gen_batch_size,
         device=device,
-        corrupt_ids_fn=corrupt_ids,
+        corrupt_ids_fn=lambda ids, noise: corrupt_ids(ids, noise, p=prompt_bank.p),
     )
 
 
@@ -117,5 +118,5 @@ def render_offline_dataset(
         seed=seed,
         prompt_bank=prompt_bank,
         subset_idx=subset_idx,
-        corrupt_ids_fn=corrupt_ids,
+        corrupt_ids_fn=lambda ids, noise: corrupt_ids(ids, noise, p=prompt_bank.p),
     )
