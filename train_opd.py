@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -87,6 +88,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wandb_log", action="store_true")
     parser.add_argument("--wandb_project", type=str, default="small-cot-experiments")
     parser.add_argument("--wandb_run_name", type=str, default=None)
+    parser.add_argument("--wandb_run_id", type=str, default=None)
     return parser.parse_args()
 
 
@@ -248,11 +250,44 @@ def maybe_init_wandb(args: argparse.Namespace, config: dict[str, object]):
         return None
     import wandb
 
+    out_dir = Path(args.out_dir)
+    state_path = out_dir / "wandb_state.json"
+    has_saved_run_id = False
+    run_id = args.wandb_run_id
+    if run_id is None and state_path.exists():
+        with open(state_path, "r", encoding="utf-8") as f:
+            saved_state = json.load(f)
+        run_id = saved_state.get("run_id")
+        has_saved_run_id = run_id is not None
+    if run_id is None:
+        digest = hashlib.sha1(
+            f"{args.wandb_project}:{out_dir.resolve()}".encode("utf-8")
+        ).hexdigest()
+        run_id = digest[:16]
+        if args.init_from == "resume":
+            print(
+                "warning: no saved W&B run id found; using a deterministic fallback id. "
+                "This may create a new W&B run instead of resuming the original graph."
+            )
+    has_explicit_resume_id = args.wandb_run_id is not None or has_saved_run_id
+    resume_mode = "must" if args.init_from == "resume" and has_explicit_resume_id else "allow"
     wandb.init(
         project=args.wandb_project,
         name=args.wandb_run_name,
+        id=run_id,
+        resume=resume_mode,
         config=config,
     )
+    with open(state_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "run_id": wandb.run.id,
+                "project": args.wandb_project,
+                "name": args.wandb_run_name,
+            },
+            f,
+            indent=2,
+        )
     return wandb
 
 

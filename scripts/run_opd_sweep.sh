@@ -19,12 +19,12 @@ TEACHER_LAW="${TEACHER_LAW:-distributional_noise}"
 OBJECTIVE="${OBJECTIVE:-reverse_kl_tm}"
 STUDENT_TEMPERATURE="${STUDENT_TEMPERATURE:-1.0}"
 BATCH_SIZE="${BATCH_SIZE:-64}"
-MAX_ITERS="${MAX_ITERS:-110000}"
+MAX_ITERS="${MAX_ITERS:-125000}"
 LEARNING_RATE="${LEARNING_RATE:-1e-5}"
 WARMUP_ITERS="${WARMUP_ITERS:-2000}"
 EVAL_INTERVAL="${EVAL_INTERVAL:-5000}"
 EVAL_N="${EVAL_N:-5000}"
-EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-256}"
+EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-512}"
 LOG_INTERVAL="${LOG_INTERVAL:-50}"
 SAVE_INTERVAL="${SAVE_INTERVAL:-0}"
 SEED="${SEED:-1337}"
@@ -39,6 +39,22 @@ LOG_DIR="${LOG_DIR:-logs/opd}"
 
 mkdir -p "${LOG_DIR}"
 
+extract_wandb_run_id() {
+  local out_dir="$1"
+  local log_path="$2"
+  local state_path="${out_dir}/wandb_state.json"
+
+  if [[ -f "${state_path}" ]]; then
+    grep -oE '"run_id"[[:space:]]*:[[:space:]]*"[^"]+"' "${state_path}" | tail -n1 | sed -E 's/.*"([^"]+)".*/\1/'
+    return 0
+  fi
+  if [[ -f "${log_path}" ]]; then
+    grep -oE 'runs/[A-Za-z0-9]+' "${log_path}" | tail -n1 | cut -d/ -f2
+    return 0
+  fi
+  return 1
+}
+
 if [[ "${STUDENT_TEMPERATURE}" == "0" || "${STUDENT_TEMPERATURE}" == "0.0" ]]; then
   TEMP_TAG="greedy"
 else
@@ -50,11 +66,22 @@ for ETA in ${ETAS}; do
   OUT_DIR="out-s5-opd-${OBJECTIVE}-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}"
   LOG_PATH="${LOG_DIR}/s5_opd_${OBJECTIVE}_n${SUBSET_SIZE}_eta${ETA_TAG}_${TEACHER_LAW}_${TEMP_TAG}.log"
   EXTRA_ARGS=()
+  COMPLETED_PATH="${OUT_DIR}/completed.txt"
+  CKPT_PATH="${OUT_DIR}/ckpt.pt"
 
-  if [[ -f "${OUT_DIR}/completed.txt" ]]; then
-    echo "Skipping ${OUT_DIR}; found completed.txt"
-    continue
-  elif [[ -f "${OUT_DIR}/ckpt.pt" ]]; then
+  if [[ -f "${COMPLETED_PATH}" ]]; then
+    COMPLETED_ITER="$(sed -n 's/^iter_num=//p' "${COMPLETED_PATH}" | tail -n1)"
+    if [[ -n "${COMPLETED_ITER}" ]] && (( COMPLETED_ITER >= MAX_ITERS )); then
+      echo "Skipping ${OUT_DIR}; completed at iter ${COMPLETED_ITER} >= MAX_ITERS=${MAX_ITERS}"
+      continue
+    elif [[ -f "${CKPT_PATH}" ]]; then
+      echo "Extending ${OUT_DIR} from iter ${COMPLETED_ITER:-unknown} to MAX_ITERS=${MAX_ITERS}"
+      EXTRA_ARGS+=(--init_from=resume)
+    else
+      echo "Skipping ${OUT_DIR}; found completed.txt but no ckpt.pt to resume from"
+      continue
+    fi
+  elif [[ -f "${CKPT_PATH}" ]]; then
     echo "Resuming ${OUT_DIR} from ckpt.pt"
     EXTRA_ARGS+=(--init_from=resume)
   else
@@ -69,6 +96,9 @@ for ETA in ${ETAS}; do
   fi
   if [[ "${WANDB_LOG}" == "1" ]]; then
     EXTRA_ARGS+=(--wandb_log)
+    if WANDB_RUN_ID="$(extract_wandb_run_id "${OUT_DIR}" "${LOG_PATH}")" && [[ -n "${WANDB_RUN_ID}" ]]; then
+      EXTRA_ARGS+=(--wandb_run_id="${WANDB_RUN_ID}")
+    fi
   fi
 
   python -u train_opd.py \
