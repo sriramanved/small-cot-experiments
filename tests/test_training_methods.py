@@ -9,6 +9,7 @@ from data.s5_cot.opd import (
     forward_kl_full_loss,
     forward_kl_simple_loss,
     gather_action_log_probs,
+    reverse_kl_full_loss,
     reverse_kl_tm_loss,
     teacher_forward_kl,
 )
@@ -122,6 +123,67 @@ class TrainingMethodTests(unittest.TestCase):
         loss.backward()
         self.assertIsNotNone(student_logits.grad)
         self.assertGreater(student_logits.grad.abs().sum().item(), 0.0)
+
+    def test_reverse_kl_full_loss_matches_manual_formula(self):
+        student_logits = torch.tensor(
+            [[[0.8, -0.1, 0.3], [0.2, 0.6, -0.7]]],
+            dtype=torch.float32,
+            requires_grad=True,
+        )
+        teacher_probs = torch.tensor(
+            [[[0.5, 0.3, 0.2], [0.1, 0.7, 0.2]]],
+            dtype=torch.float32,
+        )
+
+        loss, stats = reverse_kl_full_loss(
+            student_logits,
+            teacher_probs=teacher_probs,
+            eps=1e-10,
+        )
+
+        student_log_probs = F.log_softmax(student_logits, dim=-1)
+        student_probs = student_log_probs.exp()
+        teacher_log_probs = torch.log(teacher_probs.clamp_min(1e-10))
+        expected_reverse_kl = (student_probs * (student_log_probs - teacher_log_probs)).sum(dim=-1)
+        expected_student_teacher_ce = -(student_probs * teacher_log_probs).sum(dim=-1)
+        expected_student_entropy = -(student_probs * student_log_probs).sum(dim=-1)
+        expected_loss = expected_reverse_kl.mean()
+
+        torch.testing.assert_close(loss, expected_loss)
+        torch.testing.assert_close(stats["reverse_kl"], expected_reverse_kl)
+        torch.testing.assert_close(stats["student_teacher_ce"], expected_student_teacher_ce)
+        torch.testing.assert_close(stats["student_entropy"], expected_student_entropy)
+
+        loss.backward()
+        self.assertIsNotNone(student_logits.grad)
+        self.assertGreater(student_logits.grad.abs().sum().item(), 0.0)
+
+    def test_reverse_kl_full_loss_is_zero_when_student_matches_teacher(self):
+        teacher_probs = torch.tensor(
+            [[[0.4, 0.5, 0.1], [0.2, 0.3, 0.5]]],
+            dtype=torch.float32,
+        )
+        student_logits = teacher_probs.log().clone().detach().requires_grad_(True)
+
+        loss, stats = reverse_kl_full_loss(
+            student_logits,
+            teacher_probs=teacher_probs,
+            eps=1e-10,
+        )
+
+        torch.testing.assert_close(loss, torch.tensor(0.0), atol=1e-6, rtol=1e-6)
+        torch.testing.assert_close(
+            stats["reverse_kl"],
+            torch.zeros_like(stats["reverse_kl"]),
+            atol=1e-6,
+            rtol=1e-6,
+        )
+        torch.testing.assert_close(
+            stats["student_teacher_ce"],
+            stats["student_entropy"],
+            atol=1e-6,
+            rtol=1e-6,
+        )
 
     def test_offline_bc_loss_matches_manual_masked_cross_entropy(self):
         logits = torch.tensor(

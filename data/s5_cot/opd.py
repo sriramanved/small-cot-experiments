@@ -307,6 +307,26 @@ def reverse_kl_tm_loss(
     }
 
 
+def reverse_kl_full_loss(
+    student_logits: torch.Tensor,
+    *,
+    teacher_probs: torch.Tensor,
+    eps: float = 1e-10,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    student_log_probs = F.log_softmax(student_logits.float(), dim=-1)
+    student_probs = student_log_probs.exp()
+    teacher_log_probs = torch.log(teacher_probs.clamp_min(eps))
+    reverse_kl = (student_probs * (student_log_probs - teacher_log_probs)).sum(dim=-1)
+    student_teacher_ce = -(student_probs * teacher_log_probs).sum(dim=-1)
+    student_entropy = -(student_probs * student_log_probs).sum(dim=-1)
+    loss = reverse_kl.mean()
+    return loss, {
+        "reverse_kl": reverse_kl,
+        "student_teacher_ce": student_teacher_ce,
+        "student_entropy": student_entropy,
+    }
+
+
 def forward_kl_simple_loss(
     student_logits: torch.Tensor,
     teacher_targets: torch.Tensor,

@@ -237,6 +237,53 @@ class ModularAdditionIntegrationTests(unittest.TestCase):
             self.assertIn("val/clean_full_exact", last_eval)
             self.assertIn("val/clean_final_exact", last_eval)
 
+    def test_train_opd_modadd_reverse_kl_full_writes_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            prompt_bank_dir = root / "prompt_bank"
+            teacher_dir = root / "teacher"
+            out_dir = root / "opd_reverse_full_out"
+
+            _write_prompt_bank(prompt_bank_dir, p=3, m=4, n_train=4, n_val=2, seed=13)
+            _write_teacher_checkpoint(teacher_dir, vocab_size=4, block_size=8)
+
+            cmd = [
+                sys.executable,
+                "train_opd.py",
+                "--task=modadd",
+                "--teacher_checkpoint=" + str(teacher_dir),
+                "--prompt_bank_dir=" + str(prompt_bank_dir),
+                "--subset_size=4",
+                "--eta=0.1",
+                "--teacher_law=distributional_noise",
+                "--objective=reverse_kl_full",
+                "--out_dir=" + str(out_dir),
+                "--batch_size=2",
+                "--max_iters=1",
+                "--learning_rate=0.001",
+                "--warmup_iters=0",
+                "--eval_interval=1",
+                "--eval_n=2",
+                "--eval_batch_size=2",
+                "--log_interval=1",
+                "--device=cpu",
+                "--dtype=float32",
+                "--seed=7",
+            ]
+            subprocess.run(cmd, cwd=REPO_ROOT, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+            run_meta = json.loads((out_dir / "run_meta.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_meta["task"], "modadd")
+            self.assertEqual(run_meta["objective"], "reverse_kl_full")
+            self.assertTrue((out_dir / "subset_indices.pt").exists())
+            self.assertTrue((out_dir / "last_eval.json").exists())
+            self.assertTrue((out_dir / "eval_history.jsonl").exists())
+            self.assertTrue((out_dir / "completed.txt").exists())
+            self.assertTrue((out_dir / "ckpt.pt").exists())
+            last_eval = json.loads((out_dir / "last_eval.json").read_text(encoding="utf-8"))
+            self.assertIn("val/clean_full_exact", last_eval)
+            self.assertIn("val/clean_final_exact", last_eval)
+
 
 if __name__ == "__main__":
     unittest.main()

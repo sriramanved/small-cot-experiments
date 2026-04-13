@@ -136,6 +136,12 @@ class OpdObjectiveTests(unittest.TestCase):
                 student_temperature=0.0,
             )
         )
+        validate_args(
+            types.SimpleNamespace(
+                objective="reverse_kl_full",
+                student_temperature=0.0,
+            )
+        )
 
     def test_resume_metadata_defaults_missing_objective_to_reverse_kl(self):
         with tempfile.TemporaryDirectory() as tmpdir:

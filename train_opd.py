@@ -25,6 +25,7 @@ from data.s5_cot.opd import (
     forward_kl_full_loss,
     forward_kl_simple_loss,
     gather_action_log_probs,
+    reverse_kl_full_loss,
     reverse_kl_tm_loss,
     rollout_student,
     sample_teacher_actions,
@@ -59,7 +60,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--objective",
-        choices=("reverse_kl_tm", "forward_kl_simple", "forward_kl_full"),
+        choices=("reverse_kl_tm", "reverse_kl_full", "forward_kl_simple", "forward_kl_full"),
         default="reverse_kl_tm",
     )
     parser.add_argument("--out_dir", type=str, required=True)
@@ -95,7 +96,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def validate_args(args: argparse.Namespace) -> None:
-    if args.objective != "reverse_kl_tm" and args.student_temperature <= 0:
+    if args.objective in {"forward_kl_simple", "forward_kl_full"} and args.student_temperature <= 0:
         raise ValueError(
             "student_temperature must be > 0 for forward-KL objectives because "
             "the loss is defined against the temperature-adjusted student policy."
@@ -623,6 +624,18 @@ def main() -> None:
                     "train/advantage": float(objective_stats["advantage"].mean().item()),
                     "train/log_q": float(log_q.mean().item()),
                     "train/log_teacher": float(objective_stats["log_teacher"].mean().item()),
+                }
+            elif args.objective == "reverse_kl_full":
+                loss, objective_stats = reverse_kl_full_loss(
+                    p_answer_logits,
+                    teacher_probs=teacher_probs,
+                    eps=args.eps,
+                )
+                step_metrics = {
+                    "train/loss": float(loss.item()),
+                    "train/reverse_kl": float(objective_stats["reverse_kl"].mean().item()),
+                    "train/student_teacher_ce": float(objective_stats["student_teacher_ce"].mean().item()),
+                    "train/student_entropy": float(objective_stats["student_entropy"].mean().item()),
                 }
             elif args.objective == "forward_kl_simple":
                 loss, objective_stats = forward_kl_simple_loss(

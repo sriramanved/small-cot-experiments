@@ -164,7 +164,7 @@ Common run family:
   - prompt bank: `data/s5_clean_prompt_bank_m21_n15000000_val5000`
   - subset size: `8,000,000`
   - rollout mode: `greedy_then_corrupt`
-  - `gen_batch_size = 1024` unless overridden
+  - `gen_batch_size = 1024` unless overridden to 8192
   - `seed = 1337`
   - render path uses `device=cuda` and `dtype=float16`
   - comparison runs used the same prompt subset across all `eta` values via the fixed `train_order[:8000000]` prefix, with `subset_indices.pt` saved in each dataset
@@ -273,7 +273,7 @@ Common run family:
 - subset size: `8,000,000`
 - dataset generation:
   - `ROLLOUT_MODE=sample_then_corrupt`
-  - `GEN_BATCH_SIZE=1024` by default in `scripts/run_noisy_eta_interleaved.sh` unless overridden
+  - `GEN_BATCH_SIZE=1024` by default in `scripts/run_noisy_eta_interleaved.sh` unless overridden to 8192
   - `SEED=1337`
   - render path uses `device=cuda` and `dtype=float16`
   - same subset-selection mechanism as the `greedy_then_corrupt` family via the fixed prompt-bank prefix and saved `subset_indices.pt`
@@ -537,7 +537,7 @@ Current native S5 OPD setup for OPD (MC version):
 - teacher law: `distributional_noise`
 - objective: OPD (MC version)
 - planned etas: `0.05 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9`
-- `eval_batch_size = 1024`
+- `eval_batch_size = 1024` (unless overridden to 512)
 - `compile = 0`
 
 Status:
