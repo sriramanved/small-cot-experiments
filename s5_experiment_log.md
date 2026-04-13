@@ -29,7 +29,7 @@ These settings appear to be the common backbone for the main S5 experiments:
 - later apples-to-apples BC comparisons were standardized on:
   - fixed prompt-bank prefix subsets via `train_order[:N]`
   - `offline_train_shuffle = False`
-  - fixed clean validation split copied from the prompt bank into each rendered dataset
+  - fixed validation split copied from the prompt bank into each rendered dataset
 
 Notes:
 
@@ -67,7 +67,7 @@ Final metrics:
 
 Additional downstream diagnostic quality from `s5_noisy_bc_debug_summary.md`:
 
-- native teacher on a `512`-prompt clean-val diagnostic slice:
+- native teacher on a `512`-prompt val diagnostic slice:
   - `cot_exact = 0.9921875`
   - `clean_full_exact = 0.9921875`
   - `clean_final_exact = 0.9921875`
@@ -181,7 +181,7 @@ Common run family:
   - `s5_eval_batch_size = 256`
   - `save_every = 0`
 
-Final clean-val metrics for the main comparison etas:
+Final val metrics for the main comparison etas:
 
 - `eta = 0.0`
   - `checkpoint_clean_train_oracle_loss = 0.000158`
@@ -292,7 +292,7 @@ Common run family:
 
 Related diagnostics:
 
-- clean teacher sampled rollout sanity check at `eta = 0.0` (`clean_sampled`, no corruption, `5000` clean-val prompts, `10` seeds):
+- clean teacher sampled rollout sanity check at `eta = 0.0` (`clean_sampled`, no corruption, `5000` val prompts, `10` seeds):
   - `full_exact ≈ 0.98894 ± 0.00107`
   - `final_exact ≈ 0.98902 ± 0.00103`
   - `token_mismatch_rate ≈ 0.00222`
@@ -347,14 +347,15 @@ Run metadata:
 Current interpretation note:
 
 - these `sample_then_corrupt` offline BC results are much stronger than one might guess from the raw sampled noisy-teacher rollout diagnostics alone
-- in particular, they now form the most relevant offline MC baseline for comparison against `forward_kl_simple`
+- in particular, they now form the most relevant offline MC baseline for comparison against NAIL-OPD (MC version)
+- TODO: finish these runs for higher etas. 
 
-## 5. Native Online OPD Runs (`train_opd.py`)
+## 5. Native Online OPD / NAIL-OPD Runs (`train_opd.py`)
 
 Main completed run families:
 
-- `forward_kl_simple`
-- `forward_kl_full`
+- NAIL-OPD (MC version)
+- NAIL-OPD (full KL distributional info)
 
 Common run family:
 
@@ -366,7 +367,7 @@ Common run family:
 - teacher checkpoint: `out-s5-cot-len21-depth1-400k`
 - teacher law: `distributional_noise`
 - student temperature: `1.0`
-- optimizer / runtime settings for the final forward-KL runs recorded below:
+- optimizer / runtime settings for the final NAIL-OPD runs recorded below:
   - `batch_size = 64`
   - `learning_rate = 1e-5`
   - `warmup_iters = 2000`
@@ -375,9 +376,9 @@ Common run family:
   - `compile = False`
   - `eval_batch_size = 512`
 
-Final clean-val metrics:
+Final val metrics:
 
-- `forward_kl_full`
+- NAIL-OPD (full KL distributional info)
   - `eta = 0.05`
     - `val/loss = 0.02676`
     - `val/cot_exact = 0.9996`
@@ -429,7 +430,7 @@ Final clean-val metrics:
     - `val/clean_full_exact = 0.6364`
     - `val/clean_final_exact = 0.6418`
 
-- `forward_kl_simple`
+- NAIL-OPD (MC version)
   - `eta = 0.05`
     - `val/loss = 0.02660`
     - `val/cot_exact = 0.9986`
@@ -483,21 +484,21 @@ Final clean-val metrics:
 
 Main takeaways:
 
-- all forward-KL runs listed above reached `125000` steps
-- `forward_kl_full` stays very strong through `eta = 0.8`, while `forward_kl_simple` degrades much earlier
+- all NAIL-OPD runs listed were run for `125000` steps
+- NAIL-OPD (full KL distributional info) stays very strong through `eta = 0.8`, while NAIL-OPD (MC version) degrades much earlier
 - at high noise, the gap is dramatic:
-  - `eta = 0.8`: `forward_kl_full = 0.9666` vs `forward_kl_simple = 0.1120`
-  - `eta = 0.9`: `forward_kl_full = 0.6364` vs `forward_kl_simple = 0.0`
+  - `eta = 0.8`: NAIL-OPD (full KL distributional info) `= 0.9666` vs NAIL-OPD (MC version) `= 0.1120`
+  - `eta = 0.9`: NAIL-OPD (full KL distributional info) `= 0.6364` vs NAIL-OPD (MC version) `= 0.0`
 
 Experiment note:
 
-- some forward-KL OPD runs were first launched with `MAX_ITERS = 110000` and later resumed exactly from checkpoint to `125000`
+- some NAIL-OPD runs were first launched with `MAX_ITERS = 110000` and later resumed exactly from checkpoint to `125000`
 - the metrics recorded above are the final completed `125000`-step values, not the earlier partial snapshots
 - duplicate W&B display names exist for some partial or crashed OPD runs, so comparisons should use the completed `125000`-step runs above
 
-### 5.1 Reverse-KL TM status
+### 5.1 OPD (MC version) status
 
-Current native S5 OPD reverse-KL setup:
+Current native S5 OPD setup for OPD (MC version):
 
 - backend: native nanoGPT OPD path
 - launcher: `bash scripts/run_opd_sweep.sh`
@@ -505,15 +506,15 @@ Current native S5 OPD reverse-KL setup:
 - subset size: `8,000,000`
 - teacher checkpoint: `out-s5-cot-len21-depth1-400k`
 - teacher law: `distributional_noise`
-- objective: `reverse_kl_tm`
+- objective: OPD (MC version)
 - planned etas: `0.05 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9`
 - `eval_batch_size = 1024`
 - `compile = 0`
 
 Status:
 
-- `reverse_kl_tm` is currently running, so it is not summarized with final results yet
-- this sweep uses the same `15M` prompt bank and `8M` subset as the forward-KL / offline BC comparisons
+- OPD (MC version) is currently running, so it is not summarized with final results yet
+- this sweep uses the same `15M` prompt bank and `8M` subset as the NAIL-OPD / offline BC comparisons
 - the native backend is being used because the HF backend benchmarked slower
 
 ### 5.2 Comparison framing, current impressions, and TODOs
@@ -527,39 +528,93 @@ Important interpretation note from later discussion:
     - train against realized teacher token targets
   - full-distribution supervision:
     - train against the teacher's full next-token distribution
-- `forward_kl_full` uses full next-token teacher distributions, while the standard noisy offline BC baseline only uses realized teacher token targets
-- so a direct comparison of `forward_kl_full` against the current offline BC baseline is not yet a pure on-vs-off-policy comparison; it also changes how much teacher information the student receives
+- NAIL-OPD (full KL distributional info) uses full next-token teacher distributions, while the standard noisy offline BC baseline only uses realized teacher token targets
+- so a direct comparison of NAIL-OPD (full KL distributional info) against the current offline BC baseline is not yet a pure on-vs-off-policy comparison; it also changes how much teacher information the student receives
 
 Current empirical impressions:
 
-- the online MC estimator (`forward_kl_simple`) appears stronger than the offline BC MC baseline on a per-`eta` basis
+- the online MC estimator, NAIL-OPD (MC version), appears stronger than the offline BC MC baseline on a per-`eta` basis
 - in several cases, the online MC method appears competitive with offline BC at the next lower `eta`
-- the strongest qualitative full-distribution example so far is that `forward_kl_full` at `eta = 0.4` appears to outperform the offline BC MC baseline even at lower `eta` values such as `0.3`, `0.2`, and `0.1`
-- the same qualitative pattern appears to hold at other `eta` values as well
+- the strongest qualitative full-distribution example so far is that NAIL-OPD (full KL distributional info) at `eta = 0.4` appears to outperform the offline BC MC baseline even at lower `eta` values such as `0.3`, `0.2`, and `0.1`, and the same qualitative pattern appears to hold at other `eta` values as well
 - the `sample_then_corrupt` offline BC baseline is itself quite strong at low and moderate `eta`, which makes the online-vs-offline MC comparison more meaningful and worth tabulating carefully
 
 These full-distribution comparisons should still be interpreted cautiously until the missing matched baselines below are run and tabulated explicitly.
 
 TODOs for a cleaner comparison matrix:
 
-- TODO: compare the online MC method (`forward_kl_simple`) directly against the offline BC MC baseline at matched `eta`, since this is the cleanest apples-to-apples on-policy vs off-policy comparison
-- TODO: add an offline BC variant that trains against full next-token teacher distributions, then compare it directly to `forward_kl_full`
+- TODO: compare NAIL-OPD (MC version) directly against the offline BC MC baseline at matched `eta`, since this is the cleanest apples-to-apples on-policy vs off-policy comparison
+- TODO: add an offline BC variant that trains against full next-token teacher distributions, then compare it directly to NAIL-OPD (full KL distributional info)
 - TODO: produce a matched per-`eta` table for:
   - offline BC MC
-  - online OPD MC (`forward_kl_simple`)
+  - NAIL-OPD (MC version)
   - offline BC full-distribution
-  - online OPD full-distribution (`forward_kl_full`)
-- TODO: for TM OPD / reverse-KL, compare both:
-  - the sampled / MC reverse-KL variant emphasized in the blog discussion
-  - the full reverse-KL variant using teacher next-token probabilities
+  - NAIL-OPD (full KL distributional info)
+- TODO: for OPD, compare both:
+  - OPD (MC version)
+  - OPD (full KL distributional info)
 - TODO: insert pictures / plots of the full training curves for the main comparison families:
   - clean offline BC baseline
   - offline BC MC (`greedy_then_corrupt` and `sample_then_corrupt`)
-  - online OPD MC (`forward_kl_simple`)
-  - online OPD full-distribution (`forward_kl_full`)
-  - TM OPD / reverse-KL once those runs finish and are summarized
+  - NAIL-OPD (MC version)
+  - NAIL-OPD (full KL distributional info)
+  - OPD once those runs finish and are summarized
 
-## 6. HF Backend Development and Benchmarks
+## 6. What Experiments Are Still Missing
+
+This section tracks the full sweep matrix in one place so it is clear which ablations are already done, which are currently running, and which still need to be launched.
+
+Normalization notes:
+
+- offline BC `sample_then_corrupt` is the matched off-policy MC law for online methods that sample from the `distributional_noise` teacher
+- offline BC `greedy_then_corrupt` is the matched off-policy law for online methods using `corrupted_greedy`
+
+Shared defaults for the main comparison sweeps:
+
+- `task = s5`
+- teacher checkpoint: `out-s5-cot-len21-depth1-400k`
+- prompt bank: `data/s5_clean_prompt_bank_m21_n15000000_val5000`
+- subset size: `8,000,000`
+- `eta` grid: `0.05 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9`
+- unless explicitly noted otherwise
+
+Sweep matrix:
+
+| Comparison | Sweep | Matched law | Status | Notes |
+|---|---|---|---|---|
+| Clean baseline | Clean offline BC, `eta = 0.0`, chosen `n8000000-fixed` baseline | clean teacher | Done | Canonical off-policy clean baseline for all later comparisons |
+| Off-policy MC baseline | Offline BC, `sample_then_corrupt`, full `eta` sweep | sample-then-corrupt | In Progress | `eta = 0.05, 0.1, 0.2` done; higher `eta`s currently running |
+| On-policy MC | NAIL-OPD (MC version), full `eta` sweep | `distributional_noise` | Done | Main on-policy MC family |
+| On-policy MC | OPD (MC version), full `eta` sweep, with sampled/corrupted noisy expert | sample-then-corrupt / sampled-corrupted | In Progress | This is the current OPD MC sweep that is running |
+| Off-policy greedy-corrupt baseline | Offline BC, `greedy_then_corrupt`, full `eta` sweep | greedy-then-corrupt | Done | Completed off-policy greedy-corrupt baseline |
+| On-policy full-distribution | NAIL-OPD (full KL distributional info), full `eta` sweep | `distributional_noise` | Done | Completed online full-distribution family |
+| Off-policy full-distribution match | Offline BC trained on full teacher next-token distributions, full `eta` sweep | `distributional_noise` | TODO | Requires implementation first; this is the direct off-policy match to NAIL-OPD (full KL distributional info) |
+| On-policy full-distribution | OPD (full KL distributional info), full `eta` sweep | `distributional_noise` | TODO | Requires implementing the full-information OPD objective; this is the OPD analogue of the MC-vs-full comparison |
+| On-policy MC greedy-corrupt match | NAIL-OPD (MC version), full `eta` sweep | `corrupted_greedy` | TODO | Direct online match to completed offline `greedy_then_corrupt` BC |
+| On-policy MC greedy-corrupt match | OPD (MC version), full `eta` sweep | `corrupted_greedy` | TODO | Needed if the OPD MC family is to be matched to offline `greedy_then_corrupt` as well |
+| On-policy full-distribution greedy-corrupt ablation | NAIL-OPD (full KL distributional info), full `eta` sweep | `corrupted_greedy` | TODO | Needed if teacher-law ablations are to be symmetric in the full-information setting |
+| Off-policy full-distribution greedy-corrupt match | Offline BC trained on full teacher next-token distributions, full `eta` sweep | `corrupted_greedy` | TODO | Also requires the new offline full-distribution pipeline |
+| On-policy full-distribution greedy-corrupt ablation | OPD (full KL distributional info), full `eta` sweep | `corrupted_greedy` | TODO | Full-information OPD teacher-law ablation |
+
+Priority order for the unfinished sweeps:
+
+1. finish the two sweeps already running:
+   - offline BC `sample_then_corrupt` higher-`eta` completion
+   - OPD (MC version) sweep completion
+2. add the direct off-policy full-distribution counterpart to NAIL-OPD (full KL distributional info):
+   - offline BC full-distribution, `distributional_noise`
+3. add the OPD (full KL distributional info) counterpart to the OPD (MC version) sweep:
+   - OPD (full KL distributional info), `distributional_noise`
+4. complete the greedy-corrupt online matches:
+   - NAIL-OPD (MC version) with `corrupted_greedy`
+   - OPD (MC version) with `corrupted_greedy`
+5. only then do the symmetric full-information greedy-corrupt ablations:
+   - NAIL-OPD (full KL distributional info) with `corrupted_greedy`
+   - offline BC full-distribution with `corrupted_greedy`
+   - OPD (full KL distributional info) with `corrupted_greedy`
+
+## 7. Remarks on HF Backend Development and Benchmarks
+
+- TLDR: We tried HF conversion and --compile for optimization speedups while doing OPD training. Neither showed any benefit over our current implementation (which already uses cached rollouts).
 
 From `s5_opd_hf_backend_summary.md`:
 
@@ -567,7 +622,7 @@ From `s5_opd_hf_backend_summary.md`:
 - new helper layer: `data/s5_cot/opd_hf.py`
 - new sweep wrapper: `scripts/run_opd_hf_sweep.sh`
 
-### 6.1 Functional validation
+### 7.1 Functional validation
 
 Confirmed validations:
 
@@ -575,19 +630,19 @@ Confirmed validations:
   - `python3 -m unittest tests.test_opd_objectives tests.test_opd_hf`
   - result: all `13` tests passed
 - training smoke tests:
-  - `reverse_kl_tm`
-  - `forward_kl_simple`
-  - `forward_kl_full`
+  - OPD (MC version)
+  - NAIL-OPD (MC version)
+  - NAIL-OPD (full KL distributional info)
   - HF resume smoke test
   - HF `--compile` smoke test
 
 These were smoke / correctness checks rather than convergence experiments, so no task-level comparison metrics are recorded from this part.
 
-### 6.2 Train-throughput benchmark
+### 7.2 Train-throughput benchmark
 
 Matched settings:
 
-- objective: `forward_kl_full`
+- objective: NAIL-OPD (full KL distributional info)
 - teacher checkpoint: `out-s5-cot-len21-depth1-400k`
 - prompt bank: `data/s5_clean_prompt_bank_m21_n15000000_val5000`
 - subset size: `8,000,000`
@@ -609,11 +664,11 @@ Interpretation:
 - HF with compile was about `36.3%` slower than the fastest native baseline
 - compile did not help here
 
-### 6.3 Short end-to-end benchmark
+### 7.3 Short end-to-end benchmark
 
 Matched settings:
 
-- objective: `forward_kl_full`
+- objective: NAIL-OPD (full KL distributional info)
 - teacher checkpoint: `out-s5-cot-len21-depth1-400k`
 - prompt bank: `data/s5_clean_prompt_bank_m21_n15000000_val5000`
 - subset size: `8,000,000`
@@ -634,11 +689,11 @@ Interpretation:
 
 - HF was about `7.4%` slower end-to-end in this short benchmark
 
-### 6.4 Larger end-to-end benchmark
+### 7.4 Larger end-to-end benchmark
 
 Matched settings:
 
-- objective: `forward_kl_full`
+- objective: NAIL-OPD (full KL distributional info)
 - teacher checkpoint: `out-s5-cot-len21-depth1-400k`
 - prompt bank: `data/s5_clean_prompt_bank_m21_n15000000_val5000`
 - subset size: `8,000,000`
@@ -666,166 +721,10 @@ Decision recorded in the summary:
 - stay on the native nanoGPT OPD backend for production sweeps
 - keep `--compile` off for that path for now
 
-## 7. Current Gaps / What Is Still Missing
 
-These items are not fully reconstructable from the current workspace alone:
 
-- fine-grained metrics for most of the smaller clean offline BC subset sweep
-- exact compile state and exact eval-batch settings for some historical partial / crashed OPD runs whose names do not encode them
-- a fully matched on-policy vs off-policy comparison matrix is still missing:
+<!-- - exact compile state and exact eval-batch settings for some historical partial / crashed OPD runs whose names do not encode them -->
+<!-- - a fully matched on-policy vs off-policy comparison matrix is still missing:
   - online MC vs offline BC MC at matched `eta`
   - online full-distribution vs offline full-distribution at matched `eta`
-  - sampled / MC reverse-KL TM OPD vs full reverse-KL TM OPD
-
-Why they are missing here:
-
-- no real `logs/*` files are present locally
-- no local `wandb/` run cache is present
-- no real `out-s5-noisy-bc-*`, `out-s5-opd-*`, or `out-s5-clean-offline-bc-*` directories are present in this checkout
-
-## Commands to Verify / Recover Old Run Metadata
-
-### A. Inspect a native OPD run directory
-
-Use this when you have a real `out-s5-opd-*` directory:
-
-```bash
-python - <<'PY'
-import json
-from pathlib import Path
-
-out_dir = Path("out-s5-opd-forward_kl_full-n8000000-eta0p2-distributional_noise-t1p0")
-print("run_meta.json")
-print(json.dumps(json.load(open(out_dir / "run_meta.json")), indent=2))
-print("\nlast_eval.json")
-print(json.dumps(json.load(open(out_dir / "last_eval.json")), indent=2))
-PY
-```
-
-### B. Inspect the full OPD eval history
-
-```bash
-python - <<'PY'
-import json
-from pathlib import Path
-
-path = Path("out-s5-opd-forward_kl_full-n8000000-eta0p2-distributional_noise-t1p0/eval_history.jsonl")
-for line in path.read_text().strip().splitlines()[-5:]:
-    print(json.dumps(json.loads(line), indent=2))
-PY
-```
-
-### C. Inspect a BC checkpoint directory
-
-Use this when you have a real `out-s5-clean-offline-bc-*` or `out-s5-noisy-bc-*` directory:
-
-```bash
-python - <<'PY'
-import pprint
-import torch
-
-ckpt = torch.load("out-s5-noisy-bc-n8000000-eta0p1/ckpt.pt", map_location="cpu", weights_only=False)
-print("iter_num =", ckpt["iter_num"])
-print("best_val_loss =", ckpt.get("best_val_loss"))
-print("\nconfig:")
-pprint.pp(ckpt["config"])
-PY
-```
-
-### D. Inspect an offline dataset's metadata
-
-```bash
-python - <<'PY'
-import json
-from pathlib import Path
-
-dataset_dir = Path("data/s5_noisy_offline_n8000000_eta_0p1")
-print(json.dumps(json.load(open(dataset_dir / "meta.json")), indent=2))
-PY
-```
-
-### E. Inspect the prompt-bank / subset alignment for a noisy dataset
-
-```bash
-python -u scripts/diagnose_noisy_offline_bc.py \
-  --dataset_dir="data/s5_noisy_offline_n8000000_eta_0p1" \
-  --prompt_bank_dir="data/s5_clean_prompt_bank_m21_n15000000_val5000" \
-  --teacher_checkpoint="out-s5-cot-len21-depth1-400k" \
-  --subset_size="8000000" \
-  --eta="0.1" \
-  --train_decode_mode="greedy_then_corrupt" \
-  --strict
-```
-
-### F. Inspect an HF OPD run directory
-
-HF uses `training_state.pt` instead of `ckpt.pt`:
-
-```bash
-python - <<'PY'
-import json
-import pprint
-import torch
-from pathlib import Path
-
-out_dir = Path("out-s5-opd-hf-forward_kl_full-n8000000-eta0p2-distributional_noise-t1p0")
-print("run_meta.json")
-print(json.dumps(json.load(open(out_dir / "run_meta.json")), indent=2))
-print("\ntraining_state.pt config")
-state = torch.load(out_dir / "training_state.pt", map_location="cpu", weights_only=False)
-pprint.pp(state["config"])
-PY
-```
-
-### G. Recover parameters and summaries from W&B
-
-If you know the W&B entity and project, this is the cleanest way to recover old runs whose local outputs are gone:
-
-```bash
-python - <<'PY'
-import json
-import wandb
-
-ENTITY = "YOUR_ENTITY"
-PROJECT = "small-cot-experiments"
-TARGET_DISPLAY_NAME = "s5-opd-forward_kl_full-n8000000-eta0p2-distributional_noise-t1p0"
-
-api = wandb.Api()
-for run in api.runs(f"{ENTITY}/{PROJECT}"):
-    if run.display_name == TARGET_DISPLAY_NAME:
-        print("run_id:", run.id)
-        print("state:", run.state)
-        print("\nconfig:")
-        print(json.dumps(run.config, indent=2, sort_keys=True))
-        print("\nsummary:")
-        print(json.dumps(run.summary._json_dict, indent=2, sort_keys=True))
-        print("-" * 80)
-PY
-```
-
-Because several display names appear duplicated in the screenshots, the W&B run ID is the real unique key.
-
-### H. Inspect W&B resume state for a native OPD run
-
-This is useful for checking whether a resumed OPD run has a stored W&B run ID:
-
-```bash
-python - <<'PY'
-import json
-from pathlib import Path
-
-path = Path("out-s5-opd-forward_kl_full-n8000000-eta0p2-distributional_noise-t1p0/wandb_state.json")
-if path.exists():
-    print(json.dumps(json.load(open(path)), indent=2))
-else:
-    print("no wandb_state.json present")
-PY
-```
-
-## Recommended Next Step
-
-If we want this log to be fully complete rather than "best effort from surviving evidence", the fastest path is:
-
-- pull the real `out-s5-clean-offline-bc-*`, `out-s5-noisy-bc-*`, and `out-s5-opd-*` directories onto one machine, or
-- query W&B by run ID and export configs + final summaries to JSON, then
-- extend this file with a proper per-run metrics table.
+  - OPD (MC version) vs OPD (full KL distributional info) at matched `eta` -->
