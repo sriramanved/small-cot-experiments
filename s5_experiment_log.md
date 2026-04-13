@@ -41,6 +41,10 @@ These settings appear to be the common backbone for the main S5 experiments:
   - `beta2 = 0.95`
   - `grad_clip = 1.0`
   - `dtype = float16`
+- later apples-to-apples BC comparisons were standardized on:
+  - fixed prompt-bank prefix subsets via `train_order[:N]`
+  - `offline_train_shuffle = False`
+  - fixed clean validation split copied from the prompt bank into each rendered dataset
 
 Notes:
 
@@ -99,6 +103,13 @@ Common run family:
   - `s5_eval_batch_size = 256`
   - `offline_single_epoch = True`
   - `compile = True`
+  - later comparison runs use `offline_train_shuffle = False`
+
+Important later debugging / measurement note:
+
+- `train/loss_eval` is not directly comparable across `eta`, because for noisy BC it measures fit to noisy saved targets rather than clean oracle targets
+- later in this cycle, the trainer was updated to also log `train/clean_oracle_loss_eval`
+- this metric estimates loss on the same training prompts paired with clean oracle CoTs, and was introduced specifically to make cross-`eta` comparisons more interpretable
 
 Confirmed metrics:
 
@@ -138,6 +149,7 @@ Common run family:
   - subset size: `8,000,000`
   - rollout mode: `greedy_then_corrupt`
   - `gen_batch_size = 1024` unless overridden
+  - later confirmed comparison runs used the same prompt subset across all `eta` values via the fixed `train_order[:8000000]` prefix, with `subset_indices.pt` saved in each dataset
 - model / optimizer / evaluation defaults: same BC settings as the clean offline BC family
 
 Confirmed final clean-val metrics for the main comparison etas:
@@ -173,6 +185,7 @@ Main takeaways:
 - moderate noise (`0.05`, `0.1`) did not hurt and may have slightly helped clean autoregressive accuracy
 - high noise (`0.2`) clearly hurt
 - the offline datasets were verified to match the intended prompt bank, subset, teacher checkpoint, and `eta`
+- the clean prompt subset was held fixed across etas; only the generated teacher targets changed
 
 Not currently recoverable from this workspace:
 
@@ -194,6 +207,14 @@ Common run family:
 
 Confirmed related diagnostics:
 
+- clean teacher sampled rollout sanity check at `eta = 0.0` (`clean_sampled`, no corruption, `5000` clean-val prompts, `10` seeds):
+  - `full_exact ≈ 0.98894 ± 0.00107`
+  - `final_exact ≈ 0.98902 ± 0.00103`
+  - `token_mismatch_rate ≈ 0.00222`
+  - interpretation:
+    - teacher sampling alone is only mildly worse than clean greedy decoding
+    - so the large degradation in sampled noisy-teacher rollouts is driven mainly by corruption, not by sampling by itself
+
 - `s5_noisy_bc_debug_summary.md` confirms that sampled noisy teacher rollouts are also very inaccurate on the clean task:
   - `eta = 0.05`
     - `full_exact ≈ 0.01348`
@@ -210,6 +231,7 @@ Important distinction:
 - those numbers are teacher-rollout diagnostics, not confirmed final BC checkpoint metrics
 - the screenshot does show that BC training runs with this label were launched
 - I do not currently have the final clean-val checkpoint metrics for those runs in the local workspace
+- because the clean-sampled teacher remains near-perfect at `eta = 0`, the sampled-teacher ablation is not a fundamentally different experiment due to sampling alone; the main destructive factor is still the corruption law
 
 ## 5. Native Online OPD Runs (`train_opd.py`)
 
@@ -238,6 +260,8 @@ Common run family:
 - trainer: `train_opd.py`
 - sweep wrapper: `scripts/run_opd_sweep.sh`
 - task: implicitly `s5`
+  - `scripts/run_opd_sweep.sh` does not pass `--task`, but `train_opd.py` defaults `--task="s5"`
+  - this is intentional; the modadd path uses a separate wrapper, `scripts/run_modadd_opd_sweep.sh`, which explicitly passes `--task="modadd"`
 - prompt bank default: `data/s5_clean_prompt_bank_m21_n15000000_val5000`
 - subset size default: `8,000,000`
 - teacher law: `distributional_noise`
@@ -254,15 +278,131 @@ Important uncertainty:
 - the run names do not encode `compile`, `eval_batch_size`, or any overrides to `max_iters`
 - so those must be verified from `run_meta.json`, `last_eval.json`, logs, or W&B config for each specific run
 
+Current wrapper defaults as of April 13, 2026:
+
+- `scripts/run_opd_sweep.sh` now defaults to:
+  - `MAX_ITERS = 125000`
+  - `EVAL_BATCH_SIZE = 512`
+  - `COMPILE = 0`
+  - `WANDB_LOG = 1`
+- the trainer `train_opd.py` itself still defaults to:
+  - `max_iters = 110000`
+  - `eval_batch_size = 256`
+- this means historical OPD runs may have used either the trainer defaults or older wrapper defaults, depending on when they were launched
+- the current sweep wrapper also includes W&B resume plumbing via `wandb_run_id` recovery and `wandb_state.json`, which should make future OPD runs easier to audit than some of the older runs
+
 Currently recoverable metrics:
 
 - I do not have the actual train / val metrics for these OPD runs in the current workspace
 - what is confirmed is only that these run families were launched, and for some settings multiple runs with the same display name exist
 
+Recovered later from dev-node logs / W&B summaries:
+
+- `forward_kl_simple`, `eta = 0.8`, observed final summary at `iter = 110000`:
+  - `val/loss = 0.74424`
+  - `val/cot_exact = 0.2786`
+  - `val/clean_full_exact = 0.2786`
+  - `val/clean_final_exact = 0.3018`
+- `forward_kl_full`, `eta = 0.8`, observed final summary at `iter = 110000`:
+  - `val/loss = 0.71366`
+  - `val/cot_exact = 0.9080`
+  - `val/clean_full_exact = 0.9080`
+  - `val/clean_final_exact = 0.9094`
+
+Recovered status checks from the dev node:
+
+- `forward_kl_simple`, `eta = 0.8`:
+  - `out_dir` present
+  - `completed.txt` present
+  - `ckpt.pt` present
+- `forward_kl_full`, `eta = 0.8`:
+  - `out_dir` present
+  - `completed.txt` present
+  - `ckpt.pt` present
+- `forward_kl_simple`, `eta = 0.9`:
+  - no `out_dir`, no `completed.txt`, no `ckpt.pt`, no log at the time of inspection
+- `forward_kl_full`, `eta = 0.9`:
+  - no `out_dir`, no `completed.txt`, no `ckpt.pt`, no log at the time of inspection
+
+This means:
+
+- `eta = 0.8` definitely finished for both forward-KL variants
+- `eta = 0.9` had not yet been launched at the time of that inspection
+- at high noise, `forward_kl_full` was dramatically stronger than `forward_kl_simple` on the clean validation set
+
+Important experiment notes / caveats:
+
+- Some native OPD runs were initially launched with `MAX_ITERS = 110000`, while the noisy offline BC comparisons used `125000`.
+- Those OPD runs were later resumed exactly from their saved checkpoints to `125000` rather than restarted from scratch.
+- The recovered `eta = 0.8` summaries above are explicitly the `110000`-step summaries seen before the later top-off.
+- Historical duplicate W&B display names exist for some OPD runs, so the W&B run ID is the real unique identifier when reconstructing exact histories.
+
+### 5.2 Comparison framing, current impressions, and TODOs
+
+Important interpretation note from later discussion:
+
+- The main scientific question is whether on-policy rollouts help relative to off-policy training.
+- To isolate that effect cleanly, we should change as few variables as possible between the online and offline baselines.
+- In particular, there is a separate axis besides on-policy vs off-policy:
+  - MC / sampled supervision:
+    - train against realized teacher token targets
+  - full-distribution supervision:
+    - train against the teacher's full next-token distribution
+- Current `forward_kl_full` uses full next-token teacher distributions, while the standard noisy offline BC baseline only uses realized teacher token targets.
+- So a direct comparison of `forward_kl_full` against the current offline BC baseline is not yet a pure on-vs-off-policy comparison; it also changes how much teacher information the student receives.
+
+Current empirical impressions from the later run inspection:
+
+- The online MC estimator (`forward_kl_simple`) appears stronger than the offline BC MC baseline on a per-`eta` basis.
+- In several cases, the online MC method appears competitive with offline BC at the next lower `eta`.
+- The strongest observed example so far on the full-distribution side is that `forward_kl_full` at `eta = 0.4` appears to beat offline BC at `eta = 0.3`, `0.2`, and `0.1`.
+- The same qualitative pattern appears to hold at other `eta` values as well.
+
+However, those latter full-distribution comparisons should be interpreted cautiously until the missing matched baselines below are run.
+
+TODOs for a cleaner comparison matrix:
+
+- TODO: compare the online MC method (`forward_kl_simple`) directly against the offline BC MC baseline at matched `eta`, since this is the cleanest apples-to-apples on-policy vs off-policy comparison.
+- TODO: add an offline BC variant that trains against full next-token teacher distributions, then compare it directly to `forward_kl_full`.
+- TODO: produce a matched per-`eta` table for:
+  - offline BC MC
+  - online OPD MC (`forward_kl_simple`)
+  - offline BC full-distribution
+  - online OPD full-distribution (`forward_kl_full`)
+- TODO: for TM OPD / reverse-KL, compare both:
+  - the sampled / MC reverse-KL variant emphasized in the blog discussion
+  - the full reverse-KL variant using teacher next-token probabilities
+- TODO: fold the later `125000`-step top-off results and `eta = 0.9` outcomes back into this log once those runs are complete and recovered from W&B or dev-node outputs.
+
 Comments:
 
 - the screenshot only shows `forward_kl_simple` and `forward_kl_full`
 - I do not see `reverse_kl_tm` in the screenshot evidence, though that objective exists in the trainer and sweep script
+
+### 5.1 Planned native S5 OPD sweep discussed in this chat
+
+This was discussed as the current intended launch configuration for the next S5 OPD sweep, but it is not yet recorded here as a confirmed completed experiment family:
+
+- backend: native nanoGPT OPD path
+- launcher: `bash scripts/run_opd_sweep.sh`
+- prompt bank: `data/s5_clean_prompt_bank_m21_n15000000_val5000`
+- subset size: `8,000,000`
+- teacher checkpoint: `out-s5-cot-len21-depth1-400k`
+- teacher law: `distributional_noise`
+- objective: `reverse_kl_tm` unless explicitly overridden
+- etas: `0.05 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9`
+- `eval_batch_size = 1024`
+- `compile = 0`
+- rationale:
+  - match the `15M` prompt bank and `8M` subset used for the clean offline BC / noisy BC comparisons
+  - stay on the native backend because the HF backend benchmarked slower
+  - leave compile off for now
+
+Operational notes from the same discussion:
+
+- for cluster use, this sweep should be launched via Slurm `sbatch`, not `nohup`
+- `eps = 1e-10` is just the numerical floor used before `log(...)` / probability clamping in the OPD losses; it is a stability knob, not the main experimental variable
+- because `run_opd_sweep.sh` defaults `WANDB_LOG=1`, runs will attempt to log to whichever W&B account the job environment is authenticated under unless `WANDB_LOG=0` is set explicitly
 
 ## 6. HF Backend Development and Benchmarks
 
@@ -373,6 +513,45 @@ Decision recorded in the summary:
 - stay on the native nanoGPT OPD backend for production sweeps
 - keep `--compile` off for that path for now
 
+### 6.5 Additional implementation-validation updates from this chat
+
+These are not new S5 metric runs, but they do add relevant correctness evidence for the S5 training code used in the experiments above.
+
+Confirmed later in this development cycle:
+
+- direct method-level tests were added in `tests/test_training_methods.py` for:
+  - `reverse_kl_tm`
+  - `forward_kl_simple`
+  - `forward_kl_full`
+  - offline BC masked causal-language-model loss
+- those tests check numerical agreement against hand-computed formulas and also verify important implementation details:
+  - reverse-KL teacher terms are detached as intended
+  - offline BC ignore-mask handling matches the intended training loss
+- reusable loss helpers were extracted so the tested formulas are the same ones used by training:
+  - `model.py`: `causal_lm_loss`
+  - `data/s5_cot/opd.py`: objective helpers for reverse-KL TM and both forward-KL variants
+  - `train_opd.py` was updated to call the shared helpers
+- the broader local unit-test suite was rerun with:
+
+```bash
+python -m unittest discover -s tests
+```
+
+- result: all `31` tests passed
+
+Relevant bookkeeping / reproducibility fixes found during the expanded testing:
+
+- `train.py` now writes normalized eval-summary keys in addition to the older underscore-style keys, so downstream S5 threshold / aggregation scripts can reliably read metrics like:
+  - `val/loss`
+  - `val/cot_exact`
+  - `val/clean_full_exact`
+  - `val/clean_final_exact`
+- broader shared synthetic-data testing also caught and fixed an aliasing issue in `data/synthetic/prompt_bank.py` when constructing `x` / `y` tensors from same-dtype data
+  - this bug was most directly relevant to the newer shared synthetic-data path rather than the historical S5 `uint8` path
+  - still, it is worth recording because future S5-style synthetic-task comparisons now rely on the corrected helper
+  - so the current codebase is better validated than the one used for some earlier experiments
+  - this should mainly matter for future reproducibility rather than reinterpretation of the already-recorded S5 metrics
+
 ## 7. Current Gaps / What Is Still Missing
 
 These items are not fully reconstructable from the current workspace alone:
@@ -381,8 +560,14 @@ These items are not fully reconstructable from the current workspace alone:
 - most of the clean offline BC subset-sweep metrics
 - noisy BC checkpoint metrics for etas above `0.2`
 - final train / val metrics for the visible `sample-then-corrupt` BC runs
-- final train / val metrics for the native OPD sweeps visible in W&B
+- many final train / val metrics for the native OPD sweeps
+  - explicit recovered exceptions now include `forward_kl_simple` and `forward_kl_full` at `eta = 0.8`
 - exact compile state and exact eval-batch settings for historical OPD runs whose names do not encode them
+- final outcomes for the later queued / relaunched OPD jobs, especially `eta = 0.9`, were not yet folded back into this note at the time of writing
+- a fully matched on-policy vs off-policy comparison matrix is still missing:
+  - online MC vs offline BC MC at matched `eta`
+  - online full-distribution vs offline full-distribution at matched `eta`
+  - sampled / MC reverse-KL TM OPD vs full reverse-KL TM OPD
 
 Why they are missing here:
 
@@ -511,6 +696,23 @@ PY
 ```
 
 Because several display names appear duplicated in the screenshots, the W&B run ID is the real unique key.
+
+### H. Inspect W&B resume state for a native OPD run
+
+This is useful for checking whether a resumed OPD run has a stored W&B run ID:
+
+```bash
+python - <<'PY'
+import json
+from pathlib import Path
+
+path = Path("out-s5-opd-forward_kl_full-n8000000-eta0p2-distributional_noise-t1p0/wandb_state.json")
+if path.exists():
+    print(json.dumps(json.load(open(path)), indent=2))
+else:
+    print("no wandb_state.json present")
+PY
+```
 
 ## Recommended Next Step
 
