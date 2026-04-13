@@ -1,20 +1,5 @@
 # S5 Experiment Log
 
-This log consolidates the S5 experiments we can reconstruct from:
-
-- local summary notes:
-  - `s5_noisy_bc_debug_summary.md`
-  - `s5_opd_hf_backend_summary.md`
-- current training / sweep scripts and configs
-- the two W&B sidebar screenshots shared on April 11, 2026
-
-Important caveat:
-
-- I cannot read other chat threads directly.
-- In the current workspace, the real `out-*`, `logs/*`, and local `wandb/` artifacts for the main S5 runs are mostly not present.
-- So some entries below are fully confirmed from local notes, while others are only confirmed at the level of run names and run-family parameters.
-- Wherever metrics are not recoverable from the current workspace, I say so explicitly and give commands to recover them if the original outputs or W&B access are available.
-
 ## Shared S5 Setup
 
 These settings appear to be the common backbone for the main S5 experiments:
@@ -77,7 +62,7 @@ Interpretation:
 - This checkpoint is the fixed clean teacher used throughout the offline BC and OPD work.
 - It is good enough to serve as the canonical expert for the S5 comparisons.
 
-## 2. Clean Offline BC Runs
+## 2. Clean Offline BC Runs (eta = 0.0)
 
 Visible W&B run names from the screenshot:
 
@@ -117,9 +102,116 @@ Confirmed metrics:
   - `checkpoint_clean_train_oracle_loss = 0.000158`
   - `checkpoint_clean_full_exact = 0.9952`
 
+Recovered later from dev-node output inspection:
+
+- the clean offline subset sweep directories currently visible locally include:
+  - `n250000`
+  - `n500000`
+  - `n1000000`
+  - `n2000000`
+  - `n4000000`
+  - `n6000000`
+  - `n6000000-long`
+  - `n7000000`
+  - `n7200000`
+  - `n7400000`
+  - `n7600000`
+  - `n8000000-fixed`
+  - `n8500000`
+- recovered training-state metadata:
+  - all of these runs use `compile = True`
+  - all of these runs use `s5_eval_batch_size = 256`
+  - the standard single-epoch subset sweep uses `max_iters = 1000000` together with `offline_single_epoch = True`, so completed runs stop after consuming the available dataset rather than after reaching `max_iters`
+  - recovered completed-step values:
+    - `n250000`: `iter_num = 4757`
+    - `n500000`: `iter_num = 7813`
+    - `n1000000`: `iter_num = 15625`
+    - `n2000000`: `iter_num = 31250`
+    - `n4000000`: `iter_num = 62500`
+    - `n6000000`: `iter_num = 93750`
+    - `n7000000`: `iter_num = 109375`
+    - `n7200000`: `iter_num = 112500`
+    - `n7400000`: `iter_num = 115625`
+    - `n7600000`: `iter_num = 118750`
+    - `n8000000-fixed`: `iter_num = 125000`
+    - `n8500000`: `iter_num = 132813`
+  - recovered dataset provenance:
+    - the smaller subset sweep through `n6000000` points to `dataset = s5_clean_offline_n6000000`
+    - the later large-subset runs `n7000000` through `n8500000` point to `dataset = s5_clean_offline_n15000000`
+  - `n6000000-long` appears to be a separate long-run variant with:
+    - `dataset = s5_clean_offline_n6000000`
+    - `ckpt_iter = 400001`
+    - `max_iters = 400000`
+    - `compile = True`
+    - `s5_eval_batch_size = 256`
+  - an `out-s5-clean-offline-bc-n10000000` directory name also appeared in the raw directory scan, but no matching checkpoint / summary information was recovered from this pass
+
+Recovered later from W&B:
+
+- `s5-clean-offline-bc-n6000000-long`
+  - `run_id = bojfsj0j`
+  - `state = finished`
+  - `max_iters = 400000`
+  - `compile = True`
+  - `eval_batch_size = 256`
+  - `val/loss = 5.067e-05`
+  - `val/cot_exact = 0.9964`
+  - `val/clean_full_exact = 0.9964`
+  - `val/clean_final_exact = 0.9964`
+- `s5-clean-offline-bc-n7000000`
+  - `run_id = yurx30pu`
+  - `state = finished`
+  - `max_iters = 1000000`
+  - `compile = True`
+  - `eval_batch_size = 256`
+  - `val/loss = 1.1579e-04`
+  - `val/cot_exact = 0.9984`
+  - `val/clean_full_exact = 0.9984`
+  - `val/clean_final_exact = 0.9984`
+- `s5-clean-offline-bc-n7200000`
+  - crashed run:
+    - `run_id = tfe0zbx3`
+    - `state = crashed`
+    - no recovered final validation metrics
+  - finished run:
+    - `run_id = 7yp92arh`
+    - `state = finished`
+    - `val/loss = 2.3599e-04`
+    - `val/cot_exact = 0.9948`
+    - `val/clean_full_exact = 0.9948`
+    - `val/clean_final_exact = 0.9948`
+- `s5-clean-offline-bc-n7400000`
+  - `run_id = vn0cqw7k`
+  - `state = finished`
+  - `val/loss = 3.1818e-04`
+  - `val/cot_exact = 0.9914`
+  - `val/clean_full_exact = 0.9914`
+  - `val/clean_final_exact = 0.9914`
+- `s5-clean-offline-bc-n7600000`
+  - `run_id = 81cqclnm`
+  - `state = finished`
+  - `val/loss = 0.15558`
+  - `val/cot_exact = 0.0`
+  - `val/clean_full_exact = 0.0`
+  - `val/clean_final_exact = 0.0020`
+- `s5-clean-offline-bc-n8000000-fixed`
+  - `run_id = 2vhkceg4`
+  - `state = finished`
+  - `val/loss = 1.3823e-04`
+  - `val/cot_exact = 0.9952`
+  - `val/clean_full_exact = 0.9952`
+  - `val/clean_final_exact = 0.9952`
+- `s5-clean-offline-bc-n8500000`
+  - `run_id = psvfeviy`
+  - `state = finished`
+  - `val/loss = 9.3695e-05`
+  - `val/cot_exact = 0.9982`
+  - `val/clean_full_exact = 0.9982`
+  - `val/clean_final_exact = 0.9982`
+
 Not currently recoverable from this workspace:
 
-- the final train / val metrics for the other clean subset-sweep runs
+- the final train / val metrics for the smaller clean subset-sweep runs `n250000` through `n6000000`
 - the exact prompt-bank size used for every historical subset-sweep run
 
 Comments:
@@ -166,6 +258,62 @@ Confirmed final clean-val metrics for the main comparison etas:
 - `eta = 0.2`
   - `checkpoint_clean_train_oracle_loss = 0.11062`
   - `checkpoint_clean_full_exact = 0.9322`
+- `eta = 0.3`
+  - `val/loss = 0.18412`
+  - `val/cot_exact = 0.8532`
+  - `val/clean_full_exact = 0.8532`
+  - `val/clean_final_exact = 0.8554`
+- `eta = 0.4`
+  - `val/loss = 0.26124`
+  - `val/cot_exact = 0.6834`
+  - `val/clean_full_exact = 0.6834`
+  - `val/clean_final_exact = 0.6908`
+- `eta = 0.5`
+  - `val/loss = 0.35198`
+  - `val/cot_exact = 0.5382`
+  - `val/clean_full_exact = 0.5382`
+  - `val/clean_final_exact = 0.5488`
+- `eta = 0.6`
+  - `val/loss = 0.46602`
+  - `val/cot_exact = 0.1316`
+  - `val/clean_full_exact = 0.1316`
+  - `val/clean_final_exact = 0.1568`
+- `eta = 0.7`
+  - `val/loss = 0.57944`
+  - `val/cot_exact = 0.3404`
+  - `val/clean_full_exact = 0.3404`
+  - `val/clean_final_exact = 0.3594`
+- `eta = 0.8`
+  - `val/loss = 0.74747`
+  - `val/cot_exact = 0.0570`
+  - `val/clean_full_exact = 0.0570`
+  - `val/clean_final_exact = 0.0812`
+- `eta = 0.9`
+  - `val/loss = 0.97167`
+  - `val/cot_exact = 0.0`
+  - `val/clean_full_exact = 0.0`
+  - `val/clean_final_exact = 0.0030`
+
+Recovered later from dev-node output inspection:
+
+- for `eta = 0.05` through `0.9`, the `greedy_then_corrupt` noisy offline BC runs all showed:
+  - `ckpt_iter = 125000`
+  - `completed.txt = iter_num=125000`
+  - `max_iters = 1000000` in the BC config
+  - `compile = True`
+  - `s5_eval_batch_size = 256`
+- later W&B recovery supplied explicit final metrics for `eta = 0.3` through `0.9`
+- W&B run IDs for the visible `greedy_then_corrupt` BC runs now recovered:
+  - `eta = 0.05`: `hyq4gxdm`
+  - `eta = 0.1`: `3gnhn62s`
+  - `eta = 0.2`: `ed50qfvh`
+  - `eta = 0.3`: `gjeux86l`
+  - `eta = 0.4`: `187zf2eg`
+  - `eta = 0.5`: `x43ocx5v`
+  - `eta = 0.6`: `8cfrhsax`
+  - `eta = 0.7`: `yzt28b92`
+  - `eta = 0.8`: `fjcjvvbw`
+  - `eta = 0.9`: `ltgaefad`
 
 Confirmed dataset-side diagnostics for the same etas:
 
@@ -189,7 +337,7 @@ Main takeaways:
 
 Not currently recoverable from this workspace:
 
-- final metrics for the visible higher-eta runs `0.3` through `0.7`
+- the exact local checkpoint / `last_eval.json` contents for every noisy BC run are not all mirrored in this checkout, even though W&B now fills in the main final metrics
 
 ## 4. Noisy Offline BC, `sample_then_corrupt`
 
@@ -230,8 +378,41 @@ Important distinction:
 
 - those numbers are teacher-rollout diagnostics, not confirmed final BC checkpoint metrics
 - the screenshot does show that BC training runs with this label were launched
-- I do not currently have the final clean-val checkpoint metrics for those runs in the local workspace
+- later dev-node recovery confirmed that the three visible `sample_then_corrupt` BC runs did complete training:
+  - `eta = 0.05`, `0.1`, `0.2`
+  - `ckpt_iter = 125000`
+  - `completed.txt = iter_num=125000`
+  - `max_iters = 1000000`
+  - `compile = True`
+  - `s5_eval_batch_size = 256`
+- later W&B recovery supplied explicit final clean-val metrics:
+  - `eta = 0.05`
+    - `run_id = 477g5ncx`
+    - `state = finished`
+    - `val/loss = 0.02488`
+    - `val/cot_exact = 1.0000`
+    - `val/clean_full_exact = 1.0000`
+    - `val/clean_final_exact = 1.0000`
+  - `eta = 0.1`
+    - `run_id = ku3n51b4`
+    - `state = finished`
+    - `val/loss = 0.04985`
+    - `val/cot_exact = 0.9982`
+    - `val/clean_full_exact = 0.9982`
+    - `val/clean_final_exact = 0.9982`
+  - `eta = 0.2`
+    - `run_id = fibj58jy`
+    - `state = finished`
+    - `val/loss = 0.10213`
+    - `val/cot_exact = 0.9874`
+    - `val/clean_full_exact = 0.9874`
+    - `val/clean_final_exact = 0.9874`
 - because the clean-sampled teacher remains near-perfect at `eta = 0`, the sampled-teacher ablation is not a fundamentally different experiment due to sampling alone; the main destructive factor is still the corruption law
+
+Current interpretation note:
+
+- these `sample_then_corrupt` offline BC results are much stronger than one might guess from the raw sampled noisy-teacher rollout diagnostics alone
+- in particular, they now form the most relevant offline MC baseline for comparison against `forward_kl_simple`
 
 ## 5. Native Online OPD Runs (`train_opd.py`)
 
@@ -296,45 +477,175 @@ Currently recoverable metrics:
 - I do not have the actual train / val metrics for these OPD runs in the current workspace
 - what is confirmed is only that these run families were launched, and for some settings multiple runs with the same display name exist
 
-Recovered later from dev-node logs / W&B summaries:
+Recovered later from dev-node logs / local output inspection:
 
-- `forward_kl_simple`, `eta = 0.8`, observed final summary at `iter = 110000`:
-  - `val/loss = 0.74424`
-  - `val/cot_exact = 0.2786`
-  - `val/clean_full_exact = 0.2786`
-  - `val/clean_final_exact = 0.3018`
-- `forward_kl_full`, `eta = 0.8`, observed final summary at `iter = 110000`:
-  - `val/loss = 0.71366`
-  - `val/cot_exact = 0.9080`
-  - `val/clean_full_exact = 0.9080`
-  - `val/clean_final_exact = 0.9094`
+- `forward_kl_full`
+  - `eta = 0.05`
+    - `iter = 125000`
+    - `val/loss = 0.02676`
+    - `val/cot_exact = 0.9996`
+    - `val/clean_full_exact = 0.9996`
+    - `val/clean_final_exact = 0.9996`
+  - `eta = 0.1`
+    - `iter = 125000`
+    - `val/loss = 0.05362`
+    - `val/cot_exact = 0.9978`
+    - `val/clean_full_exact = 0.9978`
+    - `val/clean_final_exact = 0.9978`
+  - `eta = 0.2`
+    - `iter = 125000`
+    - `val/loss = 0.11314`
+    - `val/cot_exact = 0.9912`
+    - `val/clean_full_exact = 0.9912`
+    - `val/clean_final_exact = 0.9920`
+  - `eta = 0.3`
+    - `iter = 125000`
+    - `val/loss = 0.18354`
+    - `val/cot_exact = 0.9874`
+    - `val/clean_full_exact = 0.9874`
+    - `val/clean_final_exact = 0.9884`
+  - `eta = 0.4`
+    - `iter = 125000`
+    - `val/loss = 0.26317`
+    - `val/cot_exact = 0.9774`
+    - `val/clean_full_exact = 0.9774`
+    - `val/clean_final_exact = 0.9784`
+  - `eta = 0.5`
+    - `iter = 125000`
+    - `val/loss = 0.35154`
+    - `val/cot_exact = 0.9728`
+    - `val/clean_full_exact = 0.9728`
+    - `val/clean_final_exact = 0.9738`
+  - `eta = 0.6`
+    - `iter = 125000`
+    - `val/loss = 0.45356`
+    - `val/cot_exact = 0.9696`
+    - `val/clean_full_exact = 0.9696`
+    - `val/clean_final_exact = 0.9706`
+  - `eta = 0.7`
+    - `iter = 125000`
+    - `val/loss = 0.57080`
+    - `val/cot_exact = 0.9560`
+    - `val/clean_full_exact = 0.9560`
+    - `val/clean_final_exact = 0.9570`
+  - `eta = 0.8`
+    - `iter = 125000`
+    - `val/loss = 0.71447`
+    - `val/cot_exact = 0.9666`
+    - `val/clean_full_exact = 0.9666`
+    - `val/clean_final_exact = 0.9684`
+  - `eta = 0.9`
+    - `iter = 125000`
+    - `val/loss = 0.90635`
+    - `val/cot_exact = 0.6366`
+    - `val/clean_full_exact = 0.6364`
+    - `val/clean_final_exact = 0.6418`
 
-Recovered status checks from the dev node:
+- `forward_kl_simple`
+  - `eta = 0.05`
+    - `iter = 125000`
+    - `val/loss = 0.02660`
+    - `val/cot_exact = 0.9986`
+    - `val/clean_full_exact = 0.9986`
+    - `val/clean_final_exact = 0.9986`
+  - `eta = 0.1`
+    - `iter = 125000`
+    - `val/loss = 0.05021`
+    - `val/cot_exact = 0.9982`
+    - `val/clean_full_exact = 0.9982`
+    - `val/clean_final_exact = 0.9982`
+  - `eta = 0.2`
+    - `iter = 125000`
+    - `val/loss = 0.11239`
+    - `val/cot_exact = 0.9278`
+    - `val/clean_full_exact = 0.9278`
+    - `val/clean_final_exact = 0.9280`
+  - `eta = 0.3`
+    - `iter = 125000`
+    - `val/loss = 0.17792`
+    - `val/cot_exact = 0.8932`
+    - `val/clean_full_exact = 0.8932`
+    - `val/clean_final_exact = 0.8944`
+  - `eta = 0.4`
+    - `iter = 125000`
+    - `val/loss = 0.25450`
+    - `val/cot_exact = 0.7012`
+    - `val/clean_full_exact = 0.7012`
+    - `val/clean_final_exact = 0.7090`
+  - `eta = 0.5`
+    - `iter = 125000`
+    - `val/loss = 0.33869`
+    - `val/cot_exact = 0.6938`
+    - `val/clean_full_exact = 0.6938`
+    - `val/clean_final_exact = 0.7004`
+  - `eta = 0.6`
+    - `iter = 125000`
+    - `val/loss = 0.45007`
+    - `val/cot_exact = 0.6780`
+    - `val/clean_full_exact = 0.6780`
+    - `val/clean_final_exact = 0.6842`
+  - `eta = 0.7`
+    - `iter = 125000`
+    - `val/loss = 0.57270`
+    - `val/cot_exact = 0.5576`
+    - `val/clean_full_exact = 0.5576`
+    - `val/clean_final_exact = 0.5750`
+  - `eta = 0.8`
+    - `iter = 125000`
+    - `val/loss = 0.75663`
+    - `val/cot_exact = 0.1120`
+    - `val/clean_full_exact = 0.1120`
+    - `val/clean_final_exact = 0.1406`
+  - `eta = 0.9`
+    - `iter = 125000`
+    - `val/loss = 0.99095`
+    - `val/cot_exact = 0.0`
+    - `val/clean_full_exact = 0.0`
+    - `val/clean_final_exact = 0.0032`
 
-- `forward_kl_simple`, `eta = 0.8`:
-  - `out_dir` present
-  - `completed.txt` present
-  - `ckpt.pt` present
-- `forward_kl_full`, `eta = 0.8`:
-  - `out_dir` present
-  - `completed.txt` present
-  - `ckpt.pt` present
-- `forward_kl_simple`, `eta = 0.9`:
-  - no `out_dir`, no `completed.txt`, no `ckpt.pt`, no log at the time of inspection
-- `forward_kl_full`, `eta = 0.9`:
-  - no `out_dir`, no `completed.txt`, no `ckpt.pt`, no log at the time of inspection
+- direct local output inspection also explicitly confirmed for `eta = 0.9`:
+  - `forward_kl_simple`
+    - `out_dir` present
+    - `completed.txt` present
+    - `ckpt.pt` present
+    - `last_eval.json` matched the recovered final metrics above at `iter = 125000`
+  - `forward_kl_full`
+    - `out_dir` present
+    - `completed.txt` present
+    - `ckpt.pt` present
+    - `last_eval.json` matched the recovered final metrics above at `iter = 125000`
+
+Recovered run-config details for both forward-KL OPD families:
+
+- `ckpt_iter = 125000` for all recovered `eta = 0.05` through `0.9` runs above
+- `max_iters = 125000`
+- `compile = False`
+- `eval_batch_size = 512`
+- W&B also shows that some earlier OPD runs at `eta = 0.2` and `0.3` crashed before the later successful `125000`-step runs:
+  - `forward_kl_simple`, `eta = 0.2`:
+    - crashed run `ywtdu7kf`, `max_iters = 110000`, `eval_batch_size = 256`
+    - finished run `bk6g7mti`, `max_iters = 125000`, `eval_batch_size = 512`
+  - `forward_kl_full`, `eta = 0.2`:
+    - crashed runs `3ppzpfyk` and `i1on9pzq`, both at `max_iters = 110000`, `eval_batch_size = 256`
+    - finished run `2htd8d5x`, `max_iters = 125000`, `eval_batch_size = 512`
+  - `forward_kl_simple`, `eta = 0.3`:
+    - crashed run `7q2vktpm`, `max_iters = 110000`, `eval_batch_size = 1024`
+    - finished run `lafk67b8`, `max_iters = 125000`, `eval_batch_size = 512`
+  - `forward_kl_full`, `eta = 0.3`:
+    - crashed run `8o1dukjf`, `max_iters = 110000`, `eval_batch_size = 1024`
+    - finished run `rd1ijmar`, `max_iters = 125000`, `eval_batch_size = 512`
 
 This means:
 
-- `eta = 0.8` definitely finished for both forward-KL variants
-- `eta = 0.9` had not yet been launched at the time of that inspection
-- at high noise, `forward_kl_full` was dramatically stronger than `forward_kl_simple` on the clean validation set
+- all recovered forward-KL OPD runs from `eta = 0.05` through `0.9` reached `125000` steps
+- `forward_kl_full` stays very strong through `eta = 0.8`, while `forward_kl_simple` degrades much earlier
+- at high noise, `forward_kl_full` is dramatically stronger than `forward_kl_simple` on the clean validation set
 
 Important experiment notes / caveats:
 
 - Some native OPD runs were initially launched with `MAX_ITERS = 110000`, while the noisy offline BC comparisons used `125000`.
 - Those OPD runs were later resumed exactly from their saved checkpoints to `125000` rather than restarted from scratch.
-- The recovered `eta = 0.8` summaries above are explicitly the `110000`-step summaries seen before the later top-off.
+- Earlier `110000`-step snapshots were observed during debugging, but the recovered metrics now recorded above are the later `125000`-step values.
 - Historical duplicate W&B display names exist for some OPD runs, so the W&B run ID is the real unique identifier when reconstructing exact histories.
 
 ### 5.2 Comparison framing, current impressions, and TODOs
@@ -355,10 +666,11 @@ Current empirical impressions from the later run inspection:
 
 - The online MC estimator (`forward_kl_simple`) appears stronger than the offline BC MC baseline on a per-`eta` basis.
 - In several cases, the online MC method appears competitive with offline BC at the next lower `eta`.
-- The strongest observed example so far on the full-distribution side is that `forward_kl_full` at `eta = 0.4` appears to beat offline BC at `eta = 0.3`, `0.2`, and `0.1`.
+- From the later W&B inspection discussed with the advisor, the strongest qualitative full-distribution example so far is that `forward_kl_full` at `eta = 0.4` appeared to outperform the offline BC MC baseline even at lower `eta` values such as `0.3`, `0.2`, and `0.1`.
 - The same qualitative pattern appears to hold at other `eta` values as well.
+- The recovered `sample_then_corrupt` offline BC results now show that the offline MC baseline is itself quite strong at low and moderate `eta`, which makes the online-vs-offline MC comparison more meaningful and worth tabulating carefully.
 
-However, those latter full-distribution comparisons should be interpreted cautiously until the missing matched baselines below are run.
+However, those latter full-distribution comparisons should be interpreted cautiously until the missing matched baselines below are run and tabulated explicitly.
 
 TODOs for a cleaner comparison matrix:
 
@@ -372,7 +684,6 @@ TODOs for a cleaner comparison matrix:
 - TODO: for TM OPD / reverse-KL, compare both:
   - the sampled / MC reverse-KL variant emphasized in the blog discussion
   - the full reverse-KL variant using teacher next-token probabilities
-- TODO: fold the later `125000`-step top-off results and `eta = 0.9` outcomes back into this log once those runs are complete and recovered from W&B or dev-node outputs.
 
 Comments:
 
@@ -558,12 +869,7 @@ These items are not fully reconstructable from the current workspace alone:
 
 - original training metrics for `s5-cot-len21-depth1-400k`
 - most of the clean offline BC subset-sweep metrics
-- noisy BC checkpoint metrics for etas above `0.2`
-- final train / val metrics for the visible `sample-then-corrupt` BC runs
-- many final train / val metrics for the native OPD sweeps
-  - explicit recovered exceptions now include `forward_kl_simple` and `forward_kl_full` at `eta = 0.8`
 - exact compile state and exact eval-batch settings for historical OPD runs whose names do not encode them
-- final outcomes for the later queued / relaunched OPD jobs, especially `eta = 0.9`, were not yet folded back into this note at the time of writing
 - a fully matched on-policy vs off-policy comparison matrix is still missing:
   - online MC vs offline BC MC at matched `eta`
   - online full-distribution vs offline full-distribution at matched `eta`
