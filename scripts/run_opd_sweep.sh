@@ -42,15 +42,46 @@ mkdir -p "${LOG_DIR}"
 extract_wandb_run_id() {
   local out_dir="$1"
   local log_path="$2"
+  local run_name="$3"
   local state_path="${out_dir}/wandb_state.json"
+  local fallback_id
+  fallback_id="$(python3 - <<PY
+import hashlib
+from pathlib import Path
+project = "${WANDB_PROJECT}"
+out_dir = Path("${out_dir}").resolve()
+print(hashlib.sha1(f"{project}:{out_dir}".encode("utf-8")).hexdigest()[:16])
+PY
+)"
 
-  if [[ -f "${state_path}" ]]; then
-    grep -oE '"run_id"[[:space:]]*:[[:space:]]*"[^"]+"' "${state_path}" | tail -n1 | sed -E 's/.*"([^"]+)".*/\1/'
-    return 0
-  fi
   if [[ -f "${log_path}" ]]; then
-    grep -oE 'runs/[A-Za-z0-9]+' "${log_path}" | tail -n1 | cut -d/ -f2
-    return 0
+    local log_run_id
+    log_run_id="$(grep -oE 'runs/[A-Za-z0-9]+' "${log_path}" | tail -n1 | cut -d/ -f2)"
+    if [[ -n "${log_run_id}" ]]; then
+      echo "${log_run_id}"
+      return 0
+    fi
+  fi
+  if compgen -G 'wandb/run-*' > /dev/null; then
+    local cache_run_id
+    cache_run_id="$(
+      grep -R -l -F -- "${run_name}" wandb/run-* 2>/dev/null \
+      | sed -nE 's#.*wandb/run-[^/]*-([A-Za-z0-9]+)/.*#\1#p' \
+      | grep -v "^${fallback_id}$" \
+      | tail -n1
+    )"
+    if [[ -n "${cache_run_id}" ]]; then
+      echo "${cache_run_id}"
+      return 0
+    fi
+  fi
+  if [[ -f "${state_path}" ]]; then
+    local state_run_id
+    state_run_id="$(grep -oE '"run_id"[[:space:]]*:[[:space:]]*"[^"]+"' "${state_path}" | tail -n1 | sed -E 's/.*"([^"]+)".*/\1/')"
+    if [[ -n "${state_run_id}" && "${state_run_id}" != "${fallback_id}" ]]; then
+      echo "${state_run_id}"
+      return 0
+    fi
   fi
   return 1
 }
@@ -65,6 +96,7 @@ for ETA in ${ETAS}; do
   ETA_TAG="${ETA/./p}"
   OUT_DIR="out-s5-opd-${OBJECTIVE}-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}"
   LOG_PATH="${LOG_DIR}/s5_opd_${OBJECTIVE}_n${SUBSET_SIZE}_eta${ETA_TAG}_${TEACHER_LAW}_${TEMP_TAG}.log"
+  RUN_NAME="s5-opd-${OBJECTIVE}-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}"
   EXTRA_ARGS=()
   COMPLETED_PATH="${OUT_DIR}/completed.txt"
   CKPT_PATH="${OUT_DIR}/ckpt.pt"
@@ -96,11 +128,12 @@ for ETA in ${ETAS}; do
   fi
   if [[ "${WANDB_LOG}" == "1" ]]; then
     EXTRA_ARGS+=(--wandb_log)
-    if WANDB_RUN_ID="$(extract_wandb_run_id "${OUT_DIR}" "${LOG_PATH}")" && [[ -n "${WANDB_RUN_ID}" ]]; then
+    if WANDB_RUN_ID="$(extract_wandb_run_id "${OUT_DIR}" "${LOG_PATH}" "${RUN_NAME}")" && [[ -n "${WANDB_RUN_ID}" ]]; then
       EXTRA_ARGS+=(--wandb_run_id="${WANDB_RUN_ID}")
     fi
   fi
 
+  echo "==== $(date '+%Y-%m-%d %H:%M:%S') launching ${RUN_NAME} ====" | tee -a "${LOG_PATH}"
   python -u train_opd.py \
     --teacher_checkpoint="${TEACHER_CHECKPOINT}" \
     --prompt_bank_dir="${PROMPT_BANK_DIR}" \
@@ -124,7 +157,7 @@ for ETA in ${ETAS}; do
     --dtype="${DTYPE}" \
     --eps="${EPS}" \
     --wandb_project="${WANDB_PROJECT}" \
-    --wandb_run_name="s5-opd-${OBJECTIVE}-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}" \
+    --wandb_run_name="${RUN_NAME}" \
     "${EXTRA_ARGS[@]}" \
-    2>&1 | tee "${LOG_PATH}"
+    2>&1 | tee -a "${LOG_PATH}"
 done
