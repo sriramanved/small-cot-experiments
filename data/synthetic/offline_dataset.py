@@ -1,4 +1,5 @@
 import os
+import json
 
 import torch
 
@@ -18,29 +19,94 @@ def _effective_n(total_n, subset_size, split):
     return subset_size
 
 
-def _load_split(data_dir, split):
-    key = (data_dir, split)
+def _load_meta(data_dir):
+    key = (data_dir, "meta")
     if key not in _CACHE:
-        x = torch.load(os.path.join(data_dir, f"{split}_x.pt"), map_location="cpu")
-        y = torch.load(os.path.join(data_dir, f"{split}_y.pt"), map_location="cpu")
-        _CACHE[key] = (x, y)
+        meta_path = os.path.join(data_dir, "meta.json")
+        with open(meta_path, "r", encoding="utf-8") as f:
+            _CACHE[key] = json.load(f)
     return _CACHE[key]
 
 
-def _move(x, y, device):
+def _validate_teacher_probs(meta, x, y, teacher_probs, data_dir):
+    if meta.get("train_target_type") != "teacher_probs":
+        raise ValueError(
+            f"offline_target_type='teacher_probs' requested for {data_dir}, "
+            f"but dataset meta train_target_type={meta.get('train_target_type')!r}"
+        )
+    if teacher_probs is None:
+        raise ValueError(
+            f"Dataset {data_dir} is missing train_teacher_probs.pt required for "
+            "offline_target_type='teacher_probs'"
+        )
+    if teacher_probs.ndim != 3:
+        raise ValueError(
+            f"Expected train_teacher_probs.pt to have rank 3, got shape "
+            f"{tuple(teacher_probs.shape)}"
+        )
+    if teacher_probs.size(0) != x.size(0):
+        raise ValueError(
+            f"train_teacher_probs rows {teacher_probs.size(0)} do not match "
+            f"train_x rows {x.size(0)}"
+        )
+    cot_len = int(meta["cot_len"])
+    if teacher_probs.size(1) != cot_len:
+        raise ValueError(
+            f"train_teacher_probs target_len {teacher_probs.size(1)} does not "
+            f"match meta cot_len {cot_len}"
+        )
+    if x.size(1) != y.size(1):
+        raise ValueError(
+            f"train_x sequence length {x.size(1)} does not match train_y "
+            f"sequence length {y.size(1)}"
+        )
+    expected_seq_len = int(meta["prompt_len"]) + cot_len - 1
+    if x.size(1) != expected_seq_len:
+        raise ValueError(
+            f"train_x sequence length {x.size(1)} does not match expected "
+            f"prompt_len+cot_len-1={expected_seq_len}"
+        )
+
+
+def _load_split(data_dir, split, target_type="tokens"):
+    key = (data_dir, split, target_type)
+    if key not in _CACHE:
+        x = torch.load(os.path.join(data_dir, f"{split}_x.pt"), map_location="cpu")
+        y = torch.load(os.path.join(data_dir, f"{split}_y.pt"), map_location="cpu")
+        teacher_probs = None
+        if split == "train" and target_type == "teacher_probs":
+            meta = _load_meta(data_dir)
+            teacher_probs_path = os.path.join(data_dir, "train_teacher_probs.pt")
+            teacher_probs = torch.load(teacher_probs_path, map_location="cpu")
+            _validate_teacher_probs(meta, x, y, teacher_probs, data_dir)
+        _CACHE[key] = (x, y, teacher_probs)
+    return _CACHE[key]
+
+
+def _move(x, y, device, teacher_probs=None):
     x = x.long()
     y = y.long()
     if "cuda" in str(device):
         x = x.pin_memory().to(device, non_blocking=True)
         y = y.pin_memory().to(device, non_blocking=True)
+        if teacher_probs is not None:
+            teacher_probs = teacher_probs.pin_memory().to(
+                device,
+                dtype=torch.float32,
+                non_blocking=True,
+            )
     else:
         x = x.to(device)
         y = y.to(device)
-    return x, y
+        if teacher_probs is not None:
+            teacher_probs = teacher_probs.to(device=device, dtype=torch.float32)
+    if teacher_probs is None:
+        return x, y
+    return x, y, teacher_probs
 
 
 def reset_train_epoch(data_dir, shuffle=True, seed=None, subset_size=None):
-    x_all, _ = _load_split(data_dir, "train")
+    x_all, _, _ = _load_split(data_dir, "train")
     n = _effective_n(x_all.size(0), subset_size, "train")
 
     if shuffle:
@@ -77,18 +143,21 @@ def set_train_epoch_state(data_dir, state):
     }
 
 
-def get_batch(split, batch_size, device, data_dir, subset_size=None):
-    x_all, y_all = _load_split(data_dir, split)
+def get_batch(split, batch_size, device, data_dir, subset_size=None, target_type="tokens"):
+    x_all, y_all, teacher_probs_all = _load_split(data_dir, split, target_type=target_type)
     n = _effective_n(x_all.size(0), subset_size, split)
     idx = torch.randint(n, (batch_size,))
-    return _move(x_all[idx], y_all[idx], device)
+    teacher_probs = None
+    if teacher_probs_all is not None:
+        teacher_probs = teacher_probs_all[idx]
+    return _move(x_all[idx], y_all[idx], device, teacher_probs=teacher_probs)
 
 
-def get_train_batch_once(batch_size, device, data_dir, subset_size=None):
+def get_train_batch_once(batch_size, device, data_dir, subset_size=None, target_type="tokens"):
     if data_dir not in _STATE:
         reset_train_epoch(data_dir, shuffle=True, subset_size=subset_size)
 
-    x_all, y_all = _load_split(data_dir, "train")
+    x_all, y_all, teacher_probs_all = _load_split(data_dir, "train", target_type=target_type)
     st = _STATE[data_dir]
 
     if st["pos"] >= st["n"]:
@@ -97,12 +166,18 @@ def get_train_batch_once(batch_size, device, data_dir, subset_size=None):
     idx = st["perm"][st["pos"]: st["pos"] + batch_size]
     st["pos"] += idx.numel()
 
-    return _move(x_all[idx], y_all[idx], device)
+    teacher_probs = None
+    if teacher_probs_all is not None:
+        teacher_probs = teacher_probs_all[idx]
+    return _move(x_all[idx], y_all[idx], device, teacher_probs=teacher_probs)
 
 
-def iter_eval_batches(split, batch_size, device, data_dir, subset_size=None):
-    x_all, y_all = _load_split(data_dir, split)
+def iter_eval_batches(split, batch_size, device, data_dir, subset_size=None, target_type="tokens"):
+    x_all, y_all, teacher_probs_all = _load_split(data_dir, split, target_type=target_type)
     n = _effective_n(x_all.size(0), subset_size, split)
     for start in range(0, n, batch_size):
         idx = slice(start, min(start + batch_size, n))
-        yield _move(x_all[idx], y_all[idx], device)
+        teacher_probs = None
+        if teacher_probs_all is not None:
+            teacher_probs = teacher_probs_all[idx]
+        yield _move(x_all[idx], y_all[idx], device, teacher_probs=teacher_probs)

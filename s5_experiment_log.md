@@ -290,6 +290,34 @@ Common run family:
   - `s5_eval_batch_size = 256`
   - `save_every = 0`
 
+Implemented matched full-distribution off-policy variant:
+
+- the same sweep surface now also supports an offline full-distribution BC variant for the `distributional_noise` comparison
+- render-time setting:
+  - `ROLLOUT_MODE=sample_then_corrupt`
+  - `TARGET_MODE=teacher_probs`
+- train-time setting:
+  - `offline_target_type=teacher_probs`
+- dataset artifacts for this mode:
+  - standard files are still saved:
+    - `train_x.pt`
+    - `train_y.pt`
+    - `val_x.pt`
+    - `val_y.pt`
+  - plus:
+    - `train_teacher_probs.pt`
+- the saved supervision for this mode is the full noisy-teacher next-token distribution at each teacher-visited prefix
+- current implementation scope:
+  - S5 only
+  - teacher law fixed to `distributional_noise`
+  - trajectory law fixed to `sample_then_corrupt`
+- naming prefixes for this family:
+  - dataset prefix: `s5_noisy_offline_full_dist_sample_then_corrupt`
+  - output prefix: `out-s5-noisy-bc-full-dist-sample-then-corrupt`
+  - run prefix: `s5-noisy-bc-full-dist-sample-then-corrupt`
+- this gives the direct off-policy full-distribution counterpart to NAIL-OPD (full KL distributional info)
+- no completed full-distribution sweep metrics are recorded here yet
+
 Related diagnostics:
 
 - clean teacher sampled rollout sanity check at `eta = 0.0` (`clean_sampled`, no corruption, `5000` val prompts, `10` seeds):
@@ -348,7 +376,8 @@ Current interpretation note:
 
 - these `sample_then_corrupt` offline BC results are much stronger than one might guess from the raw sampled noisy-teacher rollout diagnostics alone
 - in particular, they now form the most relevant offline MC baseline for comparison against NAIL-OPD (MC version)
-- TODO: finish these runs for higher etas. 
+- the matched offline full-distribution BC pipeline for the same `sample_then_corrupt` / `distributional_noise` setting has now been implemented, but its sweep results are not yet summarized here
+- TODO: finish these MC runs for higher etas. 
 
 ## 5. Native Online OPD / NAIL-OPD Runs (`train_opd.py`)
 
@@ -537,13 +566,14 @@ Current empirical impressions:
 - in several cases, the online MC method appears competitive with offline BC at the next lower `eta`
 - the strongest qualitative full-distribution example so far is that NAIL-OPD (full KL distributional info) at `eta = 0.4` appears to outperform the offline BC MC baseline even at lower `eta` values such as `0.3`, `0.2`, and `0.1`, and the same qualitative pattern appears to hold at other `eta` values as well
 - the `sample_then_corrupt` offline BC baseline is itself quite strong at low and moderate `eta`, which makes the online-vs-offline MC comparison more meaningful and worth tabulating carefully
+- the matched offline full-distribution BC pipeline has now been implemented for the `distributional_noise` / `sample_then_corrupt` setting, so the remaining missing piece there is the actual sweep and table, not the code path itself
 
 These full-distribution comparisons should still be interpreted cautiously until the missing matched baselines below are run and tabulated explicitly.
 
 TODOs for a cleaner comparison matrix:
 
 - TODO: compare NAIL-OPD (MC version) directly against the offline BC MC baseline at matched `eta`, since this is the cleanest apples-to-apples on-policy vs off-policy comparison
-- TODO: add an offline BC variant that trains against full next-token teacher distributions, then compare it directly to NAIL-OPD (full KL distributional info)
+- TODO: run the offline BC full-distribution sweep and compare it directly to NAIL-OPD (full KL distributional info)
 - TODO: produce a matched per-`eta` table for:
   - offline BC MC
   - NAIL-OPD (MC version)
@@ -587,12 +617,12 @@ Sweep matrix:
 | On-policy MC | OPD (MC version), full `eta` sweep, with sampled/corrupted noisy expert | sample-then-corrupt / sampled-corrupted | In Progress | This is the current OPD MC sweep that is running |
 | Off-policy greedy-corrupt baseline | Offline BC, `greedy_then_corrupt`, full `eta` sweep | greedy-then-corrupt | Done | Completed off-policy greedy-corrupt baseline |
 | On-policy full-distribution | NAIL-OPD (full KL distributional info), full `eta` sweep | `distributional_noise` | Done | Completed online full-distribution family |
-| Off-policy full-distribution match | Offline BC trained on full teacher next-token distributions, full `eta` sweep | `distributional_noise` | TODO | Requires implementation first; this is the direct off-policy match to NAIL-OPD (full KL distributional info) |
+| Off-policy full-distribution match | Offline BC trained on full teacher next-token distributions, full `eta` sweep | `distributional_noise` | TODO | Implemented and ready to launch; this is the direct off-policy match to NAIL-OPD (full KL distributional info) |
 | On-policy full-distribution | OPD (full KL distributional info), full `eta` sweep | `distributional_noise` | TODO | Requires implementing the full-information OPD objective; this is the OPD analogue of the MC-vs-full comparison |
 | On-policy MC greedy-corrupt match | NAIL-OPD (MC version), full `eta` sweep | `corrupted_greedy` | TODO | Direct online match to completed offline `greedy_then_corrupt` BC |
 | On-policy MC greedy-corrupt match | OPD (MC version), full `eta` sweep | `corrupted_greedy` | TODO | Needed if the OPD MC family is to be matched to offline `greedy_then_corrupt` as well |
 | On-policy full-distribution greedy-corrupt ablation | NAIL-OPD (full KL distributional info), full `eta` sweep | `corrupted_greedy` | TODO | Needed if teacher-law ablations are to be symmetric in the full-information setting |
-| Off-policy full-distribution greedy-corrupt match | Offline BC trained on full teacher next-token distributions, full `eta` sweep | `corrupted_greedy` | TODO | Also requires the new offline full-distribution pipeline |
+| Off-policy full-distribution greedy-corrupt match | Offline BC trained on full teacher next-token distributions, full `eta` sweep | `corrupted_greedy` | TODO | Current implementation does not support this teacher-law family yet |
 | On-policy full-distribution greedy-corrupt ablation | OPD (full KL distributional info), full `eta` sweep | `corrupted_greedy` | TODO | Full-information OPD teacher-law ablation |
 
 Priority order for the unfinished sweeps:

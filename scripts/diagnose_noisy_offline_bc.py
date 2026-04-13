@@ -35,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eta", type=float, default=None)
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--train_decode_mode", type=str, default=None)
+    parser.add_argument("--train_target_type", type=str, default=None)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--eval_iters", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=64)
@@ -60,6 +61,7 @@ def summarize_dataset(
     expected_eta: float | None,
     expected_teacher_checkpoint: str | None,
     expected_train_decode_mode: str | None,
+    expected_train_target_type: str | None,
 ) -> dict[str, object]:
     meta = load_meta(dataset_dir)
     prompt_bank = load_prompt_bank(prompt_bank_dir)
@@ -120,6 +122,10 @@ def summarize_dataset(
     if expected_train_decode_mode is not None:
         summary["expected_train_decode_mode_matches"] = (
             str(meta["train_decode_mode"]) == expected_train_decode_mode
+        )
+    if expected_train_target_type is not None:
+        summary["expected_train_target_type_matches"] = (
+            str(meta.get("train_target_type", "tokens")) == expected_train_target_type
         )
 
     return summary
@@ -185,6 +191,7 @@ def main() -> None:
         expected_eta=args.eta,
         expected_teacher_checkpoint=args.teacher_checkpoint,
         expected_train_decode_mode=args.train_decode_mode,
+        expected_train_target_type=args.train_target_type,
     )
 
     print("Dataset checks:")
@@ -201,6 +208,8 @@ def main() -> None:
         print(bool_line("meta teacher checkpoint matches expected", dataset_summary["expected_teacher_checkpoint_matches"]))
     if "expected_train_decode_mode_matches" in dataset_summary:
         print(bool_line("meta train_decode_mode matches expected", dataset_summary["expected_train_decode_mode_matches"]))
+    if "expected_train_target_type_matches" in dataset_summary:
+        print(bool_line("meta train_target_type matches expected", dataset_summary["expected_train_target_type_matches"]))
 
     print("\nDataset meta:")
     print(json.dumps(dataset_summary["meta"], indent=2))
@@ -247,6 +256,8 @@ def main() -> None:
             required_checks.append(dataset_summary["expected_teacher_checkpoint_matches"])
         if "expected_train_decode_mode_matches" in dataset_summary:
             required_checks.append(dataset_summary["expected_train_decode_mode_matches"])
+        if "expected_train_target_type_matches" in dataset_summary:
+            required_checks.append(dataset_summary["expected_train_target_type_matches"])
         if not all(required_checks):
             raise SystemExit(1)
 

@@ -94,6 +94,7 @@ offline_single_epoch = False
 offline_eval_full = True
 offline_train_subset_size = 0
 offline_train_shuffle = False
+offline_target_type = 'tokens'
 final_eval_on_exit = False
 # -----------------------------------------------------------------------------
 config_keys = [k for k, v in globals().items() if not k.startswith(
@@ -188,6 +189,7 @@ if is_synthetic_offline_dataset(dataset):
     )
 if synthetic_task == 's5':
     from data.s5_cot.task import VOCAB_SIZE as s5_vocab_size
+    from data.s5_cot.opd import forward_kl_full_loss
     from data.s5_cot.task import (
         estimate_saved_clean_train_loss as s5_estimate_saved_clean_train_loss,
         evaluate_saved_clean_s5_metrics,
@@ -211,6 +213,47 @@ if is_synthetic_offline_dataset(dataset):
     subset_msg = offline_train_subset_size if offline_train_subset_size > 0 else "full"
     print(f"offline dataset dir: {data_dir}, requested train subset: {subset_msg}")
 
+offline_dataset_meta = None
+if is_synthetic_offline_dataset(dataset):
+    meta_path = os.path.join(data_dir, 'meta.json')
+    if os.path.exists(meta_path):
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            offline_dataset_meta = json.load(f)
+
+if offline_target_type not in ('tokens', 'teacher_probs'):
+    raise ValueError(
+        f"offline_target_type must be 'tokens' or 'teacher_probs', got "
+        f"{offline_target_type!r}"
+    )
+if offline_target_type == 'teacher_probs':
+    if not is_s5_offline_dataset(dataset):
+        raise ValueError(
+            "offline_target_type='teacher_probs' is currently only supported "
+            "for S5 offline datasets"
+        )
+    if offline_dataset_meta is None:
+        raise ValueError(
+            f"offline_target_type='teacher_probs' requires {data_dir}/meta.json"
+        )
+    if offline_dataset_meta.get("train_target_type") != "teacher_probs":
+        raise ValueError(
+            f"Dataset {dataset} has train_target_type="
+            f"{offline_dataset_meta.get('train_target_type')!r}, expected "
+            "'teacher_probs'"
+        )
+    if offline_dataset_meta.get("teacher_law") != "distributional_noise":
+        raise ValueError(
+            f"Dataset {dataset} has teacher_law="
+            f"{offline_dataset_meta.get('teacher_law')!r}, expected "
+            "'distributional_noise' for offline full-distribution BC"
+        )
+    if offline_dataset_meta.get("train_decode_mode") != "sample_then_corrupt":
+        raise ValueError(
+            f"Dataset {dataset} has train_decode_mode="
+            f"{offline_dataset_meta.get('train_decode_mode')!r}, expected "
+            "'sample_then_corrupt' for offline full-distribution BC"
+        )
+
 resolved_modadd_p = modadd_p
 resolved_modadd_m = modadd_m
 if is_modadd_offline_dataset(dataset):
@@ -228,7 +271,7 @@ config['resolved_modadd_p'] = resolved_modadd_p
 config['resolved_modadd_m'] = resolved_modadd_m
 
 
-def get_batch(split):
+def get_batch(split, target_type=None):
     if dataset == 's5_cot':
         return s5_get_batch(
             batch_size=batch_size,
@@ -244,12 +287,15 @@ def get_batch(split):
             m=resolved_modadd_m,
         )
     elif is_synthetic_offline_dataset(dataset):
+        if target_type is None:
+            target_type = offline_target_type if split == 'train' else 'tokens'
         return synthetic_offline_get_batch(
             split=split,
             batch_size=batch_size,
             device=device,
             data_dir=data_dir,
             subset_size=offline_train_subset_size,
+            target_type=target_type,
         )
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
@@ -271,6 +317,58 @@ def get_batch(split):
     else:
         x, y = x.to(device), y.to(device)
     return x, y
+
+
+def unpack_batch(batch):
+    if len(batch) == 2:
+        X, Y = batch
+        teacher_probs = None
+    elif len(batch) == 3:
+        X, Y, teacher_probs = batch
+    else:
+        raise ValueError(f"Unexpected batch tuple length: {len(batch)}")
+    return X, Y, teacher_probs
+
+
+def offline_teacher_prob_loss(model_ref, X, Y, teacher_probs):
+    if teacher_probs is None:
+        raise ValueError("teacher_probs batch is required for offline teacher-prob loss")
+    logits, _ = model_ref(X, return_full_logits=True)
+    target_len = int(teacher_probs.size(1))
+    if logits.size(1) < target_len:
+        raise ValueError(
+            f"Model logits length {logits.size(1)} is shorter than teacher_probs "
+            f"target_len {target_len}"
+        )
+    prefix_len = logits.size(1) - target_len
+    expected_mask = torch.zeros_like(Y, dtype=torch.bool)
+    expected_mask[:, prefix_len:] = True
+    actual_mask = Y.ne(-1)
+    if not torch.equal(actual_mask, expected_mask):
+        raise ValueError(
+            "Offline teacher-prob targets require the continuation region to be "
+            "the final contiguous suffix of Y"
+        )
+    student_logits = logits[:, prefix_len:, :]
+    if student_logits.size(2) != teacher_probs.size(2):
+        raise ValueError(
+            f"Teacher probs vocab size {teacher_probs.size(2)} does not match "
+            f"model vocab size {student_logits.size(2)}"
+        )
+    loss, stats = forward_kl_full_loss(
+        student_logits,
+        teacher_probs=teacher_probs,
+    )
+    return logits, loss, stats
+
+
+def compute_batch_loss(model_ref, X, Y, teacher_probs=None, split='train'):
+    if teacher_probs is not None:
+        if split != 'train':
+            raise ValueError("teacher_probs batches are only supported for train split")
+        return offline_teacher_prob_loss(model_ref, X, Y, teacher_probs)
+    logits, loss = model_ref(X, Y)
+    return logits, loss, None
 
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
@@ -322,6 +420,7 @@ elif init_from == 'resume':
         'offline_single_epoch',
         'offline_train_subset_size',
         'offline_train_shuffle',
+        'offline_target_type',
     ]:
         if key in checkpoint_config and checkpoint_config[key] != globals()[key]:
             raise ValueError(
@@ -360,6 +459,13 @@ if block_size < model.config.block_size:
     # so that the checkpoint will have the right value
     model_args['block_size'] = block_size
 model.to(device)
+if offline_target_type == 'teacher_probs' and offline_dataset_meta is not None:
+    expected_vocab_size = offline_dataset_meta.get("vocab_size")
+    if expected_vocab_size is not None and int(expected_vocab_size) != int(model.config.vocab_size):
+        raise ValueError(
+            f"Dataset vocab_size={expected_vocab_size} does not match model "
+            f"vocab_size={model.config.vocab_size}"
+        )
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
@@ -392,25 +498,42 @@ def estimate_loss():
 
     if is_synthetic_offline_dataset(dataset):
         for split in ['train', 'val']:
+            split_target_type = offline_target_type if split == 'train' else 'tokens'
             if offline_eval_full:
                 losses = []
-                for X, Y in iter_eval_batches(
+                for batch in iter_eval_batches(
                     split,
                     batch_size=batch_size,
                     device=device,
                     data_dir=data_dir,
                     subset_size=offline_train_subset_size,
+                    target_type=split_target_type,
                 ):
+                    X, Y, teacher_probs = unpack_batch(batch)
                     with ctx:
-                        logits, loss = model(X, Y)
+                        _, loss, _ = compute_batch_loss(
+                            model,
+                            X,
+                            Y,
+                            teacher_probs=teacher_probs,
+                            split=split,
+                        )
                     losses.append(loss.item())
                 out[split] = sum(losses) / len(losses)
             else:
                 losses = torch.zeros(eval_iters)
                 for k in range(eval_iters):
-                    X, Y = get_batch(split)
+                    X, Y, teacher_probs = unpack_batch(
+                        get_batch(split, target_type=split_target_type)
+                    )
                     with ctx:
-                        logits, loss = model(X, Y)
+                        _, loss, _ = compute_batch_loss(
+                            model,
+                            X,
+                            Y,
+                            teacher_probs=teacher_probs,
+                            split=split,
+                        )
                     losses[k] = loss.item()
                 out[split] = losses.mean()
 
@@ -626,7 +749,7 @@ if is_synthetic_offline_dataset(dataset) and offline_single_epoch:
             subset_size=offline_train_subset_size,
         )
 else:
-    X, Y = get_batch('train')
+    X, Y, teacher_probs = unpack_batch(get_batch('train'))
 t0 = time.time()
 local_iter_num = 0  # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model  # unwrap DDP container if needed
@@ -647,12 +770,13 @@ while True:
 
     if is_synthetic_offline_dataset(dataset) and offline_single_epoch:
         try:
-            X, Y = get_train_batch_once(
+            X, Y, teacher_probs = unpack_batch(get_train_batch_once(
                 batch_size=batch_size,
                 device=device,
                 data_dir=data_dir,
                 subset_size=offline_train_subset_size,
-            )
+                target_type=offline_target_type,
+            ))
         except StopIteration:
             if final_eval_on_exit and master_process:
                 run_eval_and_checkpoint(reason="final", force_save=True)
@@ -670,14 +794,20 @@ while True:
             model.require_backward_grad_sync = (
                 micro_step == gradient_accumulation_steps - 1)
         with ctx:
-            logits, loss = model(X, Y)
+            logits, loss, _ = compute_batch_loss(
+                model,
+                X,
+                Y,
+                teacher_probs=teacher_probs,
+                split='train',
+            )
             # scale the loss to account for gradient accumulation
             loss = loss / gradient_accumulation_steps
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         if is_synthetic_offline_dataset(dataset) and offline_single_epoch:
             pass
         else:
-            X, Y = get_batch('train')
+            X, Y, teacher_probs = unpack_batch(get_batch('train'))
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
     # clip the gradient

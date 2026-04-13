@@ -43,6 +43,7 @@ def load_hf_teacher(
 
 
 ROLLOUT_MODE_CHOICES = ("greedy_then_corrupt", "sample_then_corrupt")
+TARGET_MODE_CHOICES = ("tokens", "teacher_probs")
 
 
 @torch.inference_mode()
@@ -53,11 +54,26 @@ def generate_teacher_targets(
     target_len: int,
     eta: float,
     rollout_mode: str,
+    target_mode: str,
     device: str | torch.device,
     corrupt_ids_fn: Callable[[torch.Tensor, float], torch.Tensor],
-) -> torch.Tensor:
+    teacher_probs_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    saved_teacher_probs_dtype: torch.dtype = torch.float16,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
     if rollout_mode not in ROLLOUT_MODE_CHOICES:
         raise ValueError(f"unknown rollout_mode={rollout_mode!r}")
+    if target_mode not in TARGET_MODE_CHOICES:
+        raise ValueError(f"unknown target_mode={target_mode!r}")
+    if target_mode == "teacher_probs":
+        if rollout_mode != "sample_then_corrupt":
+            raise ValueError(
+                "target_mode='teacher_probs' currently only supports "
+                "rollout_mode='sample_then_corrupt'"
+            )
+        if teacher_probs_fn is None:
+            raise ValueError(
+                "teacher_probs_fn is required when target_mode='teacher_probs'"
+            )
 
     input_ids = prompt_ids.to(device=device, dtype=torch.long, non_blocking=True)
     generated = torch.empty(
@@ -65,6 +81,13 @@ def generate_teacher_targets(
         dtype=prompt_ids.dtype,
         device=device,
     )
+    teacher_probs = None
+    if target_mode == "teacher_probs":
+        teacher_probs = torch.empty(
+            (prompt_ids.size(0), target_len, model.config.vocab_size),
+            dtype=saved_teacher_probs_dtype,
+            device="cpu",
+        )
     past_key_values = None
 
     for step in range(target_len):
@@ -73,17 +96,24 @@ def generate_teacher_targets(
             past_key_values=past_key_values,
             use_cache=True,
         )
+        step_logits = outputs.logits[:, -1:, :]
+        if teacher_probs is not None:
+            step_teacher_probs = teacher_probs_fn(step_logits)
+            teacher_probs[:, step, :] = step_teacher_probs.squeeze(1).to(
+                device="cpu",
+                dtype=saved_teacher_probs_dtype,
+            )
         if rollout_mode == "greedy_then_corrupt":
-            next_ids = torch.argmax(outputs.logits[:, -1, :], dim=-1)
+            next_ids = torch.argmax(step_logits[:, -1, :], dim=-1)
         else:
-            probs = torch.softmax(outputs.logits[:, -1, :].float(), dim=-1)
+            probs = torch.softmax(step_logits[:, -1, :].float(), dim=-1)
             next_ids = torch.multinomial(probs, num_samples=1).squeeze(1)
         next_ids = corrupt_ids_fn(next_ids, eta).to(dtype=prompt_ids.dtype)
         generated[:, step] = next_ids
         input_ids = next_ids.unsqueeze(1).to(dtype=torch.long)
         past_key_values = outputs.past_key_values
 
-    return generated.to(device="cpu", dtype=prompt_ids.dtype)
+    return generated.to(device="cpu", dtype=prompt_ids.dtype), teacher_probs
 
 
 def render_train_split(
@@ -93,33 +123,51 @@ def render_train_split(
     *,
     eta: float,
     rollout_mode: str,
+    target_mode: str,
     gen_batch_size: int,
     device: str | torch.device,
     corrupt_ids_fn: Callable[[torch.Tensor, float], torch.Tensor],
-) -> tuple[torch.Tensor, torch.Tensor]:
+    teacher_probs_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
     subset_size = int(subset_idx.numel())
     train_x = torch.empty((subset_size, prompt_bank.xy_len), dtype=prompt_bank.token_dtype)
     train_y = torch.empty((subset_size, prompt_bank.xy_len), dtype=prompt_bank.label_dtype)
+    train_teacher_probs = None
+    if target_mode == "teacher_probs":
+        if teacher_probs_fn is None:
+            raise ValueError(
+                "teacher_probs_fn is required when target_mode='teacher_probs'"
+            )
+        train_teacher_probs = torch.empty(
+            (subset_size, prompt_bank.cot_len, model.config.vocab_size),
+            dtype=torch.float16,
+        )
 
     for start in range(0, subset_size, gen_batch_size):
         end = min(start + gen_batch_size, subset_size)
         batch_idx = subset_idx[start:end]
         batch_prompt_ids = prompt_bank.clean_train_prompt_ids.index_select(0, batch_idx)
-        batch_target_ids = generate_teacher_targets(
+        batch_target_ids, batch_teacher_probs = generate_teacher_targets(
             model,
             batch_prompt_ids,
             target_len=prompt_bank.cot_len,
             eta=eta,
             rollout_mode=rollout_mode,
+            target_mode=target_mode,
             device=device,
             corrupt_ids_fn=corrupt_ids_fn,
+            teacher_probs_fn=teacher_probs_fn,
         )
         batch_x, batch_y = build_xy_from_prompt_and_target(batch_prompt_ids, batch_target_ids)
         train_x[start:end] = batch_x
         train_y[start:end] = batch_y
+        if train_teacher_probs is not None:
+            if batch_teacher_probs is None:
+                raise ValueError("batch_teacher_probs unexpectedly missing")
+            train_teacher_probs[start:end] = batch_teacher_probs
         print(f"train: rendered {end}/{subset_size}")
 
-    return train_x, train_y
+    return train_x, train_y, train_teacher_probs
 
 
 def build_oracle_val_split(prompt_bank: PromptBank) -> tuple[torch.Tensor, torch.Tensor]:
@@ -135,6 +183,7 @@ def save_rendered_dataset(
     subset_idx: torch.Tensor,
     train_x: torch.Tensor,
     train_y: torch.Tensor,
+    train_teacher_probs: torch.Tensor | None,
     val_x: torch.Tensor,
     val_y: torch.Tensor,
     save_dir: str | Path,
@@ -145,9 +194,11 @@ def save_rendered_dataset(
 
     torch.save(train_x, save_dir / "train_x.pt")
     torch.save(train_y, save_dir / "train_y.pt")
+    if train_teacher_probs is not None:
+        torch.save(train_teacher_probs, save_dir / "train_teacher_probs.pt")
     torch.save(val_x, save_dir / "val_x.pt")
     torch.save(val_y, save_dir / "val_y.pt")
-    del train_x, train_y, val_x, val_y
+    del train_x, train_y, train_teacher_probs, val_x, val_y
 
     clean_train_prompt_ids = prompt_bank.clean_train_prompt_ids.index_select(0, subset_idx)
     clean_train_cot_ids = prompt_bank.clean_train_cot_ids.index_select(0, subset_idx)
@@ -170,6 +221,7 @@ def build_dataset_meta(
     subset_size: int,
     eta: float,
     rollout_mode: str,
+    target_mode: str,
     gen_batch_size: int,
     device: str | torch.device,
     dtype_name: str | None,
@@ -193,6 +245,7 @@ def build_dataset_meta(
         "teacher_checkpoint": str(teacher_checkpoint),
         "train_targets_source": "teacher_rollout_with_optional_eta_corruption",
         "train_decode_mode": rollout_mode,
+        "train_target_type": target_mode,
         "val_targets_source": "fixed_clean_oracle",
         "nested_subset_order_saved": True,
     }
@@ -209,6 +262,7 @@ def render_offline_dataset(
     subset_size: int,
     eta: float,
     rollout_mode: str,
+    target_mode: str,
     gen_batch_size: int,
     device: str | torch.device,
     dtype_name: str | None,
@@ -216,6 +270,7 @@ def render_offline_dataset(
     prompt_bank: PromptBank,
     subset_idx: torch.Tensor,
     corrupt_ids_fn: Callable[[torch.Tensor, float], torch.Tensor],
+    teacher_probs_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
     extra_meta: dict[str, Any] | None = None,
 ) -> None:
     model = load_hf_teacher(
@@ -224,15 +279,17 @@ def render_offline_dataset(
         dtype_name=dtype_name,
     )
 
-    train_x, train_y = render_train_split(
+    train_x, train_y, train_teacher_probs = render_train_split(
         model,
         prompt_bank,
         subset_idx,
         eta=eta,
         rollout_mode=rollout_mode,
+        target_mode=target_mode,
         gen_batch_size=gen_batch_size,
         device=device,
         corrupt_ids_fn=corrupt_ids_fn,
+        teacher_probs_fn=teacher_probs_fn,
     )
     val_x, val_y = build_oracle_val_split(prompt_bank)
 
@@ -243,6 +300,7 @@ def render_offline_dataset(
         subset_size=subset_size,
         eta=eta,
         rollout_mode=rollout_mode,
+        target_mode=target_mode,
         gen_batch_size=gen_batch_size,
         device=device,
         dtype_name=dtype_name,
@@ -254,6 +312,7 @@ def render_offline_dataset(
         subset_idx=subset_idx,
         train_x=train_x,
         train_y=train_y,
+        train_teacher_probs=train_teacher_probs,
         val_x=val_x,
         val_y=val_y,
         save_dir=save_dir,
