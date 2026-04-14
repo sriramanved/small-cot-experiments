@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Submit with:
-#   sbatch --account=<ACCOUNT> --partition=<GPU_PARTITION> run_s5_opd_eta.sh <eta>
+#   sbatch --account=<ACCOUNT> --partition=<GPU_PARTITION> run_s5_noisy_bc_full_dist_eta.sh <eta>
 # Optionally export VENV_PATH first if you do not want to rely on repo-local .venv:
-#   VENV_PATH=/path/to/venv sbatch --account=<ACCOUNT> --partition=<GPU_PARTITION> run_s5_opd_eta.sh <eta>
+#   VENV_PATH=/path/to/venv sbatch --account=<ACCOUNT> --partition=<GPU_PARTITION> run_s5_noisy_bc_full_dist_eta.sh <eta>
 #
 # This script intentionally leaves account/partition out of #SBATCH directives so the
 # submitter can choose only from values confirmed on the cluster.
-#SBATCH --job-name=s5-opd-rkl-full
+#SBATCH --job-name=s5-bc-full
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-ETA="${1:?usage: sbatch --account=<ACCOUNT> --partition=<GPU_PARTITION> run_s5_opd_eta.sh <eta>}"
+ETA="${1:?usage: sbatch --account=<ACCOUNT> --partition=<GPU_PARTITION> run_s5_noisy_bc_full_dist_eta.sh <eta>}"
 LOW_ETA_SUBSET_SIZE="${LOW_ETA_SUBSET_SIZE:-8000000}"
 HIGH_ETA_SUBSET_SIZE="${HIGH_ETA_SUBSET_SIZE:-12000000}"
 HIGH_ETA_THRESHOLD="${HIGH_ETA_THRESHOLD:-0.2}"
@@ -27,7 +27,7 @@ else
 fi
 cd "${ROOT}"
 
-mkdir -p logs/slurm logs/opd
+mkdir -p logs/slurm logs/noisy_dataset_render logs/noisy_bc
 
 VENV_PATH="${VENV_PATH:-}"
 if [[ -n "${VENV_PATH}" ]]; then
@@ -67,8 +67,11 @@ env \
   N_TRAIN="${N_TRAIN:-15000000}" \
   SUBSET_SIZE="${RESOLVED_SUBSET_SIZE}" \
   ETAS="${ETA}" \
-  OBJECTIVE="${OBJECTIVE:-reverse_kl_full}" \
-  TEACHER_LAW="${TEACHER_LAW:-distributional_noise}" \
-  EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-1024}" \
-  COMPILE="${COMPILE:-0}" \
-  bash scripts/run_opd_sweep.sh
+  ROLLOUT_MODE="${ROLLOUT_MODE:-sample_then_corrupt}" \
+  TARGET_MODE="${TARGET_MODE:-teacher_probs}" \
+  GEN_BATCH_SIZE="${GEN_BATCH_SIZE:-1024}" \
+  TEACHER_CHECKPOINT="${TEACHER_CHECKPOINT:-out-s5-cot-len21-depth1-400k}" \
+  PROMPT_BANK_DIR="${PROMPT_BANK_DIR:-data/s5_clean_prompt_bank_m21_n15000000_val5000}" \
+  BC_COMPILE="${BC_COMPILE:-True}" \
+  BC_S5_EVAL_BATCH_SIZE="${BC_S5_EVAL_BATCH_SIZE:-512}" \
+  bash scripts/run_noisy_eta_interleaved.sh
