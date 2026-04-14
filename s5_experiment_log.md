@@ -642,7 +642,7 @@ Current plotting TODOs:
 - TODO: for each of the three regime-specific MC comparison figures above, plot both:
   - `iter` vs `val/clean_full_exact`
   - `iter` vs `val/clean_final_exact`
-- TODO: make the corresponding matched offline BC full-distribution vs NAIL-OPD full-distribution eval-curve figures once the offline full-distribution sweep is run
+<!-- - TODO: make the corresponding matched offline BC full-distribution vs NAIL-OPD full-distribution eval-curve figures once the offline full-distribution sweep is run
 - TODO: make endpoint summary plots of final clean-task performance vs `eta` for:
   - offline BC MC
   - NAIL-OPD MC
@@ -663,7 +663,7 @@ Current plotting TODOs:
   - OPD MC
   - OPD full-distribution once available
 - TODO: make one compact matrix figure or table-backed heatmap with rows = method families and columns = `eta`, where each cell shows final `clean_full_exact`
-- TODO: make one appendix-style diagnostic figure comparing `clean_full_exact` and `clean_final_exact` directly to show where they meaningfully diverge and where they are visually almost identical
+- TODO: make one appendix-style diagnostic figure comparing `clean_full_exact` and `clean_final_exact` directly to show where they meaningfully diverge and where they are visually almost identical -->
 
 Current exported MC eval-curve figures:
 
