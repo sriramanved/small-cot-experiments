@@ -1,5 +1,5 @@
 out_dir = 'out-s5-clean-offline-bc'
-eval_interval = 10000
+eval_interval = 5000
 log_interval = 50
 eval_iters = 50
 always_save_checkpoint = True
@@ -34,7 +34,7 @@ lr_decay_iters = max_iters
 min_lr = learning_rate
 
 dtype = 'float16'
-compile = True
+compile = False
 
 offline_single_epoch = True
 offline_eval_full = False
@@ -44,6 +44,6 @@ final_eval_on_exit = True
 s5_eval_metrics = True
 s5_eval_clean_train_loss = True
 s5_eval_n = 5000
-s5_eval_batch_size = 256
+s5_eval_batch_size = 512
 s5_eval_seed = 123
 save_every = 0

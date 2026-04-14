@@ -546,7 +546,52 @@ Status:
 - this sweep uses the same `15M` prompt bank and `8M` subset as the NAIL-OPD / offline BC comparisons
 - the native backend is being used because the HF backend benchmarked slower
 
-### 5.2 Comparison framing, current impressions, and TODOs
+### 5.2 OPD (full KL distributional info) status and run provenance
+
+Current native S5 OPD setup for OPD (full KL distributional info):
+
+- backend: native nanoGPT OPD path
+- launcher: `run_s5_opd_eta.sh` -> `bash scripts/run_opd_sweep.sh`
+- prompt bank: `data/s5_clean_prompt_bank_m21_n15000000_val5000`
+- subset size: `8,000,000`
+- teacher checkpoint: `out-s5-cot-len21-depth1-400k`
+- teacher law: `distributional_noise`
+- objective: `reverse_kl_full`
+- currently launched high-`eta` sweep on cluster: `0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9`
+- `eval_batch_size = 1024`
+- `compile = 0`
+
+Run provenance / execution notes:
+
+- dev node / workstation-side run:
+  - a single `eta = 0.1` `reverse_kl_full` run was already active on the dev node (`vs2972@blocklab`) and was later terminated there to free capacity for the cluster sweep
+  - the active process that was killed on the dev node was PID `2458315`
+- AICS Slurm cluster run:
+  - the cluster copy used for the sweep is `/scratch/blocklab/ved/small-cot-experiments`
+  - the working account / partition used for the cluster sweep is `blocklab`
+  - the cluster sweep is launched as one Slurm job per `eta` rather than as a single chained multi-`eta` job, because each run is comfortably below the `1-00:00:00` per-job cap while the full sweep is not
+- early AICS launch attempts failed for operational reasons before reaching stable training:
+  - the first batch-script revision used the script spool path rather than `SLURM_SUBMIT_DIR`, which caused `mkdir -p logs/...` to fail under Slurm
+  - the first successful Slurm launches also revealed that the cluster copy was missing both:
+    - the `15M` clean prompt bank `data/s5_clean_prompt_bank_m21_n15000000_val5000`
+    - the teacher checkpoint directory `out-s5-cot-len21-depth1-400k`
+  - both assets were then copied from the dev node into the AICS repo copy
+- WandB / log provenance note:
+  - the first fully data-complete AICS relaunch of the high-`eta` sweep of the `eta = 0.3 ... 0.9` jobs ran before `wandb login` was completed on AICS, so those jobs printed `wandb.init failed` warnings and were canceled
+  - then the `eta = 0.2 ... 0.9` sweep was then relaunched on AICS after `wandb login`, so the corresponding `logs/opd/*.log` files may contain both:
+    - earlier `wandb.init failed` warnings
+    - later successful WandB initialization / run URLs
+
+Status:
+
+- OPD (full KL distributional info) is now actively running on AICS, so it should be treated as an in-progress sweep rather than a TODO / unimplemented item
+- final metrics are not yet summarized here
+- once the sweep finishes, tabulate it directly against:
+  - offline BC full-distribution
+  - NAIL-OPD (full KL distributional info)
+  - OPD (MC version)
+
+### 5.3 Comparison framing, current impressions, and TODOs
 
 Important interpretation note from later discussion:
 
@@ -618,7 +663,7 @@ Sweep matrix:
 | Off-policy greedy-corrupt baseline | Offline BC, `greedy_then_corrupt`, full `eta` sweep | greedy-then-corrupt | Done | Completed off-policy greedy-corrupt baseline |
 | On-policy full-distribution | NAIL-OPD (full KL distributional info), full `eta` sweep | `distributional_noise` | Done | Completed online full-distribution family |
 | Off-policy full-distribution match | Offline BC trained on full teacher next-token distributions, full `eta` sweep | `distributional_noise` | TODO | Implemented and ready to launch; this is the direct off-policy match to NAIL-OPD (full KL distributional info) |
-| On-policy full-distribution | OPD (full KL distributional info), full `eta` sweep | `distributional_noise` | TODO | Requires implementing the full-information OPD objective; this is the OPD analogue of the MC-vs-full comparison |
+| On-policy full-distribution | OPD (full KL distributional info), full `eta` sweep | `distributional_noise` | In Progress | `reverse_kl_full` is implemented; `eta = 0.1` was run first on the dev node and the high-`eta` `0.3 ... 0.9` sweep is now running on AICS / Slurm |
 | On-policy MC greedy-corrupt match | NAIL-OPD (MC version), full `eta` sweep | `corrupted_greedy` | TODO | Direct online match to completed offline `greedy_then_corrupt` BC |
 | On-policy MC greedy-corrupt match | OPD (MC version), full `eta` sweep | `corrupted_greedy` | TODO | Needed if the OPD MC family is to be matched to offline `greedy_then_corrupt` as well |
 | On-policy full-distribution greedy-corrupt ablation | NAIL-OPD (full KL distributional info), full `eta` sweep | `corrupted_greedy` | TODO | Needed if teacher-law ablations are to be symmetric in the full-information setting |
@@ -687,17 +732,16 @@ High noise:
 
 Priority order for the unfinished sweeps:
 
-1. finish the two sweeps already running:
+1. finish the sweeps already running:
    - offline BC `sample_then_corrupt` higher-`eta` completion
    - OPD (MC version) sweep completion
+   - OPD (full KL distributional info) sweep completion on AICS
 2. add the direct off-policy full-distribution counterpart to NAIL-OPD (full KL distributional info):
    - offline BC full-distribution, `distributional_noise`
-3. add the OPD (full KL distributional info) counterpart to the OPD (MC version) sweep:
-   - OPD (full KL distributional info), `distributional_noise`
-4. complete the greedy-corrupt online matches:
+3. complete the greedy-corrupt online matches:
    - NAIL-OPD (MC version) with `corrupted_greedy`
    - OPD (MC version) with `corrupted_greedy`
-5. only then do the symmetric full-information greedy-corrupt ablations:
+4. only then do the symmetric full-information greedy-corrupt ablations:
    - NAIL-OPD (full KL distributional info) with `corrupted_greedy`
    - offline BC full-distribution with `corrupted_greedy`
    - OPD (full KL distributional info) with `corrupted_greedy`
