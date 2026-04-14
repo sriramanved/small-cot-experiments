@@ -17,7 +17,11 @@ set -euo pipefail
 
 ETA="${1:?usage: sbatch --account=<ACCOUNT> --partition=<GPU_PARTITION> run_s5_opd_eta.sh <eta>}"
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
+  ROOT="${SLURM_SUBMIT_DIR}"
+else
+  ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
 cd "${ROOT}"
 
 mkdir -p logs/slurm logs/opd
