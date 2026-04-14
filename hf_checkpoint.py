@@ -29,6 +29,7 @@ from nanogpt_checkpoint import (
     normalize_nanogpt_state_dict,
     resolve_checkpoint_path,
 )
+from torch_dtypes import DTYPE_LOOKUP
 
 TRANSPOSED_WEIGHTS = (
     "attn.c_attn.weight",
@@ -37,12 +38,6 @@ TRANSPOSED_WEIGHTS = (
     "mlp.c_proj.weight",
 )
 IGNORED_NANOGPT_KEYS = (".attn.bias",)
-DTYPE_LOOKUP = {
-    "float32": torch.float32,
-    "float16": torch.float16,
-    "bfloat16": torch.bfloat16,
-}
-
 def clean_nanogpt_state_dict(state_dict: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     cleaned = normalize_nanogpt_state_dict(state_dict)
     return {

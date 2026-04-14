@@ -126,6 +126,66 @@ def _write_teacher_checkpoint(root: Path, *, vocab_size: int, block_size: int) -
     )
 
 
+def _read_json(path: Path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _assert_state_dicts_equal(testcase: unittest.TestCase, lhs: dict, rhs: dict) -> None:
+    testcase.assertEqual(set(lhs), set(rhs))
+    for key in lhs:
+        left_value = lhs[key]
+        right_value = rhs[key]
+        if torch.is_tensor(left_value):
+            torch.testing.assert_close(left_value, right_value)
+        else:
+            testcase.assertEqual(left_value, right_value)
+
+
+def _run_train_opd(
+    *,
+    prompt_bank_dir: Path,
+    teacher_dir: Path,
+    out_dir: Path,
+    objective: str,
+    max_iters: int,
+    init_from: str = "scratch",
+    seed: int = 7,
+) -> subprocess.CompletedProcess[str]:
+    cmd = [
+        sys.executable,
+        "train_opd.py",
+        "--task=modadd",
+        "--teacher_checkpoint=" + str(teacher_dir),
+        "--prompt_bank_dir=" + str(prompt_bank_dir),
+        "--subset_size=8",
+        "--eta=0.1",
+        "--teacher_law=distributional_noise",
+        "--objective=" + objective,
+        "--out_dir=" + str(out_dir),
+        "--init_from=" + init_from,
+        "--batch_size=2",
+        "--max_iters=" + str(max_iters),
+        "--learning_rate=0.001",
+        "--warmup_iters=2",
+        "--eval_interval=2",
+        "--eval_n=2",
+        "--eval_batch_size=2",
+        "--log_interval=1",
+        "--save_interval=2",
+        "--device=cpu",
+        "--dtype=float32",
+        "--seed=" + str(seed),
+    ]
+    return subprocess.run(
+        cmd,
+        cwd=REPO_ROOT,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+
 class ModularAdditionIntegrationTests(unittest.TestCase):
     def test_train_py_offline_modadd_uses_dataset_meta_and_writes_eval_artifacts(self):
         dataset_name = "modadd_clean_offline_p3_m4_datasetmeta_test"
@@ -283,6 +343,102 @@ class ModularAdditionIntegrationTests(unittest.TestCase):
             last_eval = json.loads((out_dir / "last_eval.json").read_text(encoding="utf-8"))
             self.assertIn("val/clean_full_exact", last_eval)
             self.assertIn("val/clean_final_exact", last_eval)
+
+    def test_train_opd_modadd_forward_kl_full_resume_matches_continuous(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            prompt_bank_dir = root / "prompt_bank"
+            teacher_dir = root / "teacher"
+            resumed_out_dir = root / "forward_resume"
+            continuous_out_dir = root / "forward_continuous"
+
+            _write_prompt_bank(prompt_bank_dir, p=3, m=4, n_train=8, n_val=2, seed=19)
+            _write_teacher_checkpoint(teacher_dir, vocab_size=4, block_size=8)
+
+            _run_train_opd(
+                prompt_bank_dir=prompt_bank_dir,
+                teacher_dir=teacher_dir,
+                out_dir=resumed_out_dir,
+                objective="forward_kl_full",
+                max_iters=2,
+                seed=17,
+            )
+            _run_train_opd(
+                prompt_bank_dir=prompt_bank_dir,
+                teacher_dir=teacher_dir,
+                out_dir=resumed_out_dir,
+                objective="forward_kl_full",
+                max_iters=4,
+                init_from="resume",
+                seed=17,
+            )
+            _run_train_opd(
+                prompt_bank_dir=prompt_bank_dir,
+                teacher_dir=teacher_dir,
+                out_dir=continuous_out_dir,
+                objective="forward_kl_full",
+                max_iters=4,
+                seed=17,
+            )
+
+            resumed_ckpt = torch.load(resumed_out_dir / "ckpt.pt", map_location="cpu", weights_only=False)
+            continuous_ckpt = torch.load(continuous_out_dir / "ckpt.pt", map_location="cpu", weights_only=False)
+
+            _assert_state_dicts_equal(self, resumed_ckpt["model"], continuous_ckpt["model"])
+            _assert_state_dicts_equal(self, resumed_ckpt["prompt_cycle_state"], continuous_ckpt["prompt_cycle_state"])
+            self.assertEqual(resumed_ckpt["iter_num"], continuous_ckpt["iter_num"])
+            self.assertEqual(_read_json(resumed_out_dir / "last_eval.json"), _read_json(continuous_out_dir / "last_eval.json"))
+            self.assertEqual((resumed_out_dir / "completed.txt").read_text(encoding="utf-8"), "iter_num=4\n")
+            self.assertEqual((continuous_out_dir / "completed.txt").read_text(encoding="utf-8"), "iter_num=4\n")
+            self.assertTrue((continuous_out_dir / "ckpt_0000002.pt").exists())
+
+    def test_train_opd_modadd_reverse_kl_full_resume_matches_continuous(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            prompt_bank_dir = root / "prompt_bank"
+            teacher_dir = root / "teacher"
+            resumed_out_dir = root / "reverse_resume"
+            continuous_out_dir = root / "reverse_continuous"
+
+            _write_prompt_bank(prompt_bank_dir, p=3, m=4, n_train=8, n_val=2, seed=23)
+            _write_teacher_checkpoint(teacher_dir, vocab_size=4, block_size=8)
+
+            _run_train_opd(
+                prompt_bank_dir=prompt_bank_dir,
+                teacher_dir=teacher_dir,
+                out_dir=resumed_out_dir,
+                objective="reverse_kl_full",
+                max_iters=2,
+                seed=29,
+            )
+            _run_train_opd(
+                prompt_bank_dir=prompt_bank_dir,
+                teacher_dir=teacher_dir,
+                out_dir=resumed_out_dir,
+                objective="reverse_kl_full",
+                max_iters=4,
+                init_from="resume",
+                seed=29,
+            )
+            _run_train_opd(
+                prompt_bank_dir=prompt_bank_dir,
+                teacher_dir=teacher_dir,
+                out_dir=continuous_out_dir,
+                objective="reverse_kl_full",
+                max_iters=4,
+                seed=29,
+            )
+
+            resumed_ckpt = torch.load(resumed_out_dir / "ckpt.pt", map_location="cpu", weights_only=False)
+            continuous_ckpt = torch.load(continuous_out_dir / "ckpt.pt", map_location="cpu", weights_only=False)
+
+            _assert_state_dicts_equal(self, resumed_ckpt["model"], continuous_ckpt["model"])
+            _assert_state_dicts_equal(self, resumed_ckpt["prompt_cycle_state"], continuous_ckpt["prompt_cycle_state"])
+            self.assertEqual(resumed_ckpt["iter_num"], continuous_ckpt["iter_num"])
+            self.assertEqual(_read_json(resumed_out_dir / "last_eval.json"), _read_json(continuous_out_dir / "last_eval.json"))
+            self.assertEqual((resumed_out_dir / "completed.txt").read_text(encoding="utf-8"), "iter_num=4\n")
+            self.assertEqual((continuous_out_dir / "completed.txt").read_text(encoding="utf-8"), "iter_num=4\n")
+            self.assertTrue((continuous_out_dir / "ckpt_0000002.pt").exists())
 
 
 if __name__ == "__main__":

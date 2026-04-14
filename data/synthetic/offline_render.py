@@ -13,7 +13,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from data.synthetic.prompt_bank import PromptBank, build_xy_from_prompt_and_target
-from hf_checkpoint import DTYPE_LOOKUP, load_nanogpt_checkpoint_as_hf
+from nanogpt_checkpoint import load_nanogpt_model
+from torch_dtypes import DTYPE_LOOKUP
 
 
 def resolve_torch_dtype(dtype_name: str | None, device: str | torch.device) -> torch.dtype:
@@ -24,22 +25,34 @@ def resolve_torch_dtype(dtype_name: str | None, device: str | torch.device) -> t
     return torch.float32
 
 
-def load_hf_teacher(
+def load_native_teacher(
     teacher_checkpoint: str | Path,
     *,
     device: str | torch.device,
     dtype_name: str | None,
 ):
     torch_dtype = resolve_torch_dtype(dtype_name, device)
-    model = load_nanogpt_checkpoint_as_hf(
+    model = load_nanogpt_model(
         teacher_checkpoint,
         map_location="cpu",
         device=device,
-        torch_dtype=torch_dtype,
         eval_mode=True,
     )
-    model.config.use_cache = True
+    model = model.to(device=device, dtype=torch_dtype)
     return model
+
+
+def load_hf_teacher(
+    teacher_checkpoint: str | Path,
+    *,
+    device: str | torch.device,
+    dtype_name: str | None,
+):
+    return load_native_teacher(
+        teacher_checkpoint,
+        device=device,
+        dtype_name=dtype_name,
+    )
 
 
 ROLLOUT_MODE_CHOICES = ("greedy_then_corrupt", "sample_then_corrupt")
@@ -54,7 +67,7 @@ def generate_teacher_targets(
     target_len: int,
     eta: float,
     rollout_mode: str,
-    target_mode: str,
+    target_mode: str = "tokens",
     device: str | torch.device,
     corrupt_ids_fn: Callable[[torch.Tensor, float], torch.Tensor],
     teacher_probs_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
@@ -92,11 +105,22 @@ def generate_teacher_targets(
 
     for step in range(target_len):
         outputs = model(
-            input_ids=input_ids,
+            input_ids,
             past_key_values=past_key_values,
             use_cache=True,
         )
-        step_logits = outputs.logits[:, -1:, :]
+        if isinstance(outputs, tuple):
+            step_logits, _, past_key_values = outputs
+        elif hasattr(outputs, "logits") and hasattr(outputs, "past_key_values"):
+            step_logits = outputs.logits
+            past_key_values = outputs.past_key_values
+        else:
+            raise TypeError(
+                "teacher model outputs must be either a tuple "
+                "(logits, loss, past_key_values) or an object with "
+                ".logits and .past_key_values"
+            )
+        step_logits = step_logits[:, -1:, :]
         if teacher_probs is not None:
             step_teacher_probs = teacher_probs_fn(step_logits)
             teacher_probs[:, step, :] = step_teacher_probs.squeeze(1).to(
@@ -111,7 +135,6 @@ def generate_teacher_targets(
         next_ids = corrupt_ids_fn(next_ids, eta).to(dtype=prompt_ids.dtype)
         generated[:, step] = next_ids
         input_ids = next_ids.unsqueeze(1).to(dtype=torch.long)
-        past_key_values = outputs.past_key_values
 
     return generated.to(device="cpu", dtype=prompt_ids.dtype), teacher_probs
 
@@ -123,7 +146,7 @@ def render_train_split(
     *,
     eta: float,
     rollout_mode: str,
-    target_mode: str,
+    target_mode: str = "tokens",
     gen_batch_size: int,
     device: str | torch.device,
     corrupt_ids_fn: Callable[[torch.Tensor, float], torch.Tensor],
@@ -221,7 +244,7 @@ def build_dataset_meta(
     subset_size: int,
     eta: float,
     rollout_mode: str,
-    target_mode: str,
+    target_mode: str = "tokens",
     gen_batch_size: int,
     device: str | torch.device,
     dtype_name: str | None,
@@ -262,7 +285,7 @@ def render_offline_dataset(
     subset_size: int,
     eta: float,
     rollout_mode: str,
-    target_mode: str,
+    target_mode: str = "tokens",
     gen_batch_size: int,
     device: str | torch.device,
     dtype_name: str | None,
@@ -273,7 +296,7 @@ def render_offline_dataset(
     teacher_probs_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
     extra_meta: dict[str, Any] | None = None,
 ) -> None:
-    model = load_hf_teacher(
+    model = load_native_teacher(
         teacher_checkpoint,
         device=device,
         dtype_name=dtype_name,

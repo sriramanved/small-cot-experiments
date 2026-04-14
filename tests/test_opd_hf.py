@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import tempfile
 import types
@@ -14,9 +15,19 @@ from data.s5_cot.opd import (
     gather_action_log_probs,
     teacher_forward_kl,
 )
-from data.s5_cot.opd_hf import cached_teacher_token_probs_hf, rollout_student_hf
-from hf_checkpoint import build_hf_model_from_nanogpt_args
-from train_opd_hf import validate_args, validate_resume_metadata
+
+HF_AVAILABLE = importlib.util.find_spec("transformers") is not None
+
+if HF_AVAILABLE:
+    from data.s5_cot.opd_hf import cached_teacher_token_probs_hf, rollout_student_hf
+    from hf_checkpoint import build_hf_model_from_nanogpt_args
+    from train_opd_hf import validate_args, validate_resume_metadata
+else:
+    cached_teacher_token_probs_hf = None
+    rollout_student_hf = None
+    build_hf_model_from_nanogpt_args = None
+    validate_args = None
+    validate_resume_metadata = None
 
 
 VOCAB_SIZE = 8
@@ -34,6 +45,7 @@ def tiny_model_args(*, bias: bool = False) -> dict[str, int | float | bool]:
     }
 
 
+@unittest.skipUnless(HF_AVAILABLE, "transformers is not installed")
 class HFOpdHelperTests(unittest.TestCase):
     def test_rollout_student_hf_matches_full_forward_log_probs(self):
         torch.manual_seed(0)

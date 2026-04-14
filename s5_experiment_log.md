@@ -730,6 +730,61 @@ High noise:
 
 ![High-noise clean_final_exact](analysis/figures/s5_eval_curves/high_clean_final_exact.png)
 
+Current exported per-`eta` method-comparison figures:
+
+- these plots use fixed method colors across all noise levels: `Offline BC MC`, `NAIL-OPD MC`, and `OPD MC`
+- if a given `OPD MC` curve is not available yet, rerun the notebook after that sweep finishes so the corresponding image file is regenerated
+
+<details>
+<summary><code>clean_full_exact</code> per-eta figures</summary>
+
+![Eta 0.05 clean_full_exact methods](analysis/figures/s5_eval_curves/eta0p05_clean_full_exact_methods.png)
+
+![Eta 0.1 clean_full_exact methods](analysis/figures/s5_eval_curves/eta0p1_clean_full_exact_methods.png)
+
+![Eta 0.2 clean_full_exact methods](analysis/figures/s5_eval_curves/eta0p2_clean_full_exact_methods.png)
+
+![Eta 0.3 clean_full_exact methods](analysis/figures/s5_eval_curves/eta0p3_clean_full_exact_methods.png)
+
+![Eta 0.4 clean_full_exact methods](analysis/figures/s5_eval_curves/eta0p4_clean_full_exact_methods.png)
+
+![Eta 0.5 clean_full_exact methods](analysis/figures/s5_eval_curves/eta0p5_clean_full_exact_methods.png)
+
+![Eta 0.6 clean_full_exact methods](analysis/figures/s5_eval_curves/eta0p6_clean_full_exact_methods.png)
+
+![Eta 0.7 clean_full_exact methods](analysis/figures/s5_eval_curves/eta0p7_clean_full_exact_methods.png)
+
+![Eta 0.8 clean_full_exact methods](analysis/figures/s5_eval_curves/eta0p8_clean_full_exact_methods.png)
+
+![Eta 0.9 clean_full_exact methods](analysis/figures/s5_eval_curves/eta0p9_clean_full_exact_methods.png)
+
+</details>
+
+<details>
+<summary><code>clean_final_exact</code> per-eta figures</summary>
+
+![Eta 0.05 clean_final_exact methods](analysis/figures/s5_eval_curves/eta0p05_clean_final_exact_methods.png)
+
+![Eta 0.1 clean_final_exact methods](analysis/figures/s5_eval_curves/eta0p1_clean_final_exact_methods.png)
+
+![Eta 0.2 clean_final_exact methods](analysis/figures/s5_eval_curves/eta0p2_clean_final_exact_methods.png)
+
+![Eta 0.3 clean_final_exact methods](analysis/figures/s5_eval_curves/eta0p3_clean_final_exact_methods.png)
+
+![Eta 0.4 clean_final_exact methods](analysis/figures/s5_eval_curves/eta0p4_clean_final_exact_methods.png)
+
+![Eta 0.5 clean_final_exact methods](analysis/figures/s5_eval_curves/eta0p5_clean_final_exact_methods.png)
+
+![Eta 0.6 clean_final_exact methods](analysis/figures/s5_eval_curves/eta0p6_clean_final_exact_methods.png)
+
+![Eta 0.7 clean_final_exact methods](analysis/figures/s5_eval_curves/eta0p7_clean_final_exact_methods.png)
+
+![Eta 0.8 clean_final_exact methods](analysis/figures/s5_eval_curves/eta0p8_clean_final_exact_methods.png)
+
+![Eta 0.9 clean_final_exact methods](analysis/figures/s5_eval_curves/eta0p9_clean_final_exact_methods.png)
+
+</details>
+
 Priority order for the unfinished sweeps:
 
 1. finish the sweeps already running:

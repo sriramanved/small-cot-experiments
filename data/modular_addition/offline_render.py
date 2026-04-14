@@ -30,15 +30,17 @@ def generate_teacher_targets(
     device: str | torch.device,
     p: int,
 ) -> torch.Tensor:
-    return shared_generate_teacher_targets(
+    targets, _ = shared_generate_teacher_targets(
         model,
         prompt_ids,
         target_len=target_len,
         eta=eta,
         rollout_mode=rollout_mode,
+        target_mode="tokens",
         device=device,
         corrupt_ids_fn=lambda ids, noise: corrupt_ids(ids, noise, p=p),
     )
+    return targets
 
 
 def render_train_split(
@@ -51,16 +53,18 @@ def render_train_split(
     gen_batch_size: int,
     device: str | torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    return shared_render_train_split(
+    train_x, train_y, _ = shared_render_train_split(
         model,
         prompt_bank,
         subset_idx,
         eta=eta,
         rollout_mode=rollout_mode,
+        target_mode="tokens",
         gen_batch_size=gen_batch_size,
         device=device,
         corrupt_ids_fn=lambda ids, noise: corrupt_ids(ids, noise, p=prompt_bank.p),
     )
+    return train_x, train_y
 
 
 def build_dataset_meta(
@@ -83,6 +87,7 @@ def build_dataset_meta(
         subset_size=subset_size,
         eta=eta,
         rollout_mode=rollout_mode,
+        target_mode="tokens",
         gen_batch_size=gen_batch_size,
         device=device,
         dtype_name=dtype_name,
@@ -112,6 +117,7 @@ def render_offline_dataset(
         subset_size=subset_size,
         eta=eta,
         rollout_mode=rollout_mode,
+        target_mode="tokens",
         gen_batch_size=gen_batch_size,
         device=device,
         dtype_name=dtype_name,

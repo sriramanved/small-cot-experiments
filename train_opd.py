@@ -33,12 +33,12 @@ from data.s5_cot.opd import (
 from data.s5_cot.task import CORRUPTIBLE_IDS as S5_CORRUPTIBLE_IDS
 from data.s5_cot.task import evaluate_saved_clean_s5_metrics
 from data.synthetic.prompt_bank import load_prompt_bank, select_train_subset
-from hf_checkpoint import DTYPE_LOOKUP
 from nanogpt_checkpoint import (
     build_nanogpt_model,
     load_nanogpt_checkpoint,
     load_nanogpt_model,
 )
+from torch_dtypes import DTYPE_LOOKUP
 
 
 def parse_args() -> argparse.Namespace:
@@ -123,6 +123,13 @@ def build_autocast_context(device: str, torch_dtype: torch.dtype):
     if "cuda" not in device:
         return nullcontext()
     return torch.amp.autocast(device_type="cuda", dtype=torch_dtype)
+
+
+def build_grad_scaler(*, device: str, torch_dtype: torch.dtype):
+    enabled = ("cuda" in device and torch_dtype == torch.float16)
+    if hasattr(torch.amp, "GradScaler"):
+        return torch.amp.GradScaler("cuda", enabled=enabled)
+    return torch.cuda.amp.GradScaler(enabled=enabled)
 
 
 def get_lr(step: int, *, learning_rate: float, warmup_iters: int) -> float:
@@ -410,11 +417,7 @@ def main() -> None:
     device = resolve_device(args.device)
     torch_dtype = resolve_dtype(args.dtype, device)
     autocast_context = build_autocast_context(device, torch_dtype)
-    scaler_device = "cuda" if "cuda" in device else "cpu"
-    scaler = torch.amp.GradScaler(
-        scaler_device,
-        enabled=("cuda" in device and torch_dtype == torch.float16),
-    )
+    scaler = build_grad_scaler(device=device, torch_dtype=torch_dtype)
 
     prompt_bank = load_prompt_bank(args.prompt_bank_dir)
     if prompt_bank.task != args.task:

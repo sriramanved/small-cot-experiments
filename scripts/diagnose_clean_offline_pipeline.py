@@ -16,8 +16,9 @@ from data.s5_cot.task import (
     evaluate_saved_clean_s5_metrics,
     greedy_generate_target_ids_batched,
 )
-from hf_checkpoint import DTYPE_LOOKUP, load_nanogpt_checkpoint_as_hf
+from hf_checkpoint import load_nanogpt_checkpoint_as_hf
 from nanogpt_checkpoint import load_nanogpt_model
+from torch_dtypes import DTYPE_LOOKUP
 
 
 def parse_args():
@@ -60,13 +61,15 @@ def hf_clean_metrics(model, source_dir: Path, n_eval: int, batch_size: int, devi
         end = min(start + batch_size, n)
         prompt_ids = prompt_ids_all[start:end]
         cot_ids = cot_ids_all[start:end]
-        pred_ids = generate_teacher_targets(
+        pred_ids, _ = generate_teacher_targets(
             model,
             prompt_ids,
             target_len=cot_ids.size(1),
             eta=0.0,
+            target_mode="tokens",
             device=device,
-        ).long()
+        )
+        pred_ids = pred_ids.long()
         match_full = pred_ids.eq(cot_ids).all(dim=1)
         match_final = pred_ids[:, -7:].eq(cot_ids[:, -7:]).all(dim=1)
         full_ok += int(match_full.sum().item())
@@ -91,13 +94,15 @@ def compare_nanogpt_vs_hf(ng_model, hf_model, source_dir: Path, n_eval: int, bat
         end = min(start + batch_size, n)
         prompt_ids = prompt_ids_all[start:end]
         ng_pred = greedy_generate_target_ids_batched(ng_model, prompt_ids, cot_len, device)
-        hf_pred = generate_teacher_targets(
+        hf_pred, _ = generate_teacher_targets(
             hf_model,
             prompt_ids,
             target_len=cot_len,
             eta=0.0,
+            target_mode="tokens",
             device=device,
-        ).long()
+        )
+        hf_pred = hf_pred.long()
         same_full += int(ng_pred.eq(hf_pred).all(dim=1).sum().item())
         same_final += int(ng_pred[:, -7:].eq(hf_pred[:, -7:]).all(dim=1).sum().item())
 

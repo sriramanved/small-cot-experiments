@@ -77,16 +77,18 @@ class SyntheticHelperTests(unittest.TestCase):
             self.assertEqual(eta, 0.5)
             return ids + 1
 
-        targets = generate_teacher_targets(
+        targets, teacher_probs = generate_teacher_targets(
             model,
             prompt_ids,
             target_len=3,
             eta=0.5,
             rollout_mode="greedy_then_corrupt",
+            target_mode="tokens",
             device="cpu",
             corrupt_ids_fn=bump_token,
         )
 
+        self.assertIsNone(teacher_probs)
         self.assertEqual(targets.dtype, torch.int32)
         torch.testing.assert_close(targets, torch.full((2, 3), 2, dtype=torch.int32))
 
@@ -106,6 +108,7 @@ class SyntheticHelperTests(unittest.TestCase):
             subset_size=2,
             eta=0.1,
             rollout_mode="greedy_then_corrupt",
+            target_mode="tokens",
             gen_batch_size=8,
             device="cpu",
             dtype_name="float32",

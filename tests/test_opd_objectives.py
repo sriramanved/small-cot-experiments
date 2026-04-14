@@ -12,6 +12,7 @@ from data.s5_cot.opd import (
     cached_teacher_token_probs,
     compute_teacher_log_probs,
     compute_teacher_token_probs,
+    extract_answer_logits,
     teacher_forward_kl,
 )
 from train_opd import validate_args
@@ -105,6 +106,35 @@ class OpdObjectiveTests(unittest.TestCase):
             torch.ones(2, 3),
         )
 
+    def test_cached_teacher_probs_match_explicit_stepwise_teacher_distribution(self):
+        model = ToyCachedModel()
+        prompt_ids = torch.tensor([[0, 1, 2], [2, 1, 0]], dtype=torch.uint8)
+        actions = torch.tensor([[3, 4, 5], [5, 4, 3]], dtype=torch.long)
+
+        teacher_probs = cached_teacher_token_probs(
+            model,
+            prompt_ids,
+            actions,
+            eta=0.15,
+            teacher_law="distributional_noise",
+            device="cpu",
+        )
+
+        full_seq = torch.cat((prompt_ids.long(), actions), dim=1)
+        full_logits, _ = model(full_seq[:, :-1], use_cache=False)
+        answer_logits = extract_answer_logits(
+            full_logits,
+            prompt_len=prompt_ids.size(1),
+            target_len=actions.size(1),
+        )
+        expected = compute_teacher_token_probs(
+            answer_logits,
+            eta=0.15,
+            teacher_law="distributional_noise",
+        )
+
+        torch.testing.assert_close(teacher_probs, expected)
+
     def test_forward_kl_is_zero_when_student_matches_teacher(self):
         torch.manual_seed(1)
         clean_logits = torch.randn(2, 4, VOCAB_SIZE)
@@ -142,6 +172,40 @@ class OpdObjectiveTests(unittest.TestCase):
                 student_temperature=0.0,
             )
         )
+
+    def test_teacher_laws_diverge_on_digit_and_nondigit_cases(self):
+        digit_case_logits = torch.zeros((1, 1, VOCAB_SIZE), dtype=torch.float32)
+        digit_case_logits[..., 4] = 2.0
+        digit_case_logits[..., 5] = 1.0
+        digit_case_logits[..., 2] = -0.5
+        nondigit_case_logits = torch.zeros((1, 1, VOCAB_SIZE), dtype=torch.float32)
+        nondigit_case_logits[..., 2] = 2.0
+        nondigit_case_logits[..., 4] = 1.5
+        nondigit_case_logits[..., 5] = 0.5
+
+        dist_digit = compute_teacher_token_probs(
+            digit_case_logits,
+            eta=0.2,
+            teacher_law="distributional_noise",
+        )
+        greedy_digit = compute_teacher_token_probs(
+            digit_case_logits,
+            eta=0.2,
+            teacher_law="corrupted_greedy",
+        )
+        self.assertGreater((dist_digit - greedy_digit).abs().max().item(), 1e-2)
+
+        dist_nondigit = compute_teacher_token_probs(
+            nondigit_case_logits,
+            eta=0.2,
+            teacher_law="distributional_noise",
+        )
+        greedy_nondigit = compute_teacher_token_probs(
+            nondigit_case_logits,
+            eta=0.2,
+            teacher_law="corrupted_greedy",
+        )
+        self.assertGreater((dist_nondigit - greedy_nondigit).abs().max().item(), 1e-2)
 
     def test_resume_metadata_defaults_missing_objective_to_reverse_kl(self):
         with tempfile.TemporaryDirectory() as tmpdir:

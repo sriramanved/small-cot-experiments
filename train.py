@@ -187,6 +187,7 @@ if is_synthetic_offline_dataset(dataset):
         reset_train_epoch,
         set_train_epoch_state,
     )
+    from data.synthetic.offline_losses import offline_teacher_prob_loss_from_logits
 if synthetic_task == 's5':
     from data.s5_cot.task import VOCAB_SIZE as s5_vocab_size
     from data.s5_cot.opd import forward_kl_full_loss
@@ -331,34 +332,8 @@ def unpack_batch(batch):
 
 
 def offline_teacher_prob_loss(model_ref, X, Y, teacher_probs):
-    if teacher_probs is None:
-        raise ValueError("teacher_probs batch is required for offline teacher-prob loss")
     logits, _ = model_ref(X, return_full_logits=True)
-    target_len = int(teacher_probs.size(1))
-    if logits.size(1) < target_len:
-        raise ValueError(
-            f"Model logits length {logits.size(1)} is shorter than teacher_probs "
-            f"target_len {target_len}"
-        )
-    prefix_len = logits.size(1) - target_len
-    expected_mask = torch.zeros_like(Y, dtype=torch.bool)
-    expected_mask[:, prefix_len:] = True
-    actual_mask = Y.ne(-1)
-    if not torch.equal(actual_mask, expected_mask):
-        raise ValueError(
-            "Offline teacher-prob targets require the continuation region to be "
-            "the final contiguous suffix of Y"
-        )
-    student_logits = logits[:, prefix_len:, :]
-    if student_logits.size(2) != teacher_probs.size(2):
-        raise ValueError(
-            f"Teacher probs vocab size {teacher_probs.size(2)} does not match "
-            f"model vocab size {student_logits.size(2)}"
-        )
-    loss, stats = forward_kl_full_loss(
-        student_logits,
-        teacher_probs=teacher_probs,
-    )
+    _, loss, stats = offline_teacher_prob_loss_from_logits(logits, Y, teacher_probs)
     return logits, loss, stats
 
 
