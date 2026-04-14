@@ -625,6 +625,66 @@ Sweep matrix:
 | Off-policy full-distribution greedy-corrupt match | Offline BC trained on full teacher next-token distributions, full `eta` sweep | `corrupted_greedy` | TODO | Current implementation does not support this teacher-law family yet |
 | On-policy full-distribution greedy-corrupt ablation | OPD (full KL distributional info), full `eta` sweep | `corrupted_greedy` | TODO | Full-information OPD teacher-law ablation |
 
+### 6.1 Visualization TODOs
+
+General note:
+
+- prefer plotting from real `eval_history.jsonl` data or full W&B eval-history exports rather than from hand-copied summary values whenever possible
+- for resumed runs, stitch histories by `iter` and keep the latest row for duplicate optimizer steps
+- the notebook [notebooks/s5_offline_bc_vs_nail_opd_mc_eval_curves.ipynb](/Users/vedsriraman/columbia/code/small-cot-experiments/nanoGPT/notebooks/s5_offline_bc_vs_nail_opd_mc_eval_curves.ipynb) now exports plot images to `analysis/figures/s5_eval_curves/`; rerun the relevant plot cells to refresh the embedded figures below
+
+Current plotting TODOs:
+
+- TODO: make WandB-style eval-curve plots for the matched offline BC MC vs NAIL-OPD MC comparison in three regimes:
+  - low noise: offline BC MC `eta = 0.05, 0.1, 0.2, 0.3`; NAIL-OPD MC `eta = 0.05, 0.1, 0.2, 0.3, 0.4`
+  - medium noise: offline BC MC `eta = 0.4, 0.5, 0.6`; NAIL-OPD MC `eta = 0.4, 0.5, 0.6, 0.7`
+  - high noise: offline BC MC and NAIL-OPD MC both at `eta = 0.7, 0.8, 0.9`
+- TODO: for each of the three regime-specific MC comparison figures above, plot both:
+  - `iter` vs `val/clean_full_exact`
+  - `iter` vs `val/clean_final_exact`
+- TODO: make the corresponding matched offline BC full-distribution vs NAIL-OPD full-distribution eval-curve figures once the offline full-distribution sweep is run
+- TODO: make endpoint summary plots of final clean-task performance vs `eta` for:
+  - offline BC MC
+  - NAIL-OPD MC
+  - offline BC full-distribution
+  - NAIL-OPD full-distribution
+- TODO: make a delta-vs-`eta` plot for the matched on-policy vs off-policy gap:
+  - NAIL-OPD MC minus offline BC MC
+  - NAIL-OPD full-distribution minus offline BC full-distribution
+- TODO: make an information-ablation plot comparing MC vs full-distribution supervision at matched `eta` separately for:
+  - offline methods
+  - online methods
+- TODO: make full training-curve plots for the main families:
+  - clean offline BC baseline
+  - offline BC MC `sample_then_corrupt`
+  - offline BC MC `greedy_then_corrupt`
+  - NAIL-OPD MC
+  - NAIL-OPD full-distribution
+  - OPD MC
+  - OPD full-distribution once available
+- TODO: make one compact matrix figure or table-backed heatmap with rows = method families and columns = `eta`, where each cell shows final `clean_full_exact`
+- TODO: make one appendix-style diagnostic figure comparing `clean_full_exact` and `clean_final_exact` directly to show where they meaningfully diverge and where they are visually almost identical
+
+Current exported MC eval-curve figures:
+
+Low noise:
+
+![Low-noise clean_full_exact](analysis/figures/s5_eval_curves/low_clean_full_exact.png)
+
+![Low-noise clean_final_exact](analysis/figures/s5_eval_curves/low_clean_final_exact.png)
+
+Medium noise:
+
+![Medium-noise clean_full_exact](analysis/figures/s5_eval_curves/medium_clean_full_exact.png)
+
+![Medium-noise clean_final_exact](analysis/figures/s5_eval_curves/medium_clean_final_exact.png)
+
+High noise:
+
+![High-noise clean_full_exact](analysis/figures/s5_eval_curves/high_clean_full_exact.png)
+
+![High-noise clean_final_exact](analysis/figures/s5_eval_curves/high_clean_final_exact.png)
+
 Priority order for the unfinished sweeps:
 
 1. finish the two sweeps already running:
