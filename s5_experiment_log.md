@@ -643,6 +643,43 @@ Normalization notes:
 - offline BC `sample_then_corrupt` is the matched off-policy MC law for online methods that sample from the `distributional_noise` teacher
 - offline BC `greedy_then_corrupt` is the matched off-policy law for online methods using `corrupted_greedy`
 
+Terminology glossary:
+
+- `sample_then_corrupt`:
+  offline rollout law; at each step, sample from the clean teacher distribution, then corrupt the sampled digit with probability `eta`, and feed that corrupted token into the next step
+- `distributional_noise`:
+  online teacher-law name for the full next-token distribution induced by `sample_then_corrupt`; this is the distribution-level counterpart of the same noisy process
+- `sampled-corrupted`:
+  informal shorthand rather than a separate code flag; it refers to realized token targets sampled from the `distributional_noise` teacher distribution
+- `greedy_then_corrupt`:
+  offline rollout law; at each step, take the clean teacher argmax token, then corrupt that greedy digit with probability `eta`, and feed that corrupted token into the next step
+- `corrupted_greedy`:
+  online teacher-law name for the full next-token distribution induced by `greedy_then_corrupt`; this is the distribution-level counterpart of the greedy-corrupt process
+- current matching rule:
+  compare NAIL-OPD / OPD runs using `teacher_law=distributional_noise` against offline BC `sample_then_corrupt`, not against offline BC `greedy_then_corrupt`
+
+Teacher-side vs student-side vs eval-side knobs:
+
+- teacher-side knobs:
+  - offline BC uses `rollout_mode` plus `target_mode`
+  - online OPD / NAIL-OPD uses `teacher_law`
+  - these teacher-side choices determine what noisy expert behavior or noisy expert distribution the student is trained against
+- student-side knobs:
+  - the online objective determines how the student is updated from that teacher signal
+  - `reverse_kl_tm` = OPD (MC version)
+  - `forward_kl_simple` = NAIL-OPD (MC version)
+  - `reverse_kl_full` = OPD (full KL distributional info)
+  - `forward_kl_full` = NAIL-OPD (full KL distributional info)
+  - `student_temperature` controls the student's own rollout policy during online training:
+    - `student_temperature > 0`: sampled student rollouts
+    - `student_temperature = 0`: greedy student rollouts
+  - the main S5 online runs summarized here use `student_temperature = 1.0`, so their training rollouts are sampled rather than greedy
+- eval-side metrics:
+  - `val/cot_exact`: teacher-forced exact CoT match
+  - `val/clean_full_exact`: greedy autoregressive exact match of the full clean CoT
+  - `val/clean_final_exact`: greedy autoregressive exact match of only the final clean answer
+  - the main notebook plots currently use `val/clean_full_exact` and `val/clean_final_exact`, so the plotted eval curves are greedy rollout evaluations rather than teacher-forced ones
+
 Shared defaults for the main comparison sweeps:
 
 - `task = s5`
@@ -659,7 +696,7 @@ Sweep matrix:
 | Clean baseline | Clean offline BC, `eta = 0.0`, chosen `n8000000-fixed` baseline | clean teacher | Done | Canonical off-policy clean baseline for all later comparisons |
 | Off-policy MC baseline | Offline BC, `sample_then_corrupt`, full `eta` sweep | sample-then-corrupt | In Progress | `eta = 0.05, 0.1, 0.2` done; higher `eta`s currently running |
 | On-policy MC | NAIL-OPD (MC version), full `eta` sweep | `distributional_noise` | Done | Main on-policy MC family |
-| On-policy MC | OPD (MC version), full `eta` sweep, with sampled/corrupted noisy expert | sample-then-corrupt / sampled-corrupted | In Progress | This is the current OPD MC sweep that is running |
+| On-policy MC | OPD (MC version), full `eta` sweep | `distributional_noise` | In Progress | This is the current OPD MC sweep that is running; the MC targets are sampled from this noisy teacher law rather than from a separate `sampled-corrupted` config flag |
 | Off-policy greedy-corrupt baseline | Offline BC, `greedy_then_corrupt`, full `eta` sweep | greedy-then-corrupt | Done | Completed off-policy greedy-corrupt baseline |
 | On-policy full-distribution | NAIL-OPD (full KL distributional info), full `eta` sweep | `distributional_noise` | Done | Completed online full-distribution family |
 | Off-policy full-distribution match | Offline BC trained on full teacher next-token distributions, full `eta` sweep | `distributional_noise` | TODO | Implemented and ready to launch; this is the direct off-policy match to NAIL-OPD (full KL distributional info) |
@@ -676,6 +713,7 @@ General note:
 
 - prefer plotting from real `eval_history.jsonl` data or full W&B eval-history exports rather than from hand-copied summary values whenever possible
 - for resumed runs, stitch histories by `iter` and keep the latest row for duplicate optimizer steps
+- the main clean eval curves plotted below use greedy autoregressive metrics (`val/clean_full_exact` and `val/clean_final_exact`), not teacher-forced `val/cot_exact`
 - the notebook [notebooks/s5_offline_bc_vs_nail_opd_mc_eval_curves.ipynb](/Users/vedsriraman/columbia/code/small-cot-experiments/nanoGPT/notebooks/s5_offline_bc_vs_nail_opd_mc_eval_curves.ipynb) now exports plot images to `analysis/figures/s5_eval_curves/`; rerun the relevant plot cells to refresh the embedded figures below
 
 Current plotting TODOs:
