@@ -35,6 +35,10 @@ Notes:
 
 - Older helper scripts defaulted to `N_TRAIN=6000000`, but the main later S5 comparison setup was standardized to the `15M` prompt bank and `8M` subset.
 - Some older W&B run names do not encode the prompt-bank size, so for early subset sweeps we should verify prompt-bank size from logs or metadata before citing it as fact.
+- the newer AICS cluster launchers now use an eta-conditional prefix policy for some resumed / newly launched comparison sweeps:
+  - `eta <= 0.2` uses the original `8,000,000` prompt prefix
+  - `eta > 0.2` uses `12,000,000`
+  - both are prefixes of the same fixed `15M` prompt-bank `train_order`, so the `8M` subset remains a strict ordered subset of the `12M` subset
 
 ## 1. Clean Teacher / Expert Checkpoint
 
@@ -259,6 +263,10 @@ Main takeaways:
 - high noise (`0.2`) clearly hurt
 - the offline datasets were verified to match the intended prompt bank, subset, teacher checkpoint, and `eta`
 - the clean prompt subset was held fixed across etas; only the generated teacher targets changed
+- current rerun / provenance note:
+  - the metrics recorded above remain the earlier summarized results for this family
+  - the higher-`eta` `greedy_then_corrupt` offline BC runs are also being rerun on the dev node because of the same learning-rate issue that affected the other off-policy MC reruns
+  - until those reruns finish, the higher-`eta` `greedy_then_corrupt` results should not be treated as the final source of record
 
 ## 4. Noisy Offline BC, `sample_then_corrupt`
 
@@ -376,8 +384,12 @@ Current interpretation note:
 
 - these `sample_then_corrupt` offline BC results are much stronger than one might guess from the raw sampled noisy-teacher rollout diagnostics alone
 - in particular, they now form the most relevant offline MC baseline for comparison against NAIL-OPD (MC version)
-- the matched offline full-distribution BC pipeline for the same `sample_then_corrupt` / `distributional_noise` setting has now been implemented, but its sweep results are not yet summarized here
-- TODO: finish these MC runs for higher etas. 
+- the matched offline full-distribution BC pipeline for the same `sample_then_corrupt` / `distributional_noise` setting has now been implemented, but it is being intentionally deferred while the MC/simple comparison matrix is filled in first
+- current rerun / provenance note:
+  - the completed `eta = 0.05`, `0.1`, and `0.2` runs summarized above are still the recorded earlier results for this family
+  - the higher-`eta` offline BC MC runs are currently being rerun on the dev node rather than treated as stable AICS results, because the earlier attempt had a learning-rate issue and should not be treated as the final source of record
+  - until those reruns finish, do not summarize the higher-`eta` `sample_then_corrupt` offline BC MC results as complete
+- TODO: finish these higher-`eta` offline BC MC reruns on the dev node before returning to the offline full-distribution variant.
 
 ## 5. Native Online OPD / NAIL-OPD Runs (`train_opd.py`)
 
@@ -553,7 +565,9 @@ Current native S5 OPD setup for OPD (full KL distributional info):
 - backend: native nanoGPT OPD path
 - launcher: `run_s5_opd_eta.sh` -> `bash scripts/run_opd_sweep.sh`
 - prompt bank: `data/s5_clean_prompt_bank_m21_n15000000_val5000`
-- subset size: `8,000,000`
+- subset-size policy on the current cluster launcher:
+  - `eta <= 0.2`: `8,000,000`
+  - `eta > 0.2`: `12,000,000`
 - teacher checkpoint: `out-s5-cot-len21-depth1-400k`
 - teacher law: `distributional_noise`
 - objective: `reverse_kl_full`
@@ -584,7 +598,9 @@ Run provenance / execution notes:
 
 Status:
 
-- OPD (full KL distributional info) is now actively running on AICS, so it should be treated as an in-progress sweep rather than a TODO / unimplemented item
+- OPD (full KL distributional info) was launched on AICS and is resumable from the rolling `ckpt.pt` checkpoints, but it is now being deliberately deprioritized in favor of finishing the MC/simple comparisons first
+- at the time of this status update, the relevant active AICS Slurm jobs were the running `reverse_kl_full` jobs `36010`, `36011`, and `36013`
+- the current plan is to stop those running full-distribution jobs only after preserving the latest written `ckpt.pt` state, then return to them later rather than treating them as abandoned
 - final metrics are not yet summarized here
 - once the sweep finishes, tabulate it directly against:
   - offline BC full-distribution
@@ -612,6 +628,10 @@ Current empirical impressions:
 - the strongest qualitative full-distribution example so far is that NAIL-OPD (full KL distributional info) at `eta = 0.4` appears to outperform the offline BC MC baseline even at lower `eta` values such as `0.3`, `0.2`, and `0.1`, and the same qualitative pattern appears to hold at other `eta` values as well
 - the `sample_then_corrupt` offline BC baseline is itself quite strong at low and moderate `eta`, which makes the online-vs-offline MC comparison more meaningful and worth tabulating carefully
 - the matched offline full-distribution BC pipeline has now been implemented for the `distributional_noise` / `sample_then_corrupt` setting, so the remaining missing piece there is the actual sweep and table, not the code path itself
+- current execution priority has shifted to MC/simple methods first:
+  - finish the offline BC MC and OPD MC sweeps
+  - pause both offline BC full-distribution and OPD full-distribution cluster work after a resumable latest checkpoint exists
+  - return to the full-distribution comparisons only after the MC matrix is in good shape
 
 These full-distribution comparisons should still be interpreted cautiously until the missing matched baselines below are run and tabulated explicitly.
 
@@ -692,13 +712,13 @@ Sweep matrix:
 | Comparison | Sweep | Matched law | Status | Notes |
 |---|---|---|---|---|
 | Clean baseline | Clean offline BC, `eta = 0.0`, chosen `n8000000-fixed` baseline | clean teacher | Done | Canonical off-policy clean baseline for all later comparisons |
-| Off-policy MC baseline | Offline BC, `sample_then_corrupt`, full `eta` sweep | `sample_then_corrupt` | In Progress | `eta = 0.05, 0.1, 0.2` done; higher `eta`s currently running |
+| Off-policy MC baseline | Offline BC, `sample_then_corrupt`, full `eta` sweep | `sample_then_corrupt` | In Progress | earlier results are recorded; being rerun on the cluster because of a learning-rate mishap in the earlier attempt |
 | On-policy MC | NAIL-OPD (MC version), full `eta` sweep | `distributional_noise` | Done | Main on-policy MC family |
 | On-policy MC | OPD (MC version), full `eta` sweep | `distributional_noise` | In Progress | This is the current OPD MC sweep that is running |
-| Off-policy greedy-corrupt baseline | Offline BC, `greedy_then_corrupt`, full `eta` sweep | `greedy_then_corrupt` | Done | Completed off-policy greedy-corrupt baseline |
+| Off-policy greedy-corrupt baseline | Offline BC, `greedy_then_corrupt`, full `eta` sweep | `greedy_then_corrupt` | In Progress | earlier results are recorded, but being rerun on the dev node because of the learning-rate mishap |
 | On-policy full-distribution | NAIL-OPD (full KL distributional info), full `eta` sweep | `distributional_noise` | Done | Completed online full-distribution family |
-| Off-policy full-distribution match | Offline BC trained on full teacher next-token distributions, full `eta` sweep | `distributional_noise` | TODO | Implemented and ready to launch; this is the direct off-policy match to NAIL-OPD (full KL distributional info) |
-| On-policy full-distribution | OPD (full KL distributional info), full `eta` sweep | `distributional_noise` | In Progress | `reverse_kl_full` is implemented; `eta = 0.1` was run first on the dev node and the high-`eta` `0.3 ... 0.9` sweep is now running on AICS / Slurm |
+| Off-policy full-distribution match | Offline BC trained on full teacher next-token distributions, full `eta` sweep | `distributional_noise` | Deferred | Implemented, but intentionally paused while the MC/simple comparison matrix is prioritized |
+| On-policy full-distribution | OPD (full KL distributional info), full `eta` sweep | `distributional_noise` | Deferred | `reverse_kl_full` is implemented and resumable from AICS `ckpt.pt`, but the active cluster focus has shifted back to MC/simple methods |
 | On-policy MC greedy-corrupt match | NAIL-OPD (MC version), full `eta` sweep | `corrupted_greedy` | TODO | Direct online match to completed offline `greedy_then_corrupt` BC |
 | On-policy MC greedy-corrupt match | OPD (MC version), full `eta` sweep | `corrupted_greedy` | TODO | Needed if the OPD MC family is to be matched to offline `greedy_then_corrupt` as well |
 | On-policy full-distribution greedy-corrupt ablation | NAIL-OPD (full KL distributional info), full `eta` sweep | `corrupted_greedy` | TODO | Needed if teacher-law ablations are to be symmetric in the full-information setting |
@@ -824,14 +844,15 @@ Current exported per-`eta` method-comparison figures:
 Priority order for the unfinished sweeps:
 
 1. finish the sweeps already running:
-   - offline BC `sample_then_corrupt` higher-`eta` completion
+   - offline BC `greedy_then_corrupt` higher-`eta` reruns on the dev node
+   - offline BC `sample_then_corrupt` higher-`eta` reruns on the dev node
    - OPD (MC version) sweep completion
-   - OPD (full KL distributional info) sweep completion on AICS
-2. add the direct off-policy full-distribution counterpart to NAIL-OPD (full KL distributional info):
-   - offline BC full-distribution, `distributional_noise`
-3. complete the greedy-corrupt online matches:
+2. complete the remaining MC/simple online matches:
    - NAIL-OPD (MC version) with `corrupted_greedy`
    - OPD (MC version) with `corrupted_greedy`
+3. only after the MC/simple matrix is reasonably complete, return to the deferred full-distribution comparisons:
+   - offline BC full-distribution, `distributional_noise`
+   - OPD (full KL distributional info) completion on AICS
 4. only then do the symmetric full-information greedy-corrupt ablations:
    - NAIL-OPD (full KL distributional info) with `corrupted_greedy`
    - offline BC full-distribution with `corrupted_greedy`
