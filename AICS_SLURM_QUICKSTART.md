@@ -1,6 +1,6 @@
 # AICS Slurm Quickstart
 
-This repo now includes a minimal AICS workflow for one S5 OPD eta job.
+This repo now includes a minimal AICS workflow for S5 OPD eta jobs.
 
 ## 0. Start in scratch and enter the repo
 
@@ -121,10 +121,37 @@ sbatch --account=<ACCOUNT> --partition=<GPU_PARTITION> --chdir="$PWD" run_s5_opd
 - `N_TRAIN=15000000`
 - `SUBSET_SIZE=8000000`
 - `ETAS=<eta>`
-- `OBJECTIVE=reverse_kl_tm`
+- `OBJECTIVE=reverse_kl_full`
 - `TEACHER_LAW=distributional_noise`
 - `EVAL_BATCH_SIZE=1024`
 - `COMPILE=0`
+
+For the full `eta > 0.2` reverse-KL-full sweep, submit separate jobs:
+
+```bash
+bash scripts/aics_submit_s5_opd_eta_sweep.sh \
+  --account <ACCOUNT> \
+  --partition <GPU_PARTITION>
+```
+
+By default that submits:
+
+- `0.3`
+- `0.4`
+- `0.5`
+- `0.6`
+- `0.7`
+- `0.8`
+- `0.9`
+
+You can also pass a custom eta list:
+
+```bash
+bash scripts/aics_submit_s5_opd_eta_sweep.sh \
+  --account <ACCOUNT> \
+  --partition <GPU_PARTITION> \
+  0.6 0.7 0.8 0.9
+```
 
 If you want to try a preemptible queue later, the pattern is:
 
@@ -140,8 +167,8 @@ policy.
 
 ```bash
 squeue -u $USER
-tail -f logs/slurm/s5-opd-eta-<jobid>.out
-tail -f logs/opd/s5_opd_reverse_kl_tm_n8000000_eta0p1_distributional_noise_t1p0.log
+tail -f logs/slurm/s5-opd-rkl-full-<jobid>.out
+tail -f logs/opd/s5_opd_reverse_kl_full_n8000000_eta0p3_distributional_noise_t1p0.log
 scancel <jobid>
 ```
 

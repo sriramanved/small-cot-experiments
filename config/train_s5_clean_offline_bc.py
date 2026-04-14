@@ -27,8 +27,11 @@ weight_decay = 0.0
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0
-decay_lr = False
+# Match the native OPD trainer: warm up from 1e-6 to learning_rate, then stay flat.
+decay_lr = True
 warmup_iters = 2000
+lr_decay_iters = max_iters
+min_lr = learning_rate
 
 dtype = 'float16'
 compile = True

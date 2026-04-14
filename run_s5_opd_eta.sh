@@ -6,7 +6,7 @@
 #
 # This script intentionally leaves account/partition out of #SBATCH directives so the
 # submitter can choose only from values confirmed on the cluster.
-#SBATCH --job-name=s5-opd-eta
+#SBATCH --job-name=s5-opd-rkl-full
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
@@ -45,7 +45,7 @@ env \
   N_TRAIN="${N_TRAIN:-15000000}" \
   SUBSET_SIZE="${SUBSET_SIZE:-8000000}" \
   ETAS="${ETA}" \
-  OBJECTIVE="${OBJECTIVE:-reverse_kl_tm}" \
+  OBJECTIVE="${OBJECTIVE:-reverse_kl_full}" \
   TEACHER_LAW="${TEACHER_LAW:-distributional_noise}" \
   EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-1024}" \
   COMPILE="${COMPILE:-0}" \
