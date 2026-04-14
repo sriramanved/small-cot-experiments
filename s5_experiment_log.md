@@ -2,7 +2,7 @@
 
 ## Shared S5 Setup
 
-These settings appear to be the common backbone for the main S5 experiments:
+These settings form the common backbone for the main S5 experiments:
 
 - task: `s5`
 - teacher checkpoint: `out-s5-cot-len21-depth1-400k`
