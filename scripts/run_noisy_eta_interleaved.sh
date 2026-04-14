@@ -23,6 +23,7 @@ RENDER_LOG_DIR="${RENDER_LOG_DIR:-logs/noisy_dataset_render}"
 TRAIN_LOG_DIR="${TRAIN_LOG_DIR:-logs/noisy_bc}"
 BC_COMPILE="${BC_COMPILE:-}"
 BC_S5_EVAL_BATCH_SIZE="${BC_S5_EVAL_BATCH_SIZE:-}"
+BC_SAVE_EVERY="${BC_SAVE_EVERY:-}"
 
 mkdir -p "${RENDER_LOG_DIR}" "${TRAIN_LOG_DIR}"
 
@@ -131,6 +132,9 @@ for ETA in ${ETAS}; do
   fi
   if [[ -n "${BC_S5_EVAL_BATCH_SIZE}" ]]; then
     TRAIN_EXTRA_ARGS+=("--s5_eval_batch_size=${BC_S5_EVAL_BATCH_SIZE}")
+  fi
+  if [[ -n "${BC_SAVE_EVERY}" ]]; then
+    TRAIN_EXTRA_ARGS+=("--save_every=${BC_SAVE_EVERY}")
   fi
 
   python -u train.py config/train_s5_noisy_bc.py \

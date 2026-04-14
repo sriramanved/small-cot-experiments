@@ -649,8 +649,6 @@ Terminology glossary:
   offline rollout law; at each step, sample from the clean teacher distribution, then corrupt the sampled digit with probability `eta`, and feed that corrupted token into the next step
 - `distributional_noise`:
   online teacher-law name for the full next-token distribution induced by `sample_then_corrupt`; this is the distribution-level counterpart of the same noisy process
-- `sampled-corrupted`:
-  informal shorthand rather than a separate code flag; it refers to realized token targets sampled from the `distributional_noise` teacher distribution
 - `greedy_then_corrupt`:
   offline rollout law; at each step, take the clean teacher argmax token, then corrupt that greedy digit with probability `eta`, and feed that corrupted token into the next step
 - `corrupted_greedy`:
@@ -694,10 +692,10 @@ Sweep matrix:
 | Comparison | Sweep | Matched law | Status | Notes |
 |---|---|---|---|---|
 | Clean baseline | Clean offline BC, `eta = 0.0`, chosen `n8000000-fixed` baseline | clean teacher | Done | Canonical off-policy clean baseline for all later comparisons |
-| Off-policy MC baseline | Offline BC, `sample_then_corrupt`, full `eta` sweep | sample-then-corrupt | In Progress | `eta = 0.05, 0.1, 0.2` done; higher `eta`s currently running |
+| Off-policy MC baseline | Offline BC, `sample_then_corrupt`, full `eta` sweep | `sample_then_corrupt` | In Progress | `eta = 0.05, 0.1, 0.2` done; higher `eta`s currently running |
 | On-policy MC | NAIL-OPD (MC version), full `eta` sweep | `distributional_noise` | Done | Main on-policy MC family |
-| On-policy MC | OPD (MC version), full `eta` sweep | `distributional_noise` | In Progress | This is the current OPD MC sweep that is running; the MC targets are sampled from this noisy teacher law rather than from a separate `sampled-corrupted` config flag |
-| Off-policy greedy-corrupt baseline | Offline BC, `greedy_then_corrupt`, full `eta` sweep | greedy-then-corrupt | Done | Completed off-policy greedy-corrupt baseline |
+| On-policy MC | OPD (MC version), full `eta` sweep | `distributional_noise` | In Progress | This is the current OPD MC sweep that is running |
+| Off-policy greedy-corrupt baseline | Offline BC, `greedy_then_corrupt`, full `eta` sweep | `greedy_then_corrupt` | Done | Completed off-policy greedy-corrupt baseline |
 | On-policy full-distribution | NAIL-OPD (full KL distributional info), full `eta` sweep | `distributional_noise` | Done | Completed online full-distribution family |
 | Off-policy full-distribution match | Offline BC trained on full teacher next-token distributions, full `eta` sweep | `distributional_noise` | TODO | Implemented and ready to launch; this is the direct off-policy match to NAIL-OPD (full KL distributional info) |
 | On-policy full-distribution | OPD (full KL distributional info), full `eta` sweep | `distributional_noise` | In Progress | `reverse_kl_full` is implemented; `eta = 0.1` was run first on the dev node and the high-`eta` `0.3 ... 0.9` sweep is now running on AICS / Slurm |

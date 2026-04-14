@@ -35,3 +35,4 @@ min_lr = learning_rate
 
 dtype = 'float16'
 compile = True
+save_every = 0

@@ -70,5 +70,6 @@ env \
   OBJECTIVE="${OBJECTIVE:-reverse_kl_full}" \
   TEACHER_LAW="${TEACHER_LAW:-distributional_noise}" \
   EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-1024}" \
+  SAVE_INTERVAL="${SAVE_INTERVAL:-0}" \
   COMPILE="${COMPILE:-0}" \
   bash scripts/run_opd_sweep.sh

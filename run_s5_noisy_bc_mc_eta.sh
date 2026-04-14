@@ -74,4 +74,5 @@ env \
   PROMPT_BANK_DIR="${PROMPT_BANK_DIR:-data/s5_clean_prompt_bank_m21_n15000000_val5000}" \
   BC_COMPILE="${BC_COMPILE:-True}" \
   BC_S5_EVAL_BATCH_SIZE="${BC_S5_EVAL_BATCH_SIZE:-512}" \
+  BC_SAVE_EVERY="${BC_SAVE_EVERY:-0}" \
   bash scripts/run_noisy_eta_interleaved.sh

@@ -35,4 +35,4 @@ compile = True
 modadd_eval_metrics = True
 s5_eval_n = 256
 s5_eval_seed = 123
-save_every = 50000
+save_every = 0
