@@ -62,8 +62,14 @@ def decode(ids, *, p: int) -> list[str]:
     return [itos[int(i)] for i in ids]
 
 
-def sample_cot_example_ids_from_rng(rng: random.Random, *, p: int, m: int) -> tuple[list[int], list[int]]:
+def validate_mode(mode: str) -> None:
+    if mode not in ("cot", "base"):
+        raise ValueError(f"mode must be 'cot' or 'base', got {mode!r}")
+
+
+def sample_target_ids_from_rng(rng: random.Random, *, p: int, m: int, mode: str) -> tuple[list[int], list[int]]:
     validate_task_params(p=p, m=m)
+    validate_mode(mode)
     prompt_ids = []
     cot_ids = []
     running = 0
@@ -73,7 +79,17 @@ def sample_cot_example_ids_from_rng(rng: random.Random, *, p: int, m: int) -> tu
         running = (running + value) % p
         cot_ids.append(running)
     prompt_ids.append(equals_token_id(p))
-    return prompt_ids, cot_ids
+    if mode == "cot":
+        return prompt_ids, cot_ids
+    return prompt_ids, [running]
+
+
+def sample_cot_example_ids_from_rng(rng: random.Random, *, p: int, m: int) -> tuple[list[int], list[int]]:
+    return sample_target_ids_from_rng(rng, p=p, m=m, mode="cot")
+
+
+def sample_base_example_ids_from_rng(rng: random.Random, *, p: int, m: int) -> tuple[list[int], list[int]]:
+    return sample_target_ids_from_rng(rng, p=p, m=m, mode="base")
 
 
 def sample_cot_example(*, p: int, m: int) -> tuple[list[str], list[str]]:
@@ -81,9 +97,15 @@ def sample_cot_example(*, p: int, m: int) -> tuple[list[str], list[str]]:
     return decode(prompt_ids, p=p), decode(cot_ids, p=p)
 
 
-def sample_xy(*, p: int = 7, m: int = 21):
+def sample_base_example(*, p: int, m: int) -> tuple[list[str], list[str]]:
+    prompt_ids, target_ids = sample_base_example_ids_from_rng(random, p=p, m=m)
+    return decode(prompt_ids, p=p), decode(target_ids, p=p)
+
+
+def sample_xy(*, p: int = 7, m: int = 21, mode: str = "cot"):
     validate_task_params(p=p, m=m)
-    prompt_ids, target_ids = sample_cot_example_ids_from_rng(random, p=p, m=m)
+    validate_mode(mode)
+    prompt_ids, target_ids = sample_target_ids_from_rng(random, p=p, m=m, mode=mode)
     seq = prompt_ids + target_ids
 
     x = torch.tensor(seq[:-1], dtype=torch.long)
@@ -94,11 +116,12 @@ def sample_xy(*, p: int = 7, m: int = 21):
     return x, y
 
 
-def get_batch(batch_size, device, *, p: int = 7, m: int = 21):
+def get_batch(batch_size, device, *, p: int = 7, m: int = 21, mode: str = "cot"):
     validate_task_params(p=p, m=m)
+    validate_mode(mode)
     xs, ys = [], []
     for _ in range(batch_size):
-        x, y = sample_xy(p=p, m=m)
+        x, y = sample_xy(p=p, m=m, mode=mode)
         xs.append(x)
         ys.append(y)
     x_batch = torch.stack(xs).to(device)
@@ -131,17 +154,18 @@ def corrupt_ids(ids, eta, *, p: int):
     )
 
 
-def _sample_eval_batch_from_rng(rng, batch_n, *, p: int, m: int):
+def _sample_eval_batch_from_rng(rng, batch_n, *, p: int, m: int, mode: str = "cot"):
     validate_task_params(p=p, m=m)
+    validate_mode(mode)
     prompt_batches = []
-    cot_batches = []
+    target_batches = []
     for _ in range(batch_n):
-        prompt_ids, cot_ids = sample_cot_example_ids_from_rng(rng, p=p, m=m)
+        prompt_ids, target_ids = sample_target_ids_from_rng(rng, p=p, m=m, mode=mode)
         prompt_batches.append(prompt_ids)
-        cot_batches.append(cot_ids)
+        target_batches.append(target_ids)
     prompt_ids_batch = torch.tensor(prompt_batches, dtype=torch.long)
-    cot_ids_batch = torch.tensor(cot_batches, dtype=torch.long)
-    return prompt_ids_batch, cot_ids_batch
+    target_ids_batch = torch.tensor(target_batches, dtype=torch.long)
+    return prompt_ids_batch, target_ids_batch
 
 
 @torch.no_grad()
@@ -154,8 +178,10 @@ def evaluate_clean_modadd_metrics(
     n_eval=256,
     seed=123,
     batch_size=256,
+    mode: str = "cot",
 ):
     validate_task_params(p=p, m=m)
+    validate_mode(mode)
     rng = random.Random(seed)
 
     tf_full_ok = 0
@@ -164,19 +190,19 @@ def evaluate_clean_modadd_metrics(
 
     for start in range(0, n_eval, batch_size):
         end = min(start + batch_size, n_eval)
-        prompt_ids_batch, cot_ids_batch = _sample_eval_batch_from_rng(rng, end - start, p=p, m=m)
+        prompt_ids_batch, target_ids_batch = _sample_eval_batch_from_rng(rng, end - start, p=p, m=m, mode=mode)
 
-        tf_ok = teacher_forced_exact_batch(model, prompt_ids_batch, cot_ids_batch, device)
+        tf_ok = teacher_forced_exact_batch(model, prompt_ids_batch, target_ids_batch, device)
         tf_full_ok += int(tf_ok.sum().item())
 
         pred_ids_batch = greedy_generate_target_ids_batched(
             model,
             prompt_ids_batch,
-            cot_ids_batch.size(1),
+            target_ids_batch.size(1),
             device,
         )
-        ar_full_ok += int(pred_ids_batch.eq(cot_ids_batch).all(dim=1).sum().item())
-        ar_final_ok += int(pred_ids_batch[:, -1:].eq(cot_ids_batch[:, -1:]).all(dim=1).sum().item())
+        ar_full_ok += int(pred_ids_batch.eq(target_ids_batch).all(dim=1).sum().item())
+        ar_final_ok += int(pred_ids_batch[:, -1:].eq(target_ids_batch[:, -1:]).all(dim=1).sum().item())
 
     return {
         "cot_exact": tf_full_ok / n_eval,

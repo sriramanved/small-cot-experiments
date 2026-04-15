@@ -10,7 +10,7 @@ fi
 
 P="${P:-7}"
 M="${M:-21}"
-N_TRAIN="${N_TRAIN:-6000000}"
+N_TRAIN="${N_TRAIN:-15000000}"
 N_VAL="${N_VAL:-5000}"
 TEACHER_CHECKPOINT="${TEACHER_CHECKPOINT:-out-modadd-cot-p${P}-m${M}-depth1}"
 PROMPT_BANK_DIR="${PROMPT_BANK_DIR:-data/modadd_clean_prompt_bank_p${P}_m${M}_n${N_TRAIN}_val${N_VAL}}"

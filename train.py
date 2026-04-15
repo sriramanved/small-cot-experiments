@@ -150,7 +150,7 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(
 def synthetic_task_name(dataset_name):
     if dataset_name == 's5_cot' or dataset_name.startswith('s5_clean_offline') or dataset_name.startswith('s5_noisy_offline'):
         return 's5'
-    if dataset_name == 'modadd_cot' or dataset_name.startswith('modadd_clean_offline') or dataset_name.startswith('modadd_noisy_offline'):
+    if dataset_name in ('modadd_cot', 'modadd_base') or dataset_name.startswith('modadd_clean_offline') or dataset_name.startswith('modadd_noisy_offline'):
         return 'modadd'
     return None
 
@@ -176,7 +176,7 @@ def synthetic_clean_train_loss_enabled(task_name):
 
 
 def synthetic_report_cot_exact(task_name):
-    return task_name == 's5'
+    return False
 
 
 synthetic_task = synthetic_task_name(dataset)
@@ -208,7 +208,7 @@ elif synthetic_task == 'modadd':
         evaluate_saved_clean_modadd_metrics,
         vocab_size as modadd_vocab_size,
     )
-    if dataset == 'modadd_cot':
+    if dataset in ('modadd_cot', 'modadd_base'):
         from data.modular_addition.task import evaluate_clean_modadd_metrics
         from data.modular_addition.task import get_batch as modadd_get_batch
 
@@ -274,6 +274,8 @@ config['modadd_p'] = modadd_p
 config['modadd_m'] = modadd_m
 config['resolved_modadd_p'] = resolved_modadd_p
 config['resolved_modadd_m'] = resolved_modadd_m
+modadd_mode = 'base' if dataset == 'modadd_base' else 'cot'
+config['modadd_mode'] = modadd_mode
 
 
 def get_batch(split, target_type=None):
@@ -284,12 +286,13 @@ def get_batch(split, target_type=None):
             mode=s5_mode,
             m=s5_m,
         )
-    elif dataset == 'modadd_cot':
+    elif dataset in ('modadd_cot', 'modadd_base'):
         return modadd_get_batch(
             batch_size=batch_size,
             device=device,
             p=resolved_modadd_p,
             m=resolved_modadd_m,
+            mode=modadd_mode,
         )
     elif is_synthetic_offline_dataset(dataset):
         if target_type is None:
@@ -589,6 +592,7 @@ def estimate_loss():
                     n_eval=s5_eval_n,
                     seed=s5_eval_seed,
                     batch_size=s5_eval_batch_size,
+                    mode=modadd_mode,
                 )
             if synthetic_report_cot_exact(synthetic_task):
                 out["val_cot_exact"] = metrics["cot_exact"]
@@ -623,6 +627,10 @@ def get_lr(it):
 if wandb_log and master_process:
     import wandb
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
+    wandb.define_metric("iter")
+    wandb.define_metric("lr", step_metric="iter")
+    wandb.define_metric("train/*", step_metric="iter")
+    wandb.define_metric("val/*", step_metric="iter")
 
 
 def save_eval_summary(reason, losses):
@@ -829,6 +837,7 @@ while True:
     if iter_num > max_iters:
         if final_eval_on_exit and master_process:
             run_eval_and_checkpoint(reason="final", force_save=True)
+            mark_run_complete()
         break
 
 if ddp:

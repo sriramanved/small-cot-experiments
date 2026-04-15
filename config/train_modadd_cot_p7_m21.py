@@ -1,10 +1,11 @@
 out_dir = 'out-modadd-cot-p7-m21-depth1'
 eval_interval = 5000
 log_interval = 50
-eval_iters = 200
+eval_iters = 50
 always_save_checkpoint = True
 
-wandb_log = False
+wandb_log = True
+wandb_project = 'small-cot-experiments'
 dataset = 'modadd_cot'
 
 modadd_p = 7
@@ -28,11 +29,15 @@ beta2 = 0.95
 grad_clip = 1.0
 decay_lr = True
 warmup_iters = 2000
+lr_decay_iters = max_iters
+min_lr = learning_rate
 
 dtype = 'float16'
-compile = True
+compile = False
 
+final_eval_on_exit = True
 modadd_eval_metrics = True
 s5_eval_n = 256
+s5_eval_batch_size = 512
 s5_eval_seed = 123
 save_every = 0

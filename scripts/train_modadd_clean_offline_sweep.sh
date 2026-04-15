@@ -10,7 +10,7 @@ fi
 
 P="${P:-7}"
 M="${M:-21}"
-BASE_N="${BASE_N:-6000000}"
+BASE_N="${BASE_N:-15000000}"
 SUBSET_SIZES="${SUBSET_SIZES:-250000 500000 1000000 2000000 4000000 6000000}"
 BASE_DATASET="${BASE_DATASET:-modadd_clean_offline_p${P}_m${M}_n${BASE_N}}"
 LOG_DIR="${LOG_DIR:-logs/modadd_clean_offline_sweep}"

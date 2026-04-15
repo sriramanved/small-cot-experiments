@@ -206,6 +206,45 @@ def _run_train_opd_s5(
 
 
 class S5FullDistributionOfflineBCTests(unittest.TestCase):
+    def test_train_py_online_s5_eval_only_omits_val_cot_exact(self):
+        out_dir = Path(tempfile.mkdtemp(prefix="s5-online-out-"))
+
+        try:
+            cmd = [
+                sys.executable,
+                "train.py",
+                "--dataset=s5_cot",
+                "--out_dir=" + str(out_dir),
+                "--s5_m=2",
+                "--device=cpu",
+                "--dtype=float32",
+                "--compile=False",
+                "--n_layer=1",
+                "--n_head=1",
+                "--n_embd=16",
+                "--block_size=28",
+                "--batch_size=2",
+                "--gradient_accumulation_steps=1",
+                "--learning_rate=0.001",
+                "--max_iters=1",
+                "--eval_interval=1",
+                "--eval_iters=1",
+                "--always_save_checkpoint=False",
+                "--eval_only=True",
+                "--s5_eval_metrics=True",
+                "--s5_eval_n=2",
+                "--s5_eval_batch_size=2",
+                "--wandb_log=False",
+            ]
+            subprocess.run(cmd, cwd=REPO_ROOT, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+            last_eval = _read_json(out_dir / "last_eval.json")
+            self.assertNotIn("val/cot_exact", last_eval)
+            self.assertIn("val/clean_full_exact", last_eval)
+            self.assertIn("val/clean_final_exact", last_eval)
+        finally:
+            shutil.rmtree(out_dir, ignore_errors=True)
+
     def test_render_teacher_probs_rejects_unsupported_rollout_mode(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -313,6 +352,7 @@ class S5FullDistributionOfflineBCTests(unittest.TestCase):
             self.assertTrue((out_dir / "eval_history.jsonl").exists())
             self.assertTrue((out_dir / "completed.txt").exists())
             last_eval = _read_json(out_dir / "last_eval.json")
+            self.assertNotIn("val/cot_exact", last_eval)
             self.assertIn("val/clean_full_exact", last_eval)
             self.assertIn("val/clean_final_exact", last_eval)
             self.assertIn("train/clean_oracle_loss_eval", last_eval)
@@ -443,7 +483,9 @@ class S5FullDistributionOfflineBCTests(unittest.TestCase):
             self.assertEqual(resumed_ckpt["iter_num"], continuous_ckpt["iter_num"])
             resumed_last_eval = _read_json(resumed_out_dir / "last_eval.json")
             continuous_last_eval = _read_json(continuous_out_dir / "last_eval.json")
-            for key in ("iter", "reason", "val/cot_exact", "val/clean_full_exact", "val/clean_final_exact"):
+            self.assertNotIn("val/cot_exact", resumed_last_eval)
+            self.assertNotIn("val/cot_exact", continuous_last_eval)
+            for key in ("iter", "reason", "val/clean_full_exact", "val/clean_final_exact"):
                 self.assertEqual(resumed_last_eval[key], continuous_last_eval[key])
             self.assertTrue(torch.isfinite(torch.tensor(resumed_last_eval["val/loss"])).item())
             self.assertTrue(torch.isfinite(torch.tensor(continuous_last_eval["val/loss"])).item())
@@ -489,7 +531,9 @@ class S5FullDistributionOfflineBCTests(unittest.TestCase):
             history = _read_eval_history(out_dir / "eval_history.jsonl")
             self.assertEqual([entry["reason"] for entry in history], ["periodic", "periodic", "final"])
             self.assertEqual([entry["iter"] for entry in history], [0, 2, 4])
-            self.assertEqual(_read_json(out_dir / "last_eval.json")["reason"], "final")
+            last_eval = _read_json(out_dir / "last_eval.json")
+            self.assertEqual(last_eval["reason"], "final")
+            self.assertNotIn("val/cot_exact", last_eval)
 
 
 if __name__ == "__main__":

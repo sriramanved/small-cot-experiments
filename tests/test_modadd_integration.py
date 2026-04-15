@@ -187,6 +187,47 @@ def _run_train_opd(
 
 
 class ModularAdditionIntegrationTests(unittest.TestCase):
+    def test_train_py_online_modadd_final_eval_writes_ckpt_and_completed(self):
+        out_dir = Path(tempfile.mkdtemp(prefix="modadd-online-final-out-"))
+
+        try:
+            cmd = [
+                sys.executable,
+                "train.py",
+                "--dataset=modadd_cot",
+                "--out_dir=" + str(out_dir),
+                "--modadd_p=3",
+                "--modadd_m=4",
+                "--device=cpu",
+                "--dtype=float32",
+                "--compile=False",
+                "--n_layer=1",
+                "--n_head=1",
+                "--n_embd=16",
+                "--block_size=8",
+                "--batch_size=2",
+                "--gradient_accumulation_steps=1",
+                "--learning_rate=0.001",
+                "--warmup_iters=0",
+                "--max_iters=1",
+                "--eval_interval=1",
+                "--eval_iters=1",
+                "--always_save_checkpoint=False",
+                "--final_eval_on_exit=True",
+                "--modadd_eval_metrics=True",
+                "--s5_eval_n=2",
+                "--s5_eval_batch_size=2",
+                "--wandb_log=False",
+            ]
+            subprocess.run(cmd, cwd=REPO_ROOT, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+            self.assertTrue((out_dir / "ckpt.pt").exists())
+            self.assertTrue((out_dir / "completed.txt").exists())
+            last_eval = json.loads((out_dir / "last_eval.json").read_text(encoding="utf-8"))
+            self.assertEqual(last_eval["reason"], "final")
+        finally:
+            shutil.rmtree(out_dir, ignore_errors=True)
+
     def test_train_py_online_modadd_eval_only_omits_val_cot_exact(self):
         out_dir = Path(tempfile.mkdtemp(prefix="modadd-online-out-"))
 
@@ -224,6 +265,47 @@ class ModularAdditionIntegrationTests(unittest.TestCase):
             self.assertNotIn("val/cot_exact", last_eval)
             self.assertIn("val/clean_full_exact", last_eval)
             self.assertIn("val/clean_final_exact", last_eval)
+        finally:
+            shutil.rmtree(out_dir, ignore_errors=True)
+
+    def test_train_py_online_modadd_base_eval_only_reports_single_token_metrics(self):
+        out_dir = Path(tempfile.mkdtemp(prefix="modadd-base-online-out-"))
+
+        try:
+            cmd = [
+                sys.executable,
+                "train.py",
+                "--dataset=modadd_base",
+                "--out_dir=" + str(out_dir),
+                "--modadd_p=3",
+                "--modadd_m=4",
+                "--device=cpu",
+                "--dtype=float32",
+                "--compile=False",
+                "--n_layer=1",
+                "--n_head=1",
+                "--n_embd=16",
+                "--block_size=5",
+                "--batch_size=2",
+                "--gradient_accumulation_steps=1",
+                "--learning_rate=0.001",
+                "--max_iters=1",
+                "--eval_interval=1",
+                "--eval_iters=1",
+                "--always_save_checkpoint=False",
+                "--eval_only=True",
+                "--modadd_eval_metrics=True",
+                "--s5_eval_n=2",
+                "--s5_eval_batch_size=2",
+                "--wandb_log=False",
+            ]
+            subprocess.run(cmd, cwd=REPO_ROOT, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+            last_eval = json.loads((out_dir / "last_eval.json").read_text(encoding="utf-8"))
+            self.assertNotIn("val/cot_exact", last_eval)
+            self.assertIn("val/clean_full_exact", last_eval)
+            self.assertIn("val/clean_final_exact", last_eval)
+            self.assertEqual(last_eval["val/clean_full_exact"], last_eval["val/clean_final_exact"])
         finally:
             shutil.rmtree(out_dir, ignore_errors=True)
 

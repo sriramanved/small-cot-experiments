@@ -45,6 +45,7 @@ dtype = 'float16'
 # system
 compile = True
 
+final_eval_on_exit = True
 s5_eval_metrics = True
 s5_eval_n = 256
 s5_eval_seed = 123

@@ -9,9 +9,9 @@ if [[ -d .venv ]]; then
 fi
 
 P="${P:-7}"
-M="${M:-21}"
-OUT_DIR="${OUT_DIR:-out-modadd-cot-p${P}-m${M}-depth1}"
-BLOCK_SIZE="${BLOCK_SIZE:-$((2 * M))}"
+M="${M:-30}"
+OUT_DIR="${OUT_DIR:-out-modadd-base-p${P}-m${M}-depth1}"
+BLOCK_SIZE="${BLOCK_SIZE:-$((M + 1))}"
 WANDB_PROJECT="${WANDB_PROJECT:-small-cot-experiments}"
 WANDB_RUN_NAME="${WANDB_RUN_NAME:-${OUT_DIR}}"
 EXTRA_ARGS=()
@@ -26,7 +26,7 @@ else
   echo "Starting ${OUT_DIR}"
 fi
 
-python -u train.py config/train_modadd_cot_p7_m21.py \
+python -u train.py config/train_modadd_base_p7_m30.py \
   --out_dir="${OUT_DIR}" \
   --modadd_p="${P}" \
   --modadd_m="${M}" \

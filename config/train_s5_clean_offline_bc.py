@@ -4,7 +4,7 @@ log_interval = 50
 eval_iters = 50
 always_save_checkpoint = True
 
-wandb_log = False
+wandb_log = True
 dataset = 's5_clean_offline_n6000000'   # override from CLI if needed
 init_from = 'scratch'
 

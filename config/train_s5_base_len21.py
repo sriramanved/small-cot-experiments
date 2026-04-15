@@ -4,7 +4,7 @@ log_interval = 50
 eval_iters = 200
 always_save_checkpoint = True
 
-wandb_log = False
+wandb_log = True
 dataset = 's5_cot'
 
 s5_mode = 'base'

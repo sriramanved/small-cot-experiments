@@ -120,7 +120,7 @@ def resolve_dtype(dtype_name: str | None, device: str) -> torch.dtype:
 
 
 def task_reports_cot_exact(task_name: str) -> bool:
-    return task_name == "s5"
+    return False
 
 
 def build_autocast_context(device: str, torch_dtype: torch.dtype):
