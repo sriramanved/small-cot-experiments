@@ -10,6 +10,7 @@ fi
 
 P="${P:-7}"
 M="${M:-21}"
+RUN_TAG="${RUN_TAG:-}"
 N_TRAIN="${N_TRAIN:-15000000}"
 N_VAL="${N_VAL:-5000}"
 PROMPT_BANK_DIR="${PROMPT_BANK_DIR:-data/modadd_clean_prompt_bank_p${P}_m${M}_n${N_TRAIN}_val${N_VAL}}"
@@ -34,10 +35,15 @@ DEVICE="${DEVICE:-cuda}"
 DTYPE="${DTYPE:-float16}"
 EPS="${EPS:-1e-10}"
 SHUFFLE_PROMPTS="${SHUFFLE_PROMPTS:-0}"
+SINGLE_EPOCH="${SINGLE_EPOCH:-1}"
 COMPILE="${COMPILE:-0}"
 WANDB_LOG="${WANDB_LOG:-1}"
 WANDB_PROJECT="${WANDB_PROJECT:-small-cot-experiments}"
 LOG_DIR="${LOG_DIR:-logs/modadd_opd}"
+TAG_SUFFIX=""
+if [[ -n "${RUN_TAG}" ]]; then
+  TAG_SUFFIX="-${RUN_TAG}"
+fi
 
 mkdir -p "${LOG_DIR}"
 
@@ -61,8 +67,8 @@ fi
 
 for ETA in ${ETAS}; do
   ETA_TAG="${ETA/./p}"
-  OUT_DIR="out-modadd-opd-${OBJECTIVE}-p${P}-m${M}-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}"
-  LOG_PATH="${LOG_DIR}/modadd_opd_${OBJECTIVE}_p${P}_m${M}_n${SUBSET_SIZE}_eta${ETA_TAG}_${TEACHER_LAW}_${TEMP_TAG}.log"
+  OUT_DIR="out-modadd-opd-${OBJECTIVE}-p${P}-m${M}-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}${TAG_SUFFIX}"
+  LOG_PATH="${LOG_DIR}/modadd_opd_${OBJECTIVE}_p${P}_m${M}_n${SUBSET_SIZE}_eta${ETA_TAG}_${TEACHER_LAW}_${TEMP_TAG}${TAG_SUFFIX}.log"
   EXTRA_ARGS=()
 
   if [[ -f "${OUT_DIR}/completed.txt" ]]; then
@@ -77,6 +83,9 @@ for ETA in ${ETAS}; do
 
   if [[ "${SHUFFLE_PROMPTS}" == "1" ]]; then
     EXTRA_ARGS+=(--shuffle_prompts)
+  fi
+  if [[ "${SINGLE_EPOCH}" == "1" ]]; then
+    EXTRA_ARGS+=(--single_epoch)
   fi
   if [[ "${COMPILE}" == "1" ]]; then
     EXTRA_ARGS+=(--compile)
@@ -109,7 +118,7 @@ for ETA in ${ETAS}; do
     --dtype="${DTYPE}" \
     --eps="${EPS}" \
     --wandb_project="${WANDB_PROJECT}" \
-    --wandb_run_name="modadd-opd-${OBJECTIVE}-p${P}-m${M}-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}" \
+    --wandb_run_name="modadd-opd-${OBJECTIVE}-p${P}-m${M}-n${SUBSET_SIZE}-eta${ETA_TAG}-${TEACHER_LAW}-${TEMP_TAG}${TAG_SUFFIX}" \
     "${EXTRA_ARGS[@]}" \
     2>&1 | tee "${LOG_PATH}"
 done

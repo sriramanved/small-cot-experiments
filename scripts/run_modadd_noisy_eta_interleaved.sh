@@ -10,6 +10,8 @@ fi
 
 P="${P:-7}"
 M="${M:-21}"
+BLOCK_SIZE="${BLOCK_SIZE:-$((2 * M))}"
+RUN_TAG="${RUN_TAG:-}"
 N_TRAIN="${N_TRAIN:-15000000}"
 N_VAL="${N_VAL:-5000}"
 TEACHER_CHECKPOINT="${TEACHER_CHECKPOINT:-out-modadd-cot-p${P}-m${M}-depth1}"
@@ -19,6 +21,7 @@ SUBSET_SIZE="${SUBSET_SIZE:-}"
 ETAS="${ETAS:-0.05 0.1 0.2}"
 ROLLOUT_MODE="${ROLLOUT_MODE:-greedy_then_corrupt}"
 GEN_BATCH_SIZE="${GEN_BATCH_SIZE:-1024}"
+EVAL_INTERVAL="${EVAL_INTERVAL:-}"
 SEED="${SEED:-1337}"
 DEVICE="${DEVICE:-cuda}"
 DTYPE="${DTYPE:-float16}"
@@ -26,6 +29,10 @@ RENDER_LOG_DIR="${RENDER_LOG_DIR:-logs/modadd_noisy_dataset_render}"
 TRAIN_LOG_DIR="${TRAIN_LOG_DIR:-logs/modadd_noisy_bc}"
 
 mkdir -p "${RENDER_LOG_DIR}" "${TRAIN_LOG_DIR}"
+TAG_SUFFIX=""
+if [[ -n "${RUN_TAG}" ]]; then
+  TAG_SUFFIX="-${RUN_TAG}"
+fi
 
 if [[ -z "${SUBSET_SIZE}" ]]; then
   if [[ ! -f "${THRESHOLD_FILE}" ]]; then
@@ -60,10 +67,10 @@ for ETA in ${ETAS}; do
   ETA_TAG="${ETA/./p}"
   DATASET_NAME="${DATASET_PREFIX}_p${P}_m${M}_n${SUBSET_SIZE}_eta_${ETA_TAG}"
   SAVE_DIR="data/${DATASET_NAME}"
-  OUT_DIR="${OUT_PREFIX}-p${P}-m${M}-n${SUBSET_SIZE}-eta${ETA_TAG}"
+  OUT_DIR="${OUT_PREFIX}-p${P}-m${M}-n${SUBSET_SIZE}-eta${ETA_TAG}${TAG_SUFFIX}"
   DONE_MARKER="${OUT_DIR}/completed.txt"
   RENDER_LOG_PATH="${RENDER_LOG_DIR}/${DATASET_NAME}.log"
-  TRAIN_LOG_PATH="${TRAIN_LOG_DIR}/${RUN_PREFIX}_p${P}_m${M}_n${SUBSET_SIZE}_eta${ETA_TAG}.log"
+  TRAIN_LOG_PATH="${TRAIN_LOG_DIR}/${RUN_PREFIX}_p${P}_m${M}_n${SUBSET_SIZE}_eta${ETA_TAG}${TAG_SUFFIX}.log"
   EXTRA_ARGS=()
 
   if [[ ! -f "${SAVE_DIR}/train_x.pt" || ! -f "${SAVE_DIR}/train_y.pt" || ! -f "${SAVE_DIR}/val_x.pt" || ! -f "${SAVE_DIR}/val_y.pt" ]]; then
@@ -94,14 +101,19 @@ for ETA in ${ETAS}; do
     echo "Starting train for ${DATASET_NAME}"
   fi
 
+  if [[ -n "${EVAL_INTERVAL}" ]]; then
+    EXTRA_ARGS+=(--eval_interval="${EVAL_INTERVAL}")
+  fi
+
   python -u train.py config/train_modadd_noisy_bc.py \
     --dataset="${DATASET_NAME}" \
     --out_dir="${OUT_DIR}" \
     --modadd_p="${P}" \
     --modadd_m="${M}" \
+    --block_size="${BLOCK_SIZE}" \
     --wandb_log=True \
     --wandb_project=small-cot-experiments \
-    --wandb_run_name="${RUN_PREFIX}-p${P}-m${M}-n${SUBSET_SIZE}-eta${ETA_TAG}" \
+    --wandb_run_name="${RUN_PREFIX}-p${P}-m${M}-n${SUBSET_SIZE}-eta${ETA_TAG}${TAG_SUFFIX}" \
     "${EXTRA_ARGS[@]}" \
     2>&1 | tee "${TRAIN_LOG_PATH}"
 done

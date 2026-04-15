@@ -10,6 +10,8 @@ fi
 
 P="${P:-7}"
 M="${M:-21}"
+BLOCK_SIZE="${BLOCK_SIZE:-$((2 * M))}"
+RUN_TAG="${RUN_TAG:-}"
 BASE_N="${BASE_N:-15000000}"
 SUBSET_SIZES="${SUBSET_SIZES:-250000 500000 1000000 2000000 4000000 6000000}"
 BASE_DATASET="${BASE_DATASET:-modadd_clean_offline_p${P}_m${M}_n${BASE_N}}"
@@ -17,6 +19,10 @@ LOG_DIR="${LOG_DIR:-logs/modadd_clean_offline_sweep}"
 EVAL_INTERVAL="${EVAL_INTERVAL:-}"
 mkdir -p "${LOG_DIR}"
 BASE_DATASET_DIR="data/${BASE_DATASET}"
+TAG_SUFFIX=""
+if [[ -n "${RUN_TAG}" ]]; then
+  TAG_SUFFIX="-${RUN_TAG}"
+fi
 
 if [[ ! -f "${BASE_DATASET_DIR}/train_x.pt" ]]; then
   echo "Missing ${BASE_DATASET_DIR}/train_x.pt"
@@ -43,9 +49,9 @@ for SUBSET_SIZE in ${SUBSET_SIZES}; do
     echo "Skipping SUBSET_SIZE=${SUBSET_SIZE}; exceeds BASE_N=${BASE_N}"
     continue
   fi
-  OUT_DIR="out-modadd-clean-offline-bc-p${P}-m${M}-n${SUBSET_SIZE}"
+  OUT_DIR="out-modadd-clean-offline-bc-p${P}-m${M}-n${SUBSET_SIZE}${TAG_SUFFIX}"
   DONE_MARKER="${OUT_DIR}/completed.txt"
-  LOG_PATH="${LOG_DIR}/modadd_clean_offline_bc_p${P}_m${M}_n${SUBSET_SIZE}.log"
+  LOG_PATH="${LOG_DIR}/modadd_clean_offline_bc_p${P}_m${M}_n${SUBSET_SIZE}${TAG_SUFFIX}.log"
   EXTRA_ARGS=()
 
   if [[ -f "${DONE_MARKER}" ]]; then
@@ -67,10 +73,11 @@ for SUBSET_SIZE in ${SUBSET_SIZES}; do
     --out_dir="${OUT_DIR}" \
     --modadd_p="${P}" \
     --modadd_m="${M}" \
+    --block_size="${BLOCK_SIZE}" \
     --offline_train_subset_size="${SUBSET_SIZE}" \
     --wandb_log=True \
     --wandb_project=small-cot-experiments \
-    --wandb_run_name="modadd-clean-offline-bc-p${P}-m${M}-n${SUBSET_SIZE}" \
+    --wandb_run_name="modadd-clean-offline-bc-p${P}-m${M}-n${SUBSET_SIZE}${TAG_SUFFIX}" \
     "${EXTRA_ARGS[@]}" \
     2>&1 | tee "${LOG_PATH}"
 done

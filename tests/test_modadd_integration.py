@@ -150,6 +150,7 @@ def _run_train_opd(
     max_iters: int,
     init_from: str = "scratch",
     seed: int = 7,
+    single_epoch: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     cmd = [
         sys.executable,
@@ -176,6 +177,8 @@ def _run_train_opd(
         "--dtype=float32",
         "--seed=" + str(seed),
     ]
+    if single_epoch:
+        cmd.append("--single_epoch")
     return subprocess.run(
         cmd,
         cwd=REPO_ROOT,
@@ -564,6 +567,33 @@ class ModularAdditionIntegrationTests(unittest.TestCase):
             self.assertEqual((resumed_out_dir / "completed.txt").read_text(encoding="utf-8"), "iter_num=4\n")
             self.assertEqual((continuous_out_dir / "completed.txt").read_text(encoding="utf-8"), "iter_num=4\n")
             self.assertTrue((continuous_out_dir / "ckpt_0000002.pt").exists())
+
+    def test_train_opd_modadd_single_epoch_stops_after_one_pass(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            prompt_bank_dir = root / "prompt_bank"
+            teacher_dir = root / "teacher"
+            out_dir = root / "single_epoch_out"
+
+            _write_prompt_bank(prompt_bank_dir, p=3, m=4, n_train=8, n_val=2, seed=31)
+            _write_teacher_checkpoint(teacher_dir, vocab_size=4, block_size=8)
+
+            _run_train_opd(
+                prompt_bank_dir=prompt_bank_dir,
+                teacher_dir=teacher_dir,
+                out_dir=out_dir,
+                objective="forward_kl_full",
+                max_iters=99,
+                seed=41,
+                single_epoch=True,
+            )
+
+            completed = (out_dir / "completed.txt").read_text(encoding="utf-8")
+            self.assertEqual(completed, "iter_num=4\n")
+            checkpoint = torch.load(out_dir / "ckpt.pt", map_location="cpu", weights_only=False)
+            self.assertEqual(int(checkpoint["iter_num"]), 4)
+            run_meta = json.loads((out_dir / "run_meta.json").read_text(encoding="utf-8"))
+            self.assertTrue(run_meta["single_epoch"])
 
 
 if __name__ == "__main__":

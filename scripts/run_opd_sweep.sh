@@ -32,6 +32,7 @@ DEVICE="${DEVICE:-cuda}"
 DTYPE="${DTYPE:-float16}"
 EPS="${EPS:-1e-10}"
 SHUFFLE_PROMPTS="${SHUFFLE_PROMPTS:-0}"
+SINGLE_EPOCH="${SINGLE_EPOCH:-1}"
 COMPILE="${COMPILE:-0}"
 WANDB_LOG="${WANDB_LOG:-1}"
 WANDB_PROJECT="${WANDB_PROJECT:-small-cot-experiments}"
@@ -122,6 +123,9 @@ for ETA in ${ETAS}; do
 
   if [[ "${SHUFFLE_PROMPTS}" == "1" ]]; then
     EXTRA_ARGS+=(--shuffle_prompts)
+  fi
+  if [[ "${SINGLE_EPOCH}" == "1" ]]; then
+    EXTRA_ARGS+=(--single_epoch)
   fi
   if [[ "${COMPILE}" == "1" ]]; then
     EXTRA_ARGS+=(--compile)

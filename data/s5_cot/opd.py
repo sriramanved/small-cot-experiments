@@ -65,6 +65,17 @@ class FixedPromptCycle:
         self.pos = 0
         self.order = self._make_order()
 
+    def has_remaining_in_epoch(self) -> bool:
+        return self.pos < self.n
+
+    def next_batch_no_wrap(self) -> torch.Tensor:
+        if self.pos >= self.n:
+            return self.prompt_ids[:0]
+        take = min(self.batch_size, self.n - self.pos)
+        idx = self.order[self.pos:self.pos + take]
+        self.pos += take
+        return self.prompt_ids.index_select(0, idx)
+
     def next_batch(self) -> torch.Tensor:
         batches = []
         remaining = self.batch_size

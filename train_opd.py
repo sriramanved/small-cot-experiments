@@ -80,6 +80,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval_batch_size", type=int, default=256)
     parser.add_argument("--log_interval", type=int, default=50)
     parser.add_argument("--save_interval", type=int, default=0)
+    parser.add_argument("--single_epoch", action="store_true")
     parser.add_argument("--shuffle_prompts", action="store_true")
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--device", type=str, default=None)
@@ -196,6 +197,7 @@ def validate_resume_metadata(out_dir: Path, metadata: dict[str, object]) -> None
         "objective",
         "student_temperature",
         "shuffle_prompts",
+        "single_epoch",
         "seed",
     ):
         current_value = metadata.get(key)
@@ -467,6 +469,7 @@ def main() -> None:
         "objective": args.objective,
         "student_temperature": args.student_temperature,
         "shuffle_prompts": args.shuffle_prompts,
+        "single_epoch": args.single_epoch,
         "seed": args.seed,
         "device": device,
         "dtype": str(torch_dtype).replace("torch.", ""),
@@ -537,6 +540,9 @@ def main() -> None:
     t0 = time.time()
 
     while iter_num < args.max_iters:
+        if args.single_epoch and not prompt_cycle.has_remaining_in_epoch():
+            break
+
         lr = get_lr(iter_num, learning_rate=args.learning_rate, warmup_iters=args.warmup_iters)
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
@@ -582,7 +588,10 @@ def main() -> None:
             if wandb is not None:
                 wandb.log({"iter": iter_num, **eval_stats})
 
-        prompt_ids = prompt_cycle.next_batch()
+        if args.single_epoch:
+            prompt_ids = prompt_cycle.next_batch_no_wrap()
+        else:
+            prompt_ids = prompt_cycle.next_batch()
 
         student.eval()
         with torch.no_grad():
