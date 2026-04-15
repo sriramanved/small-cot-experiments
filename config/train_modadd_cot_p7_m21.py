@@ -21,12 +21,12 @@ block_size = 42
 batch_size = 64
 gradient_accumulation_steps = 1
 learning_rate = 1e-5
-max_iters = 1000000
+max_iters = 200000
 weight_decay = 0.0
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0
-decay_lr = False
+decay_lr = True
 warmup_iters = 2000
 
 dtype = 'float16'

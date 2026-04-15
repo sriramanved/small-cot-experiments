@@ -1,7 +1,7 @@
 out_dir = 'out-modadd-clean-offline-bc'
-eval_interval = 10000
+eval_interval = 5000
 log_interval = 50
-eval_iters = 50
+eval_iters = 200
 always_save_checkpoint = True
 
 wandb_log = False
@@ -27,7 +27,7 @@ weight_decay = 0.0
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0
-decay_lr = False
+decay_lr = True
 warmup_iters = 2000
 
 dtype = 'float16'

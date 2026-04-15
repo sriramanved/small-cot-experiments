@@ -712,7 +712,7 @@ Sweep matrix:
 | Comparison | Sweep | Matched law | Status | Notes |
 |---|---|---|---|---|
 | Clean baseline | Clean offline BC, `eta = 0.0`, chosen `n8000000-fixed` baseline | clean teacher | Done | Canonical off-policy clean baseline for all later comparisons |
-| Off-policy MC baseline | Offline BC, `sample_then_corrupt`, full `eta` sweep | `sample_then_corrupt` | In Progress | earlier results are recorded; being rerun on the cluster because of a learning-rate mishap in the earlier attempt |
+| Off-policy MC baseline | Offline BC, `sample_then_corrupt`, full `eta` sweep | `sample_then_corrupt` | In Progress | earlier results are recorded; higher-`eta` runs are being rerun on the dev node because of a learning-rate issue in the earlier attempt |
 | On-policy MC | NAIL-OPD (MC version), full `eta` sweep | `distributional_noise` | Done | Main on-policy MC family |
 | On-policy MC | OPD (MC version), full `eta` sweep | `distributional_noise` | In Progress | This is the current OPD MC sweep that is running |
 | Off-policy greedy-corrupt baseline | Offline BC, `greedy_then_corrupt`, full `eta` sweep | `greedy_then_corrupt` | In Progress | earlier results are recorded, but being rerun on the dev node because of the learning-rate mishap |

@@ -175,6 +175,10 @@ def synthetic_clean_train_loss_enabled(task_name):
     return (task_name == 's5' and s5_eval_clean_train_loss) or (task_name == 'modadd' and modadd_eval_clean_train_loss)
 
 
+def synthetic_report_cot_exact(task_name):
+    return task_name == 's5'
+
+
 synthetic_task = synthetic_task_name(dataset)
 
 # synthetic task hooks
@@ -530,7 +534,8 @@ def estimate_loss():
                     n_eval=s5_eval_n,
                     batch_size=s5_eval_batch_size,
                 )
-            out["val_cot_exact"] = metrics["cot_exact"]
+            if synthetic_report_cot_exact(synthetic_task):
+                out["val_cot_exact"] = metrics["cot_exact"]
             out["val_clean_full_exact"] = metrics["clean_full_exact"]
             out["val_clean_final_exact"] = metrics["clean_final_exact"]
         if synthetic_clean_train_loss_enabled(synthetic_task):
@@ -585,7 +590,8 @@ def estimate_loss():
                     seed=s5_eval_seed,
                     batch_size=s5_eval_batch_size,
                 )
-            out["val_cot_exact"] = metrics["cot_exact"]
+            if synthetic_report_cot_exact(synthetic_task):
+                out["val_cot_exact"] = metrics["cot_exact"]
             out["val_clean_full_exact"] = metrics["clean_full_exact"]
             out["val_clean_final_exact"] = metrics["clean_final_exact"]
 

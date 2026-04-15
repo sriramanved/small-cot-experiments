@@ -46,7 +46,6 @@ def collect_rows(root: Path) -> list[dict[str, object]]:
             "out_dir": str(out_dir),
             "iter": eval_summary.get("iter"),
             "val_loss": eval_summary.get("val/loss"),
-            "val_cot_exact": eval_summary.get("val/cot_exact"),
             "val_clean_full_exact": eval_summary.get("val/clean_full_exact"),
             "val_clean_final_exact": eval_summary.get("val/clean_final_exact"),
         }
@@ -108,7 +107,6 @@ def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
         "objective",
         "teacher_law",
         "val_loss",
-        "val_cot_exact",
         "val_clean_full_exact",
         "val_clean_final_exact",
         "iter",

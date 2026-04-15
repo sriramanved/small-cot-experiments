@@ -119,6 +119,10 @@ def resolve_dtype(dtype_name: str | None, device: str) -> torch.dtype:
     return torch.float32
 
 
+def task_reports_cot_exact(task_name: str) -> bool:
+    return task_name == "s5"
+
+
 def build_autocast_context(device: str, torch_dtype: torch.dtype):
     if "cuda" not in device:
         return nullcontext()
@@ -375,12 +379,14 @@ def run_eval(
         batch_size=eval_batch_size,
     )
     model.train()
-    return {
+    eval_stats = {
         "val/loss": val_loss,
-        "val/cot_exact": metrics["cot_exact"],
         "val/clean_full_exact": metrics["clean_full_exact"],
         "val/clean_final_exact": metrics["clean_final_exact"],
     }
+    if task_reports_cot_exact(task_name):
+        eval_stats["val/cot_exact"] = metrics["cot_exact"]
+    return eval_stats
 
 
 def save_checkpoint(
@@ -548,12 +554,14 @@ def main() -> None:
             )
             best_val_loss = min(best_val_loss, eval_stats["val/loss"])
             save_eval_summary(out_dir, iter_num=iter_num, reason="periodic", metrics=eval_stats)
-            msg = (
-                f"eval step {iter_num}: val loss {eval_stats['val/loss']:.4f}, "
-                f"val cot_exact {eval_stats['val/cot_exact']:.4f}, "
-                f"val clean_full_exact {eval_stats['val/clean_full_exact']:.4f}, "
-                f"val clean_final_exact {eval_stats['val/clean_final_exact']:.4f}"
-            )
+            msg_parts = [
+                f"eval step {iter_num}: val loss {eval_stats['val/loss']:.4f}",
+            ]
+            if "val/cot_exact" in eval_stats:
+                msg_parts.append(f"val cot_exact {eval_stats['val/cot_exact']:.4f}")
+            msg_parts.append(f"val clean_full_exact {eval_stats['val/clean_full_exact']:.4f}")
+            msg_parts.append(f"val clean_final_exact {eval_stats['val/clean_final_exact']:.4f}")
+            msg = ", ".join(msg_parts)
             print(msg)
             save_checkpoint(
                 out_dir=out_dir,
@@ -711,12 +719,14 @@ def main() -> None:
     )
     best_val_loss = min(best_val_loss, final_stats["val/loss"])
     save_eval_summary(out_dir, iter_num=iter_num, reason="final", metrics=final_stats)
-    print(
-        f"final step {iter_num}: val loss {final_stats['val/loss']:.4f}, "
-        f"val cot_exact {final_stats['val/cot_exact']:.4f}, "
-        f"val clean_full_exact {final_stats['val/clean_full_exact']:.4f}, "
-        f"val clean_final_exact {final_stats['val/clean_final_exact']:.4f}"
-    )
+    final_msg_parts = [
+        f"final step {iter_num}: val loss {final_stats['val/loss']:.4f}",
+    ]
+    if "val/cot_exact" in final_stats:
+        final_msg_parts.append(f"val cot_exact {final_stats['val/cot_exact']:.4f}")
+    final_msg_parts.append(f"val clean_full_exact {final_stats['val/clean_full_exact']:.4f}")
+    final_msg_parts.append(f"val clean_final_exact {final_stats['val/clean_final_exact']:.4f}")
+    print(", ".join(final_msg_parts))
     save_checkpoint(
         out_dir=out_dir,
         model=student,
