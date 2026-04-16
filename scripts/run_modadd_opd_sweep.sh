@@ -36,6 +36,8 @@ DTYPE="${DTYPE:-float16}"
 EPS="${EPS:-1e-10}"
 SHUFFLE_PROMPTS="${SHUFFLE_PROMPTS:-0}"
 SINGLE_EPOCH="${SINGLE_EPOCH:-1}"
+INIT_FROM_CKPT="${INIT_FROM_CKPT:-}"
+CONTINUE_FROM_SUBSET_SIZE="${CONTINUE_FROM_SUBSET_SIZE:-0}"
 COMPILE="${COMPILE:-0}"
 WANDB_LOG="${WANDB_LOG:-1}"
 WANDB_PROJECT="${WANDB_PROJECT:-small-cot-experiments}"
@@ -92,6 +94,13 @@ for ETA in ${ETAS}; do
   fi
   if [[ "${WANDB_LOG}" == "1" ]]; then
     EXTRA_ARGS+=(--wandb_log)
+  fi
+  if [[ -n "${INIT_FROM_CKPT}" ]]; then
+    EXTRA_ARGS+=(--init_from=warm_start)
+    EXTRA_ARGS+=(--init_from_ckpt="${INIT_FROM_CKPT}")
+    if [[ "${CONTINUE_FROM_SUBSET_SIZE}" != "0" ]]; then
+      EXTRA_ARGS+=(--continue_from_subset_size="${CONTINUE_FROM_SUBSET_SIZE}")
+    fi
   fi
 
   python -u train_opd.py \

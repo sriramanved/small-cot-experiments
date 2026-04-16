@@ -21,6 +21,7 @@ import time
 import math
 import pickle
 import json
+import re
 from contextlib import nullcontext
 
 import numpy as np
@@ -41,6 +42,8 @@ eval_iters = 200
 eval_only = False  # if True, script exits right after the first eval
 always_save_checkpoint = True  # if True, always save a checkpoint after each eval
 init_from = 'scratch'  # 'scratch' or 'resume' or 'gpt2*'
+init_from_ckpt = ''
+continue_from_subset_size = 0
 # wandb logging
 wandb_log = False  # disabled by default
 wandb_project = 'owt'
@@ -167,6 +170,10 @@ def is_synthetic_offline_dataset(name):
     return is_s5_offline_dataset(name) or is_modadd_offline_dataset(name)
 
 
+def normalize_offline_dataset_name(name):
+    return re.sub(r'_n\d+', '_n*', name)
+
+
 def synthetic_eval_metrics_enabled(task_name):
     return (task_name == 's5' and s5_eval_metrics) or (task_name == 'modadd' and modadd_eval_metrics)
 
@@ -276,6 +283,32 @@ config['resolved_modadd_p'] = resolved_modadd_p
 config['resolved_modadd_m'] = resolved_modadd_m
 modadd_mode = 'base' if dataset == 'modadd_base' else 'cot'
 config['modadd_mode'] = modadd_mode
+
+continue_from_subset_size = int(continue_from_subset_size)
+config['continue_from_subset_size'] = continue_from_subset_size
+config['init_from_ckpt'] = init_from_ckpt
+if continue_from_subset_size < 0:
+    raise ValueError(
+        f"continue_from_subset_size must be non-negative, got {continue_from_subset_size}"
+    )
+if init_from == 'warm_start':
+    if not init_from_ckpt:
+        raise ValueError("init_from='warm_start' requires init_from_ckpt to be set")
+    if continue_from_subset_size > 0:
+        if not is_synthetic_offline_dataset(dataset):
+            raise ValueError(
+                "continue_from_subset_size is only supported for synthetic offline datasets"
+            )
+        if not offline_single_epoch:
+            raise ValueError(
+                "continue_from_subset_size requires offline_single_epoch=True"
+            )
+        if offline_train_shuffle:
+            raise ValueError(
+                "continue_from_subset_size currently requires offline_train_shuffle=False"
+            )
+elif init_from_ckpt:
+    raise ValueError("init_from_ckpt is only supported when init_from='warm_start'")
 
 
 def get_batch(split, target_type=None):
@@ -427,6 +460,75 @@ elif init_from == 'resume':
     model.load_state_dict(state_dict)
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
+elif init_from == 'warm_start':
+    print(f"Warm-starting training from {init_from_ckpt}")
+    warm_start_path = init_from_ckpt
+    if os.path.isdir(warm_start_path):
+        warm_start_path = os.path.join(warm_start_path, 'ckpt.pt')
+    checkpoint = torch.load(warm_start_path, map_location=device, weights_only=False)
+    checkpoint_config = checkpoint.get('config', {})
+    source_dataset = checkpoint_config.get('dataset')
+    if is_synthetic_offline_dataset(dataset):
+        if not is_synthetic_offline_dataset(source_dataset or ''):
+            raise ValueError(
+                f"Warm-start checkpoint dataset={source_dataset!r} is not a synthetic offline dataset"
+            )
+        if normalize_offline_dataset_name(source_dataset) != normalize_offline_dataset_name(dataset):
+            raise ValueError(
+                f"Warm-start dataset mismatch: checkpoint has {source_dataset!r}, "
+                f"current config requests {dataset!r}"
+            )
+        for key in ['offline_single_epoch', 'offline_train_shuffle', 'offline_target_type']:
+            if key in checkpoint_config and checkpoint_config[key] != globals()[key]:
+                raise ValueError(
+                    f"Warm-start mismatch for {key}: checkpoint has {checkpoint_config[key]!r}, "
+                    f"current config requests {globals()[key]!r}"
+                )
+        if synthetic_task == 'modadd':
+            for key in ['modadd_p', 'modadd_m']:
+                if key in checkpoint_config and int(checkpoint_config[key]) != int(globals()[key]):
+                    raise ValueError(
+                        f"Warm-start mismatch for {key}: checkpoint has {checkpoint_config[key]!r}, "
+                        f"current config requests {globals()[key]!r}"
+                    )
+        elif synthetic_task == 's5':
+            for key in ['s5_mode', 's5_m']:
+                if key in checkpoint_config and checkpoint_config[key] != globals()[key]:
+                    raise ValueError(
+                        f"Warm-start mismatch for {key}: checkpoint has {checkpoint_config[key]!r}, "
+                        f"current config requests {globals()[key]!r}"
+                    )
+        if continue_from_subset_size > 0:
+            source_state = checkpoint.get('offline_train_state')
+            if source_state is None:
+                raise ValueError(
+                    "Warm-start continuation requires offline_train_state in the source checkpoint"
+                )
+            source_n = int(source_state['n'])
+            source_pos = int(source_state['pos'])
+            if source_n != continue_from_subset_size:
+                raise ValueError(
+                    f"Warm-start source checkpoint covered n={source_n}, expected "
+                    f"continue_from_subset_size={continue_from_subset_size}"
+                )
+            if source_pos != source_n:
+                raise ValueError(
+                    f"Warm-start source checkpoint stopped at pos={source_pos}, expected a "
+                    f"completed prefix of length {source_n}"
+                )
+    checkpoint_model_args = checkpoint['model_args']
+    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
+        model_args[k] = checkpoint_model_args[k]
+    gptconf = GPTConfig(**model_args)
+    model = GPT(gptconf)
+    state_dict = checkpoint['model']
+    unwanted_prefix = '_orig_mod.'
+    for k, v in list(state_dict.items()):
+        if k.startswith(unwanted_prefix):
+            state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
+    model.load_state_dict(state_dict)
+    iter_num = checkpoint['iter_num']
+    best_val_loss = checkpoint['best_val_loss']
 elif init_from.startswith('gpt2'):
     print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
     # initialize from OpenAI GPT-2 weights
@@ -456,9 +558,13 @@ scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 optimizer = model.configure_optimizers(
     weight_decay, learning_rate, (beta1, beta2), device_type)
 resume_offline_train_state = None
+warm_start_offline_train_state = None
 if init_from == 'resume':
     optimizer.load_state_dict(checkpoint['optimizer'])
     resume_offline_train_state = checkpoint.get('offline_train_state')
+elif init_from == 'warm_start':
+    optimizer.load_state_dict(checkpoint['optimizer'])
+    warm_start_offline_train_state = checkpoint.get('offline_train_state')
 checkpoint = None  # free up memory
 
 # compile the model
@@ -731,11 +837,18 @@ if is_synthetic_offline_dataset(dataset) and offline_single_epoch:
     if init_from == 'resume' and resume_offline_train_state is not None:
         set_train_epoch_state(data_dir, resume_offline_train_state)
     else:
+        start_pos = continue_from_subset_size if init_from == 'warm_start' else 0
+        if init_from == 'warm_start' and continue_from_subset_size > 0:
+            if warm_start_offline_train_state is None:
+                raise ValueError(
+                    "Warm-start continuation requires offline_train_state in the source checkpoint"
+                )
         reset_train_epoch(
             data_dir,
             shuffle=offline_train_shuffle,
             seed=1337 + seed_offset,
             subset_size=offline_train_subset_size,
+            start_pos=start_pos,
         )
 else:
     X, Y, teacher_probs = unpack_batch(get_batch('train'))

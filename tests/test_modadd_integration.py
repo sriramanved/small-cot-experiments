@@ -147,8 +147,11 @@ def _run_train_opd(
     teacher_dir: Path,
     out_dir: Path,
     objective: str,
+    subset_size: int = 8,
     max_iters: int,
     init_from: str = "scratch",
+    init_from_ckpt: Path | None = None,
+    continue_from_subset_size: int = 0,
     seed: int = 7,
     single_epoch: bool = False,
 ) -> subprocess.CompletedProcess[str]:
@@ -158,7 +161,7 @@ def _run_train_opd(
         "--task=modadd",
         "--teacher_checkpoint=" + str(teacher_dir),
         "--prompt_bank_dir=" + str(prompt_bank_dir),
-        "--subset_size=8",
+        "--subset_size=" + str(subset_size),
         "--eta=0.1",
         "--teacher_law=distributional_noise",
         "--objective=" + objective,
@@ -177,8 +180,66 @@ def _run_train_opd(
         "--dtype=float32",
         "--seed=" + str(seed),
     ]
+    if init_from_ckpt is not None:
+        cmd.append("--init_from_ckpt=" + str(init_from_ckpt))
+    if continue_from_subset_size > 0:
+        cmd.append("--continue_from_subset_size=" + str(continue_from_subset_size))
     if single_epoch:
         cmd.append("--single_epoch")
+    return subprocess.run(
+        cmd,
+        cwd=REPO_ROOT,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+
+def _run_train_py_offline_modadd(
+    *,
+    dataset_name: str,
+    out_dir: Path,
+    max_iters: int,
+    init_from: str = "scratch",
+    init_from_ckpt: Path | None = None,
+    continue_from_subset_size: int = 0,
+) -> subprocess.CompletedProcess[str]:
+    cmd = [
+        sys.executable,
+        "train.py",
+        "--dataset=" + dataset_name,
+        "--out_dir=" + str(out_dir),
+        "--device=cpu",
+        "--dtype=float32",
+        "--compile=False",
+        "--n_layer=1",
+        "--n_head=1",
+        "--n_embd=16",
+        "--block_size=8",
+        "--batch_size=2",
+        "--gradient_accumulation_steps=1",
+        "--learning_rate=0.001",
+        "--warmup_iters=0",
+        "--max_iters=" + str(max_iters),
+        "--eval_interval=2",
+        "--eval_iters=1",
+        "--always_save_checkpoint=True",
+        "--offline_single_epoch=True",
+        "--offline_eval_full=False",
+        "--offline_train_shuffle=False",
+        "--final_eval_on_exit=True",
+        "--modadd_eval_metrics=True",
+        "--modadd_eval_clean_train_loss=True",
+        "--s5_eval_n=2",
+        "--s5_eval_batch_size=2",
+        "--wandb_log=False",
+        "--init_from=" + init_from,
+    ]
+    if init_from_ckpt is not None:
+        cmd.append("--init_from_ckpt=" + str(init_from_ckpt))
+    if continue_from_subset_size > 0:
+        cmd.append("--continue_from_subset_size=" + str(continue_from_subset_size))
     return subprocess.run(
         cmd,
         cwd=REPO_ROOT,
@@ -371,6 +432,64 @@ class ModularAdditionIntegrationTests(unittest.TestCase):
         finally:
             shutil.rmtree(out_dir, ignore_errors=True)
             shutil.rmtree(dataset_dir, ignore_errors=True)
+            shutil.rmtree(prompt_bank_dir, ignore_errors=True)
+
+    def test_train_py_offline_modadd_warm_start_tail_matches_continuous(self):
+        dataset_small = "modadd_noisy_offline_p3_m4_n4_warm_start_test"
+        dataset_large = "modadd_noisy_offline_p3_m4_n8_warm_start_test"
+        dataset_small_dir = DATA_ROOT / dataset_small
+        dataset_large_dir = DATA_ROOT / dataset_large
+        prompt_bank_dir = DATA_ROOT / "test_modadd_prompt_bank_for_warm_start"
+        source_out_dir = Path(tempfile.mkdtemp(prefix="modadd-train-source-out-"))
+        warm_start_out_dir = Path(tempfile.mkdtemp(prefix="modadd-train-warm-out-"))
+        continuous_out_dir = Path(tempfile.mkdtemp(prefix="modadd-train-cont-out-"))
+
+        try:
+            _write_prompt_bank(prompt_bank_dir, p=3, m=4, n_train=8, n_val=2, seed=37)
+            _write_offline_dataset(dataset_small_dir, prompt_bank_dir=prompt_bank_dir, subset_size=4, eta=0.1)
+            _write_offline_dataset(dataset_large_dir, prompt_bank_dir=prompt_bank_dir, subset_size=8, eta=0.1)
+
+            _run_train_py_offline_modadd(
+                dataset_name=dataset_small,
+                out_dir=source_out_dir,
+                max_iters=2,
+            )
+            _run_train_py_offline_modadd(
+                dataset_name=dataset_large,
+                out_dir=warm_start_out_dir,
+                max_iters=4,
+                init_from="warm_start",
+                init_from_ckpt=source_out_dir / "ckpt.pt",
+                continue_from_subset_size=4,
+            )
+            _run_train_py_offline_modadd(
+                dataset_name=dataset_large,
+                out_dir=continuous_out_dir,
+                max_iters=4,
+            )
+
+            warm_ckpt = torch.load(warm_start_out_dir / "ckpt.pt", map_location="cpu", weights_only=False)
+            continuous_ckpt = torch.load(continuous_out_dir / "ckpt.pt", map_location="cpu", weights_only=False)
+
+            _assert_state_dicts_equal(self, warm_ckpt["model"], continuous_ckpt["model"])
+            _assert_state_dicts_equal(self, warm_ckpt["offline_train_state"], continuous_ckpt["offline_train_state"])
+            self.assertEqual(warm_ckpt["iter_num"], continuous_ckpt["iter_num"])
+            warm_last_eval = _read_json(warm_start_out_dir / "last_eval.json")
+            continuous_last_eval = _read_json(continuous_out_dir / "last_eval.json")
+            for key in ("iter", "reason", "val/clean_full_exact", "val/clean_final_exact"):
+                self.assertEqual(warm_last_eval[key], continuous_last_eval[key])
+            self.assertTrue(torch.isfinite(torch.tensor(warm_last_eval["val/loss"])).item())
+            self.assertTrue(torch.isfinite(torch.tensor(continuous_last_eval["val/loss"])).item())
+            self.assertTrue(torch.isfinite(torch.tensor(warm_last_eval["train/clean_oracle_loss_eval"])).item())
+            self.assertTrue(torch.isfinite(torch.tensor(continuous_last_eval["train/clean_oracle_loss_eval"])).item())
+            self.assertEqual((warm_start_out_dir / "completed.txt").read_text(encoding="utf-8"), "iter_num=4\n")
+            self.assertEqual((continuous_out_dir / "completed.txt").read_text(encoding="utf-8"), "iter_num=4\n")
+        finally:
+            shutil.rmtree(source_out_dir, ignore_errors=True)
+            shutil.rmtree(warm_start_out_dir, ignore_errors=True)
+            shutil.rmtree(continuous_out_dir, ignore_errors=True)
+            shutil.rmtree(dataset_small_dir, ignore_errors=True)
+            shutil.rmtree(dataset_large_dir, ignore_errors=True)
             shutil.rmtree(prompt_bank_dir, ignore_errors=True)
 
     def test_train_opd_modadd_writes_task_metadata_and_eval_artifacts(self):
@@ -567,6 +686,62 @@ class ModularAdditionIntegrationTests(unittest.TestCase):
             self.assertEqual((resumed_out_dir / "completed.txt").read_text(encoding="utf-8"), "iter_num=4\n")
             self.assertEqual((continuous_out_dir / "completed.txt").read_text(encoding="utf-8"), "iter_num=4\n")
             self.assertTrue((continuous_out_dir / "ckpt_0000002.pt").exists())
+
+    def test_train_opd_modadd_warm_start_tail_matches_continuous(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            prompt_bank_dir = root / "prompt_bank"
+            teacher_dir = root / "teacher"
+            source_out_dir = root / "warm_source"
+            warm_start_out_dir = root / "warm_target"
+            continuous_out_dir = root / "warm_continuous"
+
+            _write_prompt_bank(prompt_bank_dir, p=3, m=4, n_train=8, n_val=2, seed=47)
+            _write_teacher_checkpoint(teacher_dir, vocab_size=4, block_size=8)
+
+            _run_train_opd(
+                prompt_bank_dir=prompt_bank_dir,
+                teacher_dir=teacher_dir,
+                out_dir=source_out_dir,
+                objective="forward_kl_simple",
+                subset_size=4,
+                max_iters=99,
+                seed=53,
+                single_epoch=True,
+            )
+            _run_train_opd(
+                prompt_bank_dir=prompt_bank_dir,
+                teacher_dir=teacher_dir,
+                out_dir=warm_start_out_dir,
+                objective="forward_kl_simple",
+                subset_size=8,
+                max_iters=99,
+                init_from="warm_start",
+                init_from_ckpt=source_out_dir / "ckpt.pt",
+                continue_from_subset_size=4,
+                seed=53,
+                single_epoch=True,
+            )
+            _run_train_opd(
+                prompt_bank_dir=prompt_bank_dir,
+                teacher_dir=teacher_dir,
+                out_dir=continuous_out_dir,
+                objective="forward_kl_simple",
+                subset_size=8,
+                max_iters=99,
+                seed=53,
+                single_epoch=True,
+            )
+
+            warm_ckpt = torch.load(warm_start_out_dir / "ckpt.pt", map_location="cpu", weights_only=False)
+            continuous_ckpt = torch.load(continuous_out_dir / "ckpt.pt", map_location="cpu", weights_only=False)
+
+            _assert_state_dicts_equal(self, warm_ckpt["model"], continuous_ckpt["model"])
+            _assert_state_dicts_equal(self, warm_ckpt["prompt_cycle_state"], continuous_ckpt["prompt_cycle_state"])
+            self.assertEqual(warm_ckpt["iter_num"], continuous_ckpt["iter_num"])
+            self.assertEqual(_read_json(warm_start_out_dir / "last_eval.json"), _read_json(continuous_out_dir / "last_eval.json"))
+            self.assertEqual((warm_start_out_dir / "completed.txt").read_text(encoding="utf-8"), "iter_num=4\n")
+            self.assertEqual((continuous_out_dir / "completed.txt").read_text(encoding="utf-8"), "iter_num=4\n")
 
     def test_train_opd_modadd_single_epoch_stops_after_one_pass(self):
         with tempfile.TemporaryDirectory() as tmpdir:

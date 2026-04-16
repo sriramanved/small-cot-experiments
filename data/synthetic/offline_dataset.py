@@ -105,9 +105,15 @@ def _move(x, y, device, teacher_probs=None):
     return x, y, teacher_probs
 
 
-def reset_train_epoch(data_dir, shuffle=True, seed=None, subset_size=None):
+def reset_train_epoch(data_dir, shuffle=True, seed=None, subset_size=None, start_pos=0):
     x_all, _, _ = _load_split(data_dir, "train")
     n = _effective_n(x_all.size(0), subset_size, "train")
+    start_pos = int(start_pos)
+    if start_pos < 0 or start_pos > n:
+        raise ValueError(
+            f"requested train start_pos={start_pos} must be between 0 and available "
+            f"train rows={n}"
+        )
 
     if shuffle:
         g = torch.Generator()
@@ -119,7 +125,7 @@ def reset_train_epoch(data_dir, shuffle=True, seed=None, subset_size=None):
 
     _STATE[data_dir] = {
         "perm": perm,
-        "pos": 0,
+        "pos": start_pos,
         "n": n,
     }
 

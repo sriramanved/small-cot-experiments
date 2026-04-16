@@ -25,6 +25,8 @@ EVAL_INTERVAL="${EVAL_INTERVAL:-}"
 SEED="${SEED:-1337}"
 DEVICE="${DEVICE:-cuda}"
 DTYPE="${DTYPE:-float16}"
+INIT_FROM_CKPT="${INIT_FROM_CKPT:-}"
+CONTINUE_FROM_SUBSET_SIZE="${CONTINUE_FROM_SUBSET_SIZE:-0}"
 RENDER_LOG_DIR="${RENDER_LOG_DIR:-logs/modadd_noisy_dataset_render}"
 TRAIN_LOG_DIR="${TRAIN_LOG_DIR:-logs/modadd_noisy_bc}"
 
@@ -103,6 +105,13 @@ for ETA in ${ETAS}; do
 
   if [[ -n "${EVAL_INTERVAL}" ]]; then
     EXTRA_ARGS+=(--eval_interval="${EVAL_INTERVAL}")
+  fi
+  if [[ -n "${INIT_FROM_CKPT}" ]]; then
+    EXTRA_ARGS+=(--init_from=warm_start)
+    EXTRA_ARGS+=(--init_from_ckpt="${INIT_FROM_CKPT}")
+    if [[ "${CONTINUE_FROM_SUBSET_SIZE}" != "0" ]]; then
+      EXTRA_ARGS+=(--continue_from_subset_size="${CONTINUE_FROM_SUBSET_SIZE}")
+    fi
   fi
 
   python -u train.py config/train_modadd_noisy_bc.py \

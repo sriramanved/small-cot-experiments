@@ -64,7 +64,9 @@ def parse_args() -> argparse.Namespace:
         default="reverse_kl_tm",
     )
     parser.add_argument("--out_dir", type=str, required=True)
-    parser.add_argument("--init_from", choices=("scratch", "resume"), default="scratch")
+    parser.add_argument("--init_from", choices=("scratch", "resume", "warm_start"), default="scratch")
+    parser.add_argument("--init_from_ckpt", type=str, default=None)
+    parser.add_argument("--continue_from_subset_size", type=int, default=0)
 
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--max_iters", type=int, default=110000)
@@ -104,6 +106,25 @@ def validate_args(args: argparse.Namespace) -> None:
         )
     if getattr(args, "compile", False) and not hasattr(torch, "compile"):
         raise ValueError("--compile requires a PyTorch build with torch.compile support.")
+    if args.init_from == "warm_start" and not args.init_from_ckpt:
+        raise ValueError("--init_from=warm_start requires --init_from_ckpt.")
+    if args.init_from != "warm_start" and args.init_from_ckpt is not None:
+        raise ValueError("--init_from_ckpt is only supported with --init_from=warm_start.")
+    if args.continue_from_subset_size < 0:
+        raise ValueError("--continue_from_subset_size must be non-negative.")
+    if args.continue_from_subset_size > 0:
+        if args.init_from != "warm_start":
+            raise ValueError(
+                "--continue_from_subset_size is only supported with --init_from=warm_start."
+            )
+        if not args.single_epoch:
+            raise ValueError("--continue_from_subset_size requires --single_epoch.")
+        if args.shuffle_prompts:
+            raise ValueError("--continue_from_subset_size requires prompts to remain unshuffled.")
+        if args.continue_from_subset_size > args.subset_size:
+            raise ValueError(
+                "--continue_from_subset_size cannot exceed the current --subset_size."
+            )
 
 
 def resolve_device(device_arg: str | None) -> str:
@@ -198,6 +219,8 @@ def validate_resume_metadata(out_dir: Path, metadata: dict[str, object]) -> None
         "student_temperature",
         "shuffle_prompts",
         "single_epoch",
+        "init_from_ckpt",
+        "continue_from_subset_size",
         "seed",
     ):
         current_value = metadata.get(key)
@@ -233,7 +256,15 @@ def load_student(
     args: argparse.Namespace,
     *,
     device: str,
-) -> tuple[torch.nn.Module, dict[str, object], int, float, dict[str, object] | None, dict[str, object] | None]:
+) -> tuple[
+    torch.nn.Module,
+    dict[str, object],
+    int,
+    float,
+    dict[str, object] | None,
+    dict[str, object] | None,
+    dict[str, object] | None,
+]:
     if args.init_from == "resume":
         model, checkpoint = load_nanogpt_model(
             args.out_dir,
@@ -251,6 +282,26 @@ def load_student(
             best_val_loss,
             checkpoint.get("prompt_cycle_state"),
             checkpoint.get("rng_state"),
+            checkpoint,
+        )
+    if args.init_from == "warm_start":
+        model, checkpoint = load_nanogpt_model(
+            args.init_from_ckpt,
+            map_location="cpu",
+            device=device,
+            eval_mode=False,
+            return_checkpoint=True,
+        )
+        iter_num = int(checkpoint["iter_num"])
+        best_val_loss = float(checkpoint.get("best_val_loss", float("inf")))
+        return (
+            model,
+            dict(checkpoint["model_args"]),
+            iter_num,
+            best_val_loss,
+            checkpoint.get("prompt_cycle_state"),
+            checkpoint.get("rng_state"),
+            checkpoint,
         )
 
     teacher_checkpoint = load_nanogpt_checkpoint(args.teacher_checkpoint, map_location="cpu")
@@ -258,7 +309,70 @@ def load_student(
     model = build_nanogpt_model(model_args)
     model.to(device)
     model.train()
-    return model, model_args, 0, float("inf"), None, None
+    return model, model_args, 0, float("inf"), None, None, None
+
+
+def validate_warm_start_checkpoint(
+    args: argparse.Namespace,
+    *,
+    subset_indices: torch.Tensor,
+    checkpoint: dict[str, object],
+) -> None:
+    source_config = checkpoint.get("config", {})
+    for key in (
+        "task",
+        "eta",
+        "teacher_law",
+        "objective",
+        "student_temperature",
+        "shuffle_prompts",
+        "single_epoch",
+    ):
+        source_value = source_config.get(key)
+        current_value = getattr(args, key)
+        if source_value is not None and source_value != current_value:
+            raise ValueError(
+                f"Warm-start mismatch for {key}: checkpoint has {source_value!r}, "
+                f"current config requests {current_value!r}"
+            )
+
+    if args.continue_from_subset_size <= 0:
+        return
+
+    prompt_cycle_state = checkpoint.get("prompt_cycle_state")
+    if prompt_cycle_state is None:
+        raise ValueError(
+            "Warm-start continuation requires prompt_cycle_state in the source checkpoint."
+        )
+
+    expected_seen = int(args.continue_from_subset_size)
+    source_n = int(prompt_cycle_state["n"])
+    source_pos = int(prompt_cycle_state["pos"])
+    source_epoch = int(prompt_cycle_state["epoch"])
+    if source_n != expected_seen:
+        raise ValueError(
+            f"Warm-start source checkpoint covered n={source_n}, expected "
+            f"continue_from_subset_size={expected_seen}"
+        )
+    if source_pos != expected_seen or source_epoch != 0:
+        raise ValueError(
+            "Warm-start source checkpoint must represent a completed single pass "
+            f"through the first {expected_seen} prompts; got pos={source_pos}, epoch={source_epoch}"
+        )
+
+    source_subset_size = source_config.get("subset_size")
+    if source_subset_size is not None and int(source_subset_size) != expected_seen:
+        raise ValueError(
+            f"Warm-start source checkpoint subset_size={source_subset_size} does not match "
+            f"continue_from_subset_size={expected_seen}"
+        )
+
+    source_base_order = prompt_cycle_state["base_order"].to(device="cpu", dtype=torch.long)
+    expected_base_order = subset_indices[:expected_seen].to(device="cpu", dtype=torch.long)
+    if source_base_order.numel() != expected_seen or not torch.equal(source_base_order, expected_base_order):
+        raise ValueError(
+            "Warm-start source checkpoint does not match the prefix of the requested larger subset."
+        )
 
 
 def maybe_init_wandb(args: argparse.Namespace, config: dict[str, object]):
@@ -470,6 +584,8 @@ def main() -> None:
         "student_temperature": args.student_temperature,
         "shuffle_prompts": args.shuffle_prompts,
         "single_epoch": args.single_epoch,
+        "init_from_ckpt": args.init_from_ckpt,
+        "continue_from_subset_size": args.continue_from_subset_size,
         "seed": args.seed,
         "device": device,
         "dtype": str(torch_dtype).replace("torch.", ""),
@@ -479,10 +595,17 @@ def main() -> None:
         validate_resume_metadata(out_dir, run_metadata)
     save_run_metadata(out_dir, subset_indices=subset_indices, metadata=run_metadata)
 
-    student, model_args, iter_num, best_val_loss, prompt_cycle_state, rng_state = load_student(
+    student, model_args, iter_num, best_val_loss, prompt_cycle_state, rng_state, source_checkpoint = load_student(
         args,
         device=device,
     )
+    if args.init_from == "warm_start":
+        assert source_checkpoint is not None
+        validate_warm_start_checkpoint(
+            args,
+            subset_indices=subset_indices,
+            checkpoint=source_checkpoint,
+        )
     teacher = load_nanogpt_model(
         args.teacher_checkpoint,
         map_location="cpu",
@@ -499,8 +622,10 @@ def main() -> None:
         shuffle=args.shuffle_prompts,
         seed=args.seed,
     )
-    if prompt_cycle_state is not None:
+    if args.init_from == "resume" and prompt_cycle_state is not None:
         prompt_cycle.load_state_dict(prompt_cycle_state)
+    elif args.init_from == "warm_start" and args.continue_from_subset_size > 0:
+        prompt_cycle.pos = int(args.continue_from_subset_size)
     if rng_state is not None:
         restore_rng_state(rng_state, device)
 
@@ -510,10 +635,9 @@ def main() -> None:
         (args.beta1, args.beta2),
         "cuda" if "cuda" in device else "cpu",
     )
-    if args.init_from == "resume":
-        checkpoint = torch.load(out_dir / "ckpt.pt", map_location="cpu", weights_only=False)
-        optimizer.load_state_dict(checkpoint["optimizer"])
-        del checkpoint
+    if args.init_from in {"resume", "warm_start"}:
+        assert source_checkpoint is not None
+        optimizer.load_state_dict(source_checkpoint["optimizer"])
 
     if args.compile:
         print("compiling the student model... (takes a ~minute)")

@@ -916,7 +916,8 @@ Priority order for the unfinished sweeps:
    - offline BC full-distribution with `corrupted_greedy`
    - OPD (full KL distributional info) with `corrupted_greedy`
 
-## 7. Remarks on HF Backend Development and Benchmarks
+<details>
+<summary> Remarks on HF Backend Development and Benchmarks</summary>
 
 - TLDR: We tried HF conversion and --compile for optimization speedups while doing OPD training. Neither showed any benefit over our current implementation (which already uses cached rollouts).
 
@@ -1024,6 +1025,8 @@ Decision recorded in the summary:
 
 - stay on the native nanoGPT OPD backend for production sweeps
 - keep `--compile` off for that path for now
+
+</details>
 
 ## 8. Modular Addition Task
 
@@ -1342,6 +1345,23 @@ Current status:
   - noisy offline BC, `greedy_then_corrupt`
   - noisy offline BC, `sample_then_corrupt`
   - OPD / NAIL-OPD family as implemented
+
+<!-- | Comparison | Sweep | Matched law | Status | Notes |
+|---|---|---|---|---|
+| Clean baseline | Clean offline BC, `eta = 0.0`, chosen `n8000000-fixed` baseline | clean teacher | Done | Canonical off-policy clean baseline for all later comparisons |
+| Off-policy MC baseline | Offline BC, `sample_then_corrupt`, full `eta` sweep | `sample_then_corrupt` | In Progress | earlier results are recorded; higher-`eta` runs are being rerun on the dev node because of a learning-rate issue in the earlier attempt |
+| On-policy MC | NAIL-OPD (MC version), full `eta` sweep | `distributional_noise` | Done | Main on-policy MC family |
+| On-policy MC | OPD (MC version), full `eta` sweep | `distributional_noise` | In Progress | This is the current OPD MC sweep that is running |
+| Off-policy greedy-corrupt baseline | Offline BC, `greedy_then_corrupt`, full `eta` sweep | `greedy_then_corrupt` | In Progress | earlier results are recorded, but being rerun on the dev node because of the learning-rate mishap |
+| On-policy full-distribution | NAIL-OPD (full KL distributional info), full `eta` sweep | `distributional_noise` | Done | Completed online full-distribution family |
+| Off-policy full-distribution match | Offline BC trained on full teacher next-token distributions, full `eta` sweep | `distributional_noise` | Deferred | Implemented, but intentionally paused while the MC/simple comparison matrix is prioritized |
+| On-policy full-distribution | OPD (full KL distributional info), full `eta` sweep | `distributional_noise` | Deferred | `reverse_kl_full` is implemented and resumable from AICS `ckpt.pt`, but the active cluster focus has shifted back to MC/simple methods |
+| On-policy MC greedy-corrupt match | NAIL-OPD (MC version), full `eta` sweep | `corrupted_greedy` | TODO | Direct online match to completed offline `greedy_then_corrupt` BC |
+| On-policy MC greedy-corrupt match | OPD (MC version), full `eta` sweep | `corrupted_greedy` | TODO | Needed if the OPD MC family is to be matched to offline `greedy_then_corrupt` as well |
+| On-policy full-distribution greedy-corrupt ablation | NAIL-OPD (full KL distributional info), full `eta` sweep | `corrupted_greedy` | TODO | Needed if teacher-law ablations are to be symmetric in the full-information setting |
+| Off-policy full-distribution greedy-corrupt match | Offline BC trained on full teacher next-token distributions, full `eta` sweep | `corrupted_greedy` | TODO | Current implementation does not support this teacher-law family yet |
+| On-policy full-distribution greedy-corrupt ablation | OPD (full KL distributional info), full `eta` sweep | `corrupted_greedy` | TODO | Full-information OPD teacher-law ablation | -->
+
 
 
 
