@@ -167,6 +167,9 @@ Subset-sweep structure:
 - the later large-subset runs `n7000000` through `n8500000` use `dataset = s5_clean_offline_n15000000`
 - `n6000000-long` is a separate long-run variant on `dataset = s5_clean_offline_n6000000`
 
+<details>
+<summary>Show clean offline BC key results</summary>
+
 Key results:
 
 - chosen clean comparison baseline:
@@ -199,6 +202,8 @@ Key results:
     - `max_iters = 400000`
     - `val/loss = 5.067e-05`
     - `val/clean_full_exact = 0.9964`
+
+</details>
 
 Interpretation:
 
@@ -238,6 +243,9 @@ Common run family:
   - `eval_iters = 50`
   - `s5_eval_batch_size = 512`
   - `compile = False`
+
+<details>
+<summary>Show greedy_then_corrupt detailed metrics and diagnostics</summary>
 
 Final val metrics for the main comparison etas:
 
@@ -310,6 +318,8 @@ Dataset-side sanity check diagnostics for some of these etas:
   - `eta = 0.2`
     - `rendered_vs_clean_full_exact = 0.0`
     - `rendered_vs_clean_final_exact = 0.0008441`
+
+</details>
 
 Main takeaways:
 
@@ -384,6 +394,9 @@ Implemented matched full-distribution off-policy variant:
 - this gives the direct off-policy full-distribution counterpart to NAIL-OPD (full KL distributional info)
 - no completed full-distribution sweep metrics are recorded here yet
 
+<details>
+<summary>Show sample_then_corrupt detailed metrics and diagnostics</summary>
+
 Related diagnostics:
 
 - clean teacher sampled rollout sanity check at `eta = 0.0` (`clean_sampled`, no corruption, `5000` val prompts, `10` seeds):
@@ -437,6 +450,8 @@ Run metadata:
   - `compile = True`
   - `s5_eval_batch_size = 256`
 - because the clean sampled teacher remains near-perfect at `eta = 0`, the sampled-teacher ablation is not a fundamentally different experiment due to sampling alone; the main destructive factor is still the corruption law
+
+</details>
 
 Current interpretation note:
 
@@ -679,7 +694,7 @@ Important interpretation note from later discussion:
 - NAIL-OPD (full KL distributional info) uses full next-token teacher distributions, while the standard noisy offline BC baseline only uses realized teacher token targets
 - so a direct comparison of NAIL-OPD (full KL distributional info) against the current offline BC baseline is not yet a pure on-vs-off-policy comparison; it also changes how much teacher information the student receives
 
-Current empirical impressions:
+Current impressions for S5 task:
 
 - the online MC estimator, NAIL-OPD (MC version), appears stronger than the offline BC MC baseline on a per-`eta` basis
 - in several cases, the online MC method appears competitive with offline BC at the next lower `eta`
@@ -692,25 +707,6 @@ Current empirical impressions:
   - return to the full-distribution comparisons only after the MC matrix is in good shape
 
 These full-distribution comparisons should still be interpreted cautiously until the missing matched baselines below are run and tabulated explicitly.
-
-TODOs for a cleaner comparison matrix:
-
-- TODO: compare NAIL-OPD (MC version) directly against the offline BC MC baseline at matched `eta`, since this is the cleanest apples-to-apples on-policy vs off-policy comparison
-- TODO: run the offline BC full-distribution sweep and compare it directly to NAIL-OPD (full KL distributional info)
-- TODO: produce a matched per-`eta` table for:
-  - offline BC MC
-  - NAIL-OPD (MC version)
-  - offline BC full-distribution
-  - NAIL-OPD (full KL distributional info)
-- TODO: for OPD, compare both:
-  - OPD (MC version)
-  - OPD (full KL distributional info)
-- TODO: insert pictures / plots of the full training curves for the main comparison families:
-  - clean offline BC baseline
-  - offline BC MC (`greedy_then_corrupt` and `sample_then_corrupt`)
-  - NAIL-OPD (MC version)
-  - NAIL-OPD (full KL distributional info)
-  - OPD once those runs finish and are summarized
 
 ## 6. What Experiments Are Still Missing
 
@@ -824,6 +820,9 @@ Current plotting TODOs:
 - TODO: make one compact matrix figure or table-backed heatmap with rows = method families and columns = `eta`, where each cell shows final `clean_full_exact`
 - TODO: make one appendix-style diagnostic figure comparing `clean_full_exact` and `clean_final_exact` directly to show where they meaningfully diverge and where they are visually almost identical -->
 
+<details>
+<summary>S5 exported eval-curve figures</summary>
+
 Current exported MC eval-curve figures:
 
 Low noise:
@@ -896,6 +895,8 @@ Current exported per-`eta` method-comparison figures:
 ![Eta 0.8 clean_final_exact methods](analysis/figures/s5_eval_curves/eta0p8_clean_final_exact_methods.png)
 
 ![Eta 0.9 clean_final_exact methods](analysis/figures/s5_eval_curves/eta0p9_clean_final_exact_methods.png)
+
+</details>
 
 </details>
 
@@ -1337,6 +1338,9 @@ Current status:
 
 ### 8.6.1 Legacy `p=7, m=31, eval350_apr16` comparison plots
 
+<details>
+<summary>Show legacy ModAdd comparison figures</summary>
+
 Source note:
 
 - these figures come from the legacy pre-Hydra run families:
@@ -1409,6 +1413,8 @@ Per-eta `clean_final_exact` curves:
 ![ModAdd eta 0.8 clean_final_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p8_clean_final_exact.png)
 
 ![ModAdd eta 0.9 clean_final_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p9_clean_final_exact.png)
+
+</details>
 
 </details>
 
