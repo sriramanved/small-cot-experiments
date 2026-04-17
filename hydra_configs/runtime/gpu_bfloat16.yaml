@@ -1,0 +1,8 @@
+# @package _global_
+runtime:
+  device: cuda
+  dtype: bfloat16
+  compile: true
+  torchrun:
+    nproc_per_node: 1
+    nnodes: 1

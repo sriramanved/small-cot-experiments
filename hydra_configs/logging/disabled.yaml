@@ -1,0 +1,4 @@
+# @package _global_
+logging:
+  wandb_log: false
+  wandb_project: small-cot-experiments

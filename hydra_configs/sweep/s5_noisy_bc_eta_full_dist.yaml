@@ -1,0 +1,8 @@
+# @package _global_
+sweep:
+  name: s5_noisy_bc_eta_full_dist
+
+hydra:
+  sweeper:
+    params:
+      task.eta: 0.05,0.1,0.2

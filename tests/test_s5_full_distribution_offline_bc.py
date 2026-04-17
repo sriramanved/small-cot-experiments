@@ -20,6 +20,21 @@ from model import causal_lm_loss
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_ROOT = REPO_ROOT / "data"
+PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
+if not PYTHON.exists():
+    PYTHON = Path(sys.executable)
+
+
+def _run_hydra(*overrides: str) -> subprocess.CompletedProcess[str]:
+    cmd = [str(PYTHON), "-m", "nanogpt.run", *overrides]
+    return subprocess.run(
+        cmd,
+        cwd=REPO_ROOT,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
 
 
 def _write_s5_prompt_bank(root: Path, *, m: int, n_train: int, n_val: int, seed: int) -> None:
@@ -119,46 +134,33 @@ def _run_train_py(
     max_iters: int,
     init_from: str = "scratch",
 ) -> subprocess.CompletedProcess[str]:
-    cmd = [
-        sys.executable,
-        "train.py",
-        "config/train_s5_noisy_bc.py",
-        "--dataset=" + dataset_name,
-        "--out_dir=" + str(out_dir),
-        "--device=cpu",
-        "--dtype=float32",
-        "--compile=False",
-        "--offline_target_type=" + offline_target_type,
-        "--init_from=" + init_from,
-        "--n_layer=1",
-        "--n_head=1",
-        "--n_embd=16",
-        "--block_size=28",
-        "--batch_size=2",
-        "--gradient_accumulation_steps=1",
-        "--learning_rate=0.001",
-        "--warmup_iters=2",
-        "--max_iters=" + str(max_iters),
-        "--eval_interval=2",
-        "--eval_iters=1",
-        "--always_save_checkpoint=True",
-        "--offline_single_epoch=True",
-        "--offline_eval_full=False",
-        "--offline_train_shuffle=False",
-        "--final_eval_on_exit=True",
-        "--s5_eval_metrics=True",
-        "--s5_eval_clean_train_loss=True",
-        "--s5_eval_n=2",
-        "--s5_eval_batch_size=2",
-        "--wandb_log=False",
-    ]
-    return subprocess.run(
-        cmd,
-        cwd=REPO_ROOT,
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
+    return _run_hydra(
+        "experiment=s5_noisy_bc",
+        "runtime=cpu",
+        "logging=disabled",
+        "model=tiny_debug",
+        "model.block_size=28",
+        f"task.dataset={dataset_name}",
+        "task.s5_m=2",
+        f"run.out_dir={out_dir}",
+        f"optim.offline_target_type={offline_target_type}",
+        f"optim.init_from={init_from}",
+        "optim.batch_size=2",
+        "optim.gradient_accumulation_steps=1",
+        "optim.learning_rate=0.001",
+        "optim.warmup_iters=2",
+        f"optim.max_iters={max_iters}",
+        "optim.eval_interval=2",
+        "optim.eval_iters=1",
+        "optim.always_save_checkpoint=true",
+        "optim.offline_single_epoch=true",
+        "optim.offline_eval_full=false",
+        "optim.offline_train_shuffle=false",
+        "optim.final_eval_on_exit=true",
+        "optim.s5_eval_metrics=true",
+        "optim.s5_eval_clean_train_loss=true",
+        "optim.s5_eval_n=2",
+        "optim.s5_eval_batch_size=2",
     )
 
 
@@ -171,37 +173,27 @@ def _run_train_opd_s5(
     max_iters: int,
     seed: int = 37,
 ) -> subprocess.CompletedProcess[str]:
-    cmd = [
-        sys.executable,
-        "train_opd.py",
-        "--task=s5",
-        "--teacher_checkpoint=" + str(teacher_dir),
-        "--prompt_bank_dir=" + str(prompt_bank_dir),
-        "--subset_size=12",
-        "--eta=0.2",
-        "--teacher_law=distributional_noise",
-        "--objective=" + objective,
-        "--out_dir=" + str(out_dir),
-        "--batch_size=2",
-        "--max_iters=" + str(max_iters),
-        "--learning_rate=0.001",
-        "--warmup_iters=2",
-        "--eval_interval=2",
-        "--eval_n=2",
-        "--eval_batch_size=2",
-        "--log_interval=1",
-        "--save_interval=2",
-        "--device=cpu",
-        "--dtype=float32",
-        "--seed=" + str(seed),
-    ]
-    return subprocess.run(
-        cmd,
-        cwd=REPO_ROOT,
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
+    return _run_hydra(
+        "experiment=s5_opd",
+        "runtime=cpu",
+        "logging=disabled",
+        f"task.teacher_checkpoint={teacher_dir}",
+        f"task.prompt_bank_dir={prompt_bank_dir}",
+        "task.subset_size=12",
+        "task.eta=0.2",
+        "task.teacher_law=distributional_noise",
+        f"task.objective={objective}",
+        f"run.out_dir={out_dir}",
+        "optim.batch_size=2",
+        f"optim.max_iters={max_iters}",
+        "optim.learning_rate=0.001",
+        "optim.warmup_iters=2",
+        "optim.eval_interval=2",
+        "optim.eval_n=2",
+        "optim.eval_batch_size=2",
+        "optim.log_interval=1",
+        "optim.save_interval=2",
+        f"optim.seed={seed}",
     )
 
 
@@ -210,33 +202,26 @@ class S5FullDistributionOfflineBCTests(unittest.TestCase):
         out_dir = Path(tempfile.mkdtemp(prefix="s5-online-out-"))
 
         try:
-            cmd = [
-                sys.executable,
-                "train.py",
-                "--dataset=s5_cot",
-                "--out_dir=" + str(out_dir),
-                "--s5_m=2",
-                "--device=cpu",
-                "--dtype=float32",
-                "--compile=False",
-                "--n_layer=1",
-                "--n_head=1",
-                "--n_embd=16",
-                "--block_size=28",
-                "--batch_size=2",
-                "--gradient_accumulation_steps=1",
-                "--learning_rate=0.001",
-                "--max_iters=1",
-                "--eval_interval=1",
-                "--eval_iters=1",
-                "--always_save_checkpoint=False",
-                "--eval_only=True",
-                "--s5_eval_metrics=True",
-                "--s5_eval_n=2",
-                "--s5_eval_batch_size=2",
-                "--wandb_log=False",
-            ]
-            subprocess.run(cmd, cwd=REPO_ROOT, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            _run_hydra(
+                "experiment=s5_cot_len21",
+                "runtime=cpu",
+                "logging=disabled",
+                "model=tiny_debug",
+                "model.block_size=28",
+                "task.s5_m=2",
+                f"run.out_dir={out_dir}",
+                "optim.batch_size=2",
+                "optim.gradient_accumulation_steps=1",
+                "optim.learning_rate=0.001",
+                "optim.max_iters=1",
+                "optim.eval_interval=1",
+                "optim.eval_iters=1",
+                "optim.always_save_checkpoint=false",
+                "optim.eval_only=true",
+                "optim.s5_eval_metrics=true",
+                "optim.s5_eval_n=2",
+                "optim.s5_eval_batch_size=2",
+            )
 
             last_eval = _read_json(out_dir / "last_eval.json")
             self.assertNotIn("val/cot_exact", last_eval)

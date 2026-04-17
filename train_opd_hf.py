@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import inspect
 import json
 import os
 import random
+import re
 import shutil
 import time
 from contextlib import nullcontext
@@ -90,6 +92,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wandb_log", action="store_true")
     parser.add_argument("--wandb_project", type=str, default="small-cot-experiments")
     parser.add_argument("--wandb_run_name", type=str, default=None)
+    parser.add_argument("--wandb_run_id", type=str, default=None)
+    parser.add_argument("--wandb_init_timeout", type=int, default=300)
     return parser.parse_args()
 
 
@@ -240,11 +244,70 @@ def maybe_init_wandb(args: argparse.Namespace, config: dict[str, object]):
         return None
     import wandb
 
-    wandb.init(
-        project=args.wandb_project,
-        name=args.wandb_run_name,
-        config=config,
-    )
+    out_dir = Path(args.out_dir)
+    state_path = out_dir / "wandb_state.json"
+    fallback_id = hashlib.sha1(
+        f"{args.wandb_project}:{out_dir.resolve()}".encode("utf-8")
+    ).hexdigest()[:16]
+    fallback_pattern = re.compile(r"^[0-9a-f]{16}$")
+
+    def is_fallback_run_id(run_id: str | None) -> bool:
+        if run_id is None:
+            return False
+        return bool(fallback_pattern.fullmatch(run_id)) and run_id == fallback_id
+
+    has_saved_run_id = False
+    run_id = args.wandb_run_id
+    if is_fallback_run_id(run_id):
+        print(
+            "warning: ignoring deterministic fallback W&B run id passed on the command line; "
+            "will use resume='allow' instead."
+        )
+        run_id = None
+    if run_id is None and state_path.exists():
+        with open(state_path, "r", encoding="utf-8") as f:
+            saved_state = json.load(f)
+        run_id = saved_state.get("run_id")
+        if is_fallback_run_id(run_id):
+            print(
+                "warning: ignoring stale deterministic fallback W&B run id from wandb_state.json; "
+                "looking for a real resumable run id instead."
+            )
+            run_id = None
+        has_saved_run_id = run_id is not None
+    if run_id is None:
+        run_id = fallback_id
+        if args.init_from == "resume":
+            print(
+                "warning: no saved W&B run id found; using a deterministic fallback id. "
+                "This may create a new W&B run instead of resuming the original graph."
+            )
+    has_explicit_resume_id = args.wandb_run_id is not None or has_saved_run_id
+    resume_mode = "must" if args.init_from == "resume" and has_explicit_resume_id else "allow"
+    try:
+        wandb.init(
+            project=args.wandb_project,
+            name=args.wandb_run_name,
+            id=run_id,
+            resume=resume_mode,
+            config=config,
+            settings=wandb.Settings(init_timeout=args.wandb_init_timeout),
+        )
+    except Exception as exc:
+        print(
+            f"warning: wandb.init failed ({exc}). Continuing with wandb logging disabled for this process."
+        )
+        return None
+    with open(state_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "run_id": wandb.run.id,
+                "project": args.wandb_project,
+                "name": args.wandb_run_name,
+            },
+            f,
+            indent=2,
+        )
     return wandb
 
 

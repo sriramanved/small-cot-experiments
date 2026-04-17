@@ -1,0 +1,18 @@
+# @package _global_
+defaults:
+  - /pipeline: pretrain
+  - /task: s5_noisy_offline
+  - /model: s5_len21_cot
+  - /optim: synthetic_offline_bc
+  - /runtime: gpu_float16
+  - /logging: disabled
+  - /cluster: local
+  - _self_
+
+run:
+  name: s5-noisy-bc-n${task.subset_size}-eta${float_tag:${task.eta}}
+  out_dir: ${run.output_root}/out-s5-noisy-bc-n${task.subset_size}-eta${float_tag:${task.eta}}
+
+optim:
+  s5_eval_metrics: true
+  s5_eval_clean_train_loss: true

@@ -18,6 +18,21 @@ from model import GPT, GPTConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_ROOT = REPO_ROOT / "data"
+PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
+if not PYTHON.exists():
+    PYTHON = Path(sys.executable)
+
+
+def _run_hydra(*overrides: str) -> subprocess.CompletedProcess[str]:
+    cmd = [str(PYTHON), "-m", "nanogpt.run", *overrides]
+    return subprocess.run(
+        cmd,
+        cwd=REPO_ROOT,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
 
 
 def _write_prompt_bank(root: Path, *, p: int, m: int, n_train: int, n_val: int, seed: int) -> None:
@@ -155,45 +170,36 @@ def _run_train_opd(
     seed: int = 7,
     single_epoch: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    cmd = [
-        sys.executable,
-        "train_opd.py",
-        "--task=modadd",
-        "--teacher_checkpoint=" + str(teacher_dir),
-        "--prompt_bank_dir=" + str(prompt_bank_dir),
-        "--subset_size=" + str(subset_size),
-        "--eta=0.1",
-        "--teacher_law=distributional_noise",
-        "--objective=" + objective,
-        "--out_dir=" + str(out_dir),
-        "--init_from=" + init_from,
-        "--batch_size=2",
-        "--max_iters=" + str(max_iters),
-        "--learning_rate=0.001",
-        "--warmup_iters=2",
-        "--eval_interval=2",
-        "--eval_n=2",
-        "--eval_batch_size=2",
-        "--log_interval=1",
-        "--save_interval=2",
-        "--device=cpu",
-        "--dtype=float32",
-        "--seed=" + str(seed),
+    overrides = [
+        "experiment=modadd_opd",
+        "runtime=cpu",
+        "logging=disabled",
+        f"task.teacher_checkpoint={teacher_dir}",
+        f"task.prompt_bank_dir={prompt_bank_dir}",
+        f"task.subset_size={subset_size}",
+        "task.eta=0.1",
+        "task.teacher_law=distributional_noise",
+        f"task.objective={objective}",
+        f"run.out_dir={out_dir}",
+        f"optim.init_from={init_from}",
+        "optim.batch_size=2",
+        f"optim.max_iters={max_iters}",
+        "optim.learning_rate=0.001",
+        "optim.warmup_iters=2",
+        "optim.eval_interval=2",
+        "optim.eval_n=2",
+        "optim.eval_batch_size=2",
+        "optim.log_interval=1",
+        "optim.save_interval=2",
+        f"optim.seed={seed}",
     ]
     if init_from_ckpt is not None:
-        cmd.append("--init_from_ckpt=" + str(init_from_ckpt))
+        overrides.append(f"optim.init_from_ckpt={init_from_ckpt}")
     if continue_from_subset_size > 0:
-        cmd.append("--continue_from_subset_size=" + str(continue_from_subset_size))
+        overrides.append(f"optim.continue_from_subset_size={continue_from_subset_size}")
     if single_epoch:
-        cmd.append("--single_epoch")
-    return subprocess.run(
-        cmd,
-        cwd=REPO_ROOT,
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
+        overrides.append("optim.single_epoch=true")
+    return _run_hydra(*overrides)
 
 
 def _run_train_py_offline_modadd(
@@ -205,49 +211,36 @@ def _run_train_py_offline_modadd(
     init_from_ckpt: Path | None = None,
     continue_from_subset_size: int = 0,
 ) -> subprocess.CompletedProcess[str]:
-    cmd = [
-        sys.executable,
-        "train.py",
-        "--dataset=" + dataset_name,
-        "--out_dir=" + str(out_dir),
-        "--device=cpu",
-        "--dtype=float32",
-        "--compile=False",
-        "--n_layer=1",
-        "--n_head=1",
-        "--n_embd=16",
-        "--block_size=8",
-        "--batch_size=2",
-        "--gradient_accumulation_steps=1",
-        "--learning_rate=0.001",
-        "--warmup_iters=0",
-        "--max_iters=" + str(max_iters),
-        "--eval_interval=2",
-        "--eval_iters=1",
-        "--always_save_checkpoint=True",
-        "--offline_single_epoch=True",
-        "--offline_eval_full=False",
-        "--offline_train_shuffle=False",
-        "--final_eval_on_exit=True",
-        "--modadd_eval_metrics=True",
-        "--modadd_eval_clean_train_loss=True",
-        "--s5_eval_n=2",
-        "--s5_eval_batch_size=2",
-        "--wandb_log=False",
-        "--init_from=" + init_from,
+    overrides = [
+        "experiment=modadd_clean_offline_bc",
+        "runtime=cpu",
+        "logging=disabled",
+        "model=tiny_debug",
+        f"task.dataset={dataset_name}",
+        f"run.out_dir={out_dir}",
+        f"optim.max_iters={max_iters}",
+        f"optim.init_from={init_from}",
+        "optim.batch_size=2",
+        "optim.gradient_accumulation_steps=1",
+        "optim.learning_rate=0.001",
+        "optim.warmup_iters=0",
+        "optim.eval_interval=2",
+        "optim.eval_iters=1",
+        "optim.always_save_checkpoint=true",
+        "optim.offline_single_epoch=true",
+        "optim.offline_eval_full=false",
+        "optim.offline_train_shuffle=false",
+        "optim.final_eval_on_exit=true",
+        "optim.modadd_eval_metrics=true",
+        "optim.modadd_eval_clean_train_loss=true",
+        "optim.s5_eval_n=2",
+        "optim.s5_eval_batch_size=2",
     ]
     if init_from_ckpt is not None:
-        cmd.append("--init_from_ckpt=" + str(init_from_ckpt))
+        overrides.append(f"optim.init_from_ckpt={init_from_ckpt}")
     if continue_from_subset_size > 0:
-        cmd.append("--continue_from_subset_size=" + str(continue_from_subset_size))
-    return subprocess.run(
-        cmd,
-        cwd=REPO_ROOT,
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
+        overrides.append(f"optim.continue_from_subset_size={continue_from_subset_size}")
+    return _run_hydra(*overrides)
 
 
 class ModularAdditionIntegrationTests(unittest.TestCase):
@@ -255,35 +248,27 @@ class ModularAdditionIntegrationTests(unittest.TestCase):
         out_dir = Path(tempfile.mkdtemp(prefix="modadd-online-final-out-"))
 
         try:
-            cmd = [
-                sys.executable,
-                "train.py",
-                "--dataset=modadd_cot",
-                "--out_dir=" + str(out_dir),
-                "--modadd_p=3",
-                "--modadd_m=4",
-                "--device=cpu",
-                "--dtype=float32",
-                "--compile=False",
-                "--n_layer=1",
-                "--n_head=1",
-                "--n_embd=16",
-                "--block_size=8",
-                "--batch_size=2",
-                "--gradient_accumulation_steps=1",
-                "--learning_rate=0.001",
-                "--warmup_iters=0",
-                "--max_iters=1",
-                "--eval_interval=1",
-                "--eval_iters=1",
-                "--always_save_checkpoint=False",
-                "--final_eval_on_exit=True",
-                "--modadd_eval_metrics=True",
-                "--s5_eval_n=2",
-                "--s5_eval_batch_size=2",
-                "--wandb_log=False",
-            ]
-            subprocess.run(cmd, cwd=REPO_ROOT, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            _run_hydra(
+                "experiment=modadd_cot_p7_m21",
+                "runtime=cpu",
+                "logging=disabled",
+                "model=tiny_debug",
+                "task.modadd_p=3",
+                "task.modadd_m=4",
+                f"run.out_dir={out_dir}",
+                "optim.batch_size=2",
+                "optim.gradient_accumulation_steps=1",
+                "optim.learning_rate=0.001",
+                "optim.warmup_iters=0",
+                "optim.max_iters=1",
+                "optim.eval_interval=1",
+                "optim.eval_iters=1",
+                "optim.always_save_checkpoint=false",
+                "optim.final_eval_on_exit=true",
+                "optim.modadd_eval_metrics=true",
+                "optim.s5_eval_n=2",
+                "optim.s5_eval_batch_size=2",
+            )
 
             self.assertTrue((out_dir / "ckpt.pt").exists())
             self.assertTrue((out_dir / "completed.txt").exists())
@@ -296,34 +281,26 @@ class ModularAdditionIntegrationTests(unittest.TestCase):
         out_dir = Path(tempfile.mkdtemp(prefix="modadd-online-out-"))
 
         try:
-            cmd = [
-                sys.executable,
-                "train.py",
-                "--dataset=modadd_cot",
-                "--out_dir=" + str(out_dir),
-                "--modadd_p=3",
-                "--modadd_m=4",
-                "--device=cpu",
-                "--dtype=float32",
-                "--compile=False",
-                "--n_layer=1",
-                "--n_head=1",
-                "--n_embd=16",
-                "--block_size=8",
-                "--batch_size=2",
-                "--gradient_accumulation_steps=1",
-                "--learning_rate=0.001",
-                "--max_iters=1",
-                "--eval_interval=1",
-                "--eval_iters=1",
-                "--always_save_checkpoint=False",
-                "--eval_only=True",
-                "--modadd_eval_metrics=True",
-                "--s5_eval_n=2",
-                "--s5_eval_batch_size=2",
-                "--wandb_log=False",
-            ]
-            subprocess.run(cmd, cwd=REPO_ROOT, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            _run_hydra(
+                "experiment=modadd_cot_p7_m21",
+                "runtime=cpu",
+                "logging=disabled",
+                "model=tiny_debug",
+                "task.modadd_p=3",
+                "task.modadd_m=4",
+                f"run.out_dir={out_dir}",
+                "optim.batch_size=2",
+                "optim.gradient_accumulation_steps=1",
+                "optim.learning_rate=0.001",
+                "optim.max_iters=1",
+                "optim.eval_interval=1",
+                "optim.eval_iters=1",
+                "optim.always_save_checkpoint=false",
+                "optim.eval_only=true",
+                "optim.modadd_eval_metrics=true",
+                "optim.s5_eval_n=2",
+                "optim.s5_eval_batch_size=2",
+            )
 
             last_eval = json.loads((out_dir / "last_eval.json").read_text(encoding="utf-8"))
             self.assertNotIn("val/cot_exact", last_eval)
@@ -336,34 +313,27 @@ class ModularAdditionIntegrationTests(unittest.TestCase):
         out_dir = Path(tempfile.mkdtemp(prefix="modadd-base-online-out-"))
 
         try:
-            cmd = [
-                sys.executable,
-                "train.py",
-                "--dataset=modadd_base",
-                "--out_dir=" + str(out_dir),
-                "--modadd_p=3",
-                "--modadd_m=4",
-                "--device=cpu",
-                "--dtype=float32",
-                "--compile=False",
-                "--n_layer=1",
-                "--n_head=1",
-                "--n_embd=16",
-                "--block_size=5",
-                "--batch_size=2",
-                "--gradient_accumulation_steps=1",
-                "--learning_rate=0.001",
-                "--max_iters=1",
-                "--eval_interval=1",
-                "--eval_iters=1",
-                "--always_save_checkpoint=False",
-                "--eval_only=True",
-                "--modadd_eval_metrics=True",
-                "--s5_eval_n=2",
-                "--s5_eval_batch_size=2",
-                "--wandb_log=False",
-            ]
-            subprocess.run(cmd, cwd=REPO_ROOT, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            _run_hydra(
+                "experiment=modadd_base_p7_m30",
+                "runtime=cpu",
+                "logging=disabled",
+                "model=tiny_debug",
+                "model.block_size=5",
+                "task.modadd_p=3",
+                "task.modadd_m=4",
+                f"run.out_dir={out_dir}",
+                "optim.batch_size=2",
+                "optim.gradient_accumulation_steps=1",
+                "optim.learning_rate=0.001",
+                "optim.max_iters=1",
+                "optim.eval_interval=1",
+                "optim.eval_iters=1",
+                "optim.always_save_checkpoint=false",
+                "optim.eval_only=true",
+                "optim.modadd_eval_metrics=true",
+                "optim.s5_eval_n=2",
+                "optim.s5_eval_batch_size=2",
+            )
 
             last_eval = json.loads((out_dir / "last_eval.json").read_text(encoding="utf-8"))
             self.assertNotIn("val/cot_exact", last_eval)
@@ -383,38 +353,29 @@ class ModularAdditionIntegrationTests(unittest.TestCase):
             _write_prompt_bank(prompt_bank_dir, p=3, m=4, n_train=4, n_val=2, seed=7)
             _write_offline_dataset(dataset_dir, prompt_bank_dir=prompt_bank_dir, subset_size=4, eta=0.0)
 
-            cmd = [
-                sys.executable,
-                "train.py",
-                "--dataset=" + dataset_name,
-                "--out_dir=" + str(out_dir),
-                "--modadd_p=7",
-                "--modadd_m=21",
-                "--device=cpu",
-                "--dtype=float32",
-                "--compile=False",
-                "--n_layer=1",
-                "--n_head=1",
-                "--n_embd=16",
-                "--block_size=8",
-                "--batch_size=2",
-                "--gradient_accumulation_steps=1",
-                "--learning_rate=0.001",
-                "--max_iters=20",
-                "--eval_interval=2",
-                "--eval_iters=1",
-                "--always_save_checkpoint=True",
-                "--offline_single_epoch=True",
-                "--offline_eval_full=False",
-                "--offline_train_shuffle=False",
-                "--final_eval_on_exit=True",
-                "--modadd_eval_metrics=True",
-                "--modadd_eval_clean_train_loss=True",
-                "--s5_eval_n=2",
-                "--s5_eval_batch_size=2",
-                "--wandb_log=False",
-            ]
-            subprocess.run(cmd, cwd=REPO_ROOT, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            _run_hydra(
+                "experiment=modadd_clean_offline_bc",
+                "runtime=cpu",
+                "logging=disabled",
+                "model=tiny_debug",
+                f"task.dataset={dataset_name}",
+                f"run.out_dir={out_dir}",
+                "optim.batch_size=2",
+                "optim.gradient_accumulation_steps=1",
+                "optim.learning_rate=0.001",
+                "optim.max_iters=20",
+                "optim.eval_interval=2",
+                "optim.eval_iters=1",
+                "optim.always_save_checkpoint=true",
+                "optim.offline_single_epoch=true",
+                "optim.offline_eval_full=false",
+                "optim.offline_train_shuffle=false",
+                "optim.final_eval_on_exit=true",
+                "optim.modadd_eval_metrics=true",
+                "optim.modadd_eval_clean_train_loss=true",
+                "optim.s5_eval_n=2",
+                "optim.s5_eval_batch_size=2",
+            )
 
             checkpoint = torch.load(out_dir / "ckpt.pt", map_location="cpu", weights_only=False)
             self.assertEqual(checkpoint["config"]["modadd_p"], 3)
@@ -502,30 +463,29 @@ class ModularAdditionIntegrationTests(unittest.TestCase):
             _write_prompt_bank(prompt_bank_dir, p=3, m=4, n_train=4, n_val=2, seed=11)
             _write_teacher_checkpoint(teacher_dir, vocab_size=4, block_size=8)
 
-            cmd = [
-                sys.executable,
-                "train_opd.py",
-                "--task=modadd",
-                "--teacher_checkpoint=" + str(teacher_dir),
-                "--prompt_bank_dir=" + str(prompt_bank_dir),
-                "--subset_size=4",
-                "--eta=0.1",
-                "--teacher_law=distributional_noise",
-                "--objective=forward_kl_full",
-                "--out_dir=" + str(out_dir),
-                "--batch_size=2",
-                "--max_iters=1",
-                "--learning_rate=0.001",
-                "--warmup_iters=0",
-                "--eval_interval=1",
-                "--eval_n=2",
-                "--eval_batch_size=2",
-                "--log_interval=1",
-                "--device=cpu",
-                "--dtype=float32",
-                "--seed=7",
-            ]
-            subprocess.run(cmd, cwd=REPO_ROOT, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            _run_hydra(
+                "experiment=modadd_opd",
+                "runtime=cpu",
+                "logging=disabled",
+                f"task.teacher_checkpoint={teacher_dir}",
+                f"task.prompt_bank_dir={prompt_bank_dir}",
+                "task.modadd_p=3",
+                "task.modadd_m=4",
+                "task.subset_size=4",
+                "task.eta=0.1",
+                "task.teacher_law=distributional_noise",
+                "task.objective=forward_kl_full",
+                f"run.out_dir={out_dir}",
+                "optim.batch_size=2",
+                "optim.max_iters=1",
+                "optim.learning_rate=0.001",
+                "optim.warmup_iters=0",
+                "optim.eval_interval=1",
+                "optim.eval_n=2",
+                "optim.eval_batch_size=2",
+                "optim.log_interval=1",
+                "optim.seed=7",
+            )
 
             run_meta = json.loads((out_dir / "run_meta.json").read_text(encoding="utf-8"))
             self.assertEqual(run_meta["task"], "modadd")
@@ -553,30 +513,29 @@ class ModularAdditionIntegrationTests(unittest.TestCase):
             _write_prompt_bank(prompt_bank_dir, p=3, m=4, n_train=4, n_val=2, seed=13)
             _write_teacher_checkpoint(teacher_dir, vocab_size=4, block_size=8)
 
-            cmd = [
-                sys.executable,
-                "train_opd.py",
-                "--task=modadd",
-                "--teacher_checkpoint=" + str(teacher_dir),
-                "--prompt_bank_dir=" + str(prompt_bank_dir),
-                "--subset_size=4",
-                "--eta=0.1",
-                "--teacher_law=distributional_noise",
-                "--objective=reverse_kl_full",
-                "--out_dir=" + str(out_dir),
-                "--batch_size=2",
-                "--max_iters=1",
-                "--learning_rate=0.001",
-                "--warmup_iters=0",
-                "--eval_interval=1",
-                "--eval_n=2",
-                "--eval_batch_size=2",
-                "--log_interval=1",
-                "--device=cpu",
-                "--dtype=float32",
-                "--seed=7",
-            ]
-            subprocess.run(cmd, cwd=REPO_ROOT, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            _run_hydra(
+                "experiment=modadd_opd",
+                "runtime=cpu",
+                "logging=disabled",
+                f"task.teacher_checkpoint={teacher_dir}",
+                f"task.prompt_bank_dir={prompt_bank_dir}",
+                "task.modadd_p=3",
+                "task.modadd_m=4",
+                "task.subset_size=4",
+                "task.eta=0.1",
+                "task.teacher_law=distributional_noise",
+                "task.objective=reverse_kl_full",
+                f"run.out_dir={out_dir}",
+                "optim.batch_size=2",
+                "optim.max_iters=1",
+                "optim.learning_rate=0.001",
+                "optim.warmup_iters=0",
+                "optim.eval_interval=1",
+                "optim.eval_n=2",
+                "optim.eval_batch_size=2",
+                "optim.log_interval=1",
+                "optim.seed=7",
+            )
 
             run_meta = json.loads((out_dir / "run_meta.json").read_text(encoding="utf-8"))
             self.assertEqual(run_meta["task"], "modadd")

@@ -1,6 +1,12 @@
 """
-This training script can be run both on a single gpu in debug mode,
-and also in a larger training run with distributed data parallel (ddp).
+Low-level trainer backend used by `python -m nanogpt.run`.
+
+Public launches should generally go through Hydra presets, e.g.:
+$ python -m nanogpt.run experiment=shakespeare_char
+$ python -m nanogpt.run experiment=gpt2
+
+This training script can also be run both on a single gpu in debug mode,
+and in a larger training run with distributed data parallel (ddp).
 
 To run on a single GPU, example:
 $ python train.py --batch_size=32 --compile=False
@@ -102,7 +108,7 @@ final_eval_on_exit = False
 # -----------------------------------------------------------------------------
 config_keys = [k for k, v in globals().items() if not k.startswith(
     '_') and isinstance(v, (int, float, bool, str))]
-# overrides from command line or config file
+# overrides from direct --key=value arguments
 exec(open('configurator.py').read())
 config = {k: globals()[k] for k in config_keys}  # will be useful for logging
 # -----------------------------------------------------------------------------
@@ -717,6 +723,10 @@ def get_lr(it):
     # 1) linear warmup from 1e-6 to learning_rate
     if it < warmup_iters:
         return lr_start + (learning_rate - lr_start) * (it + 1) / (warmup_iters + 1)
+
+    # Degenerate schedules with no post-warmup decay window should stay flat.
+    if lr_decay_iters <= warmup_iters:
+        return learning_rate
 
     # 2) after decay horizon, stay at min_lr
     if it > lr_decay_iters:

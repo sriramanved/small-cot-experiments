@@ -1,0 +1,14 @@
+# @package _global_
+task:
+  task: modadd
+  modadd_p: 7
+  modadd_m: 21
+  n_train: 15000000
+  n_val: 5000
+  teacher_checkpoint: out-modadd-cot-p${task.modadd_p}-m${task.modadd_m}-depth1
+  prompt_bank_dir: data/modadd_clean_prompt_bank_p${task.modadd_p}_m${task.modadd_m}_n${task.n_train}_val${task.n_val}
+  subset_size: 1000000
+  eta: 0.05
+  teacher_law: distributional_noise
+  objective: reverse_kl_tm
+  student_temperature: 1.0

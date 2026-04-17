@@ -1,0 +1,5 @@
+# @package _global_
+task:
+  dataset: s5_clean_offline_n6000000
+  s5_mode: cot
+  s5_m: 21

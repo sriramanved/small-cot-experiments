@@ -1,0 +1,4 @@
+# @package _global_
+pipeline:
+  name: opd
+  entrypoint: train_opd.py

@@ -1,0 +1,5 @@
+# @package _global_
+task:
+  dataset: modadd_base
+  modadd_p: 7
+  modadd_m: 30

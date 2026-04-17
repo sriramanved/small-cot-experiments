@@ -1,0 +1,5 @@
+# @package _global_
+task:
+  dataset: modadd_clean_offline_p7_m21_n15000000
+  modadd_p: 7
+  modadd_m: 21

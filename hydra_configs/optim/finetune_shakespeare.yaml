@@ -1,0 +1,14 @@
+# @package _global_
+optim:
+  eval_interval: 5
+  eval_iters: 40
+  eval_only: false
+  always_save_checkpoint: false
+  init_from: scratch
+  init_from_ckpt: ""
+  continue_from_subset_size: 0
+  batch_size: 1
+  gradient_accumulation_steps: 32
+  max_iters: 20
+  learning_rate: 0.00003
+  decay_lr: false

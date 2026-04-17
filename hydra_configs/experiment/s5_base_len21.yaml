@@ -1,0 +1,14 @@
+# @package _global_
+defaults:
+  - /pipeline: pretrain
+  - /task: s5_base_len21
+  - /model: s5_len21_base
+  - /optim: synthetic_expert
+  - /runtime: gpu_float16
+  - /logging: enabled
+  - /cluster: local
+  - _self_
+
+run:
+  name: s5-base-len21-depth1
+  out_dir: ${run.output_root}/out-s5-base-len21-depth1

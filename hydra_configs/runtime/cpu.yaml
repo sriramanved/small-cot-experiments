@@ -1,0 +1,8 @@
+# @package _global_
+runtime:
+  device: cpu
+  dtype: float32
+  compile: false
+  torchrun:
+    nproc_per_node: 1
+    nnodes: 1

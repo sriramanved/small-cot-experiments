@@ -1,0 +1,17 @@
+# @package _global_
+defaults:
+  - /pipeline: pretrain
+  - /task: shakespeare
+  - /model: teacher_inferred
+  - /optim: finetune_shakespeare
+  - /runtime: gpu_float16
+  - /logging: disabled
+  - /cluster: local
+  - _self_
+
+run:
+  name: finetune-shakespeare
+  out_dir: ${run.output_root}/out-shakespeare
+
+optim:
+  init_from: gpt2-xl

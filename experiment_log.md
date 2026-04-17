@@ -1335,6 +1335,83 @@ Current status:
 - no completed `out-modadd-opd-*` run directories are present in this repo copy yet
 - once real modadd run directories exist, `scripts/aggregate_modadd_results.py` can collect both offline BC and OPD endpoints into CSV and Markdown summary tables
 
+### 8.6.1 Legacy `p=7, m=31, eval350_apr16` comparison plots
+
+Source note:
+
+- these figures come from the legacy pre-Hydra run families:
+  - offline BC MC: `sample_then_corrupt`
+  - NAIL-OPD MC: `forward_kl_simple`
+  - OPD MC: `reverse_kl_simple` / `reverse_kl_tm`
+- the legacy visualization helper is:
+  - [scripts/plot_modadd_legacy_runs.py](/Users/vedsriraman/columbia/code/small-cot-experiments/nanoGPT/scripts/plot_modadd_legacy_runs.py)
+- default output directory for the `p=7`, `m=31`, `subset_size=1000000`, `run_tag=eval350_apr16` invocation:
+  - `analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/`
+
+Summary endpoint plots:
+
+![ModAdd legacy summary clean_full_exact vs eta](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/summary_clean_full_exact_vs_eta.png)
+
+![ModAdd legacy summary clean_final_exact vs eta](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/summary_clean_final_exact_vs_eta.png)
+
+Per-eta `clean_full_exact` curves:
+
+<details>
+<summary><code>clean_full_exact</code> per-eta figures</summary>
+
+![ModAdd eta 0.0 clean_full_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0_clean_full_exact.png)
+
+![ModAdd eta 0.05 clean_full_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p05_clean_full_exact.png)
+
+![ModAdd eta 0.1 clean_full_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p1_clean_full_exact.png)
+
+![ModAdd eta 0.2 clean_full_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p2_clean_full_exact.png)
+
+![ModAdd eta 0.3 clean_full_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p3_clean_full_exact.png)
+
+![ModAdd eta 0.4 clean_full_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p4_clean_full_exact.png)
+
+![ModAdd eta 0.5 clean_full_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p5_clean_full_exact.png)
+
+![ModAdd eta 0.6 clean_full_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p6_clean_full_exact.png)
+
+![ModAdd eta 0.7 clean_full_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p7_clean_full_exact.png)
+
+![ModAdd eta 0.8 clean_full_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p8_clean_full_exact.png)
+
+![ModAdd eta 0.9 clean_full_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p9_clean_full_exact.png)
+
+</details>
+
+Per-eta `clean_final_exact` curves:
+
+<details>
+<summary><code>clean_final_exact</code> per-eta figures</summary>
+
+![ModAdd eta 0.0 clean_final_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0_clean_final_exact.png)
+
+![ModAdd eta 0.05 clean_final_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p05_clean_final_exact.png)
+
+![ModAdd eta 0.1 clean_final_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p1_clean_final_exact.png)
+
+![ModAdd eta 0.2 clean_final_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p2_clean_final_exact.png)
+
+![ModAdd eta 0.3 clean_final_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p3_clean_final_exact.png)
+
+![ModAdd eta 0.4 clean_final_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p4_clean_final_exact.png)
+
+![ModAdd eta 0.5 clean_final_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p5_clean_final_exact.png)
+
+![ModAdd eta 0.6 clean_final_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p6_clean_final_exact.png)
+
+![ModAdd eta 0.7 clean_final_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p7_clean_final_exact.png)
+
+![ModAdd eta 0.8 clean_final_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p8_clean_final_exact.png)
+
+![ModAdd eta 0.9 clean_final_exact](analysis/figures/modadd_legacy_p7_m31_n1000000_eval350_apr16/eta0p9_clean_final_exact.png)
+
+</details>
+
 ### 8.7 Modular-Addition TODO / Bookkeeping
 
 - record the first canonical clean-expert run and its final metrics

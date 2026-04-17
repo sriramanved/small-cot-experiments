@@ -1,0 +1,5 @@
+# @package _global_
+task:
+  dataset: s5_cot
+  s5_mode: base
+  s5_m: 21

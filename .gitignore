@@ -11,4 +11,5 @@ input.txt
 env/
 venv/
 .venv/
-
+hydra_outputs/
+hydra_multirun/

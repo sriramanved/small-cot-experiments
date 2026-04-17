@@ -1,0 +1,12 @@
+# @package _global_
+sweep:
+  name: s5_clean_offline_subset
+
+run:
+  name: s5-clean-offline-bc-n${optim.offline_train_subset_size}
+  out_dir: ${run.output_root}/out-s5-clean-offline-bc-n${optim.offline_train_subset_size}
+
+hydra:
+  sweeper:
+    params:
+      optim.offline_train_subset_size: 250000,500000,1000000,2000000,4000000,6000000
