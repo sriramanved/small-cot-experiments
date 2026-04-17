@@ -20,6 +20,7 @@ optim:
   warmup_iters: 2000
   lr_decay_iters: ${optim.max_iters}
   min_lr: ${optim.learning_rate}
+  seed: 1337
   offline_single_epoch: true
   offline_eval_full: false
   offline_train_subset_size: 0

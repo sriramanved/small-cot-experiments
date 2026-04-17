@@ -10,8 +10,8 @@ defaults:
   - _self_
 
 run:
-  name: modadd-clean-offline-bc-p${task.modadd_p}-m${task.modadd_m}
-  out_dir: ${run.output_root}/out-modadd-clean-offline-bc-p${task.modadd_p}-m${task.modadd_m}
+  name: modadd-clean-offline-bc-p${task.modadd_p}-m${task.modadd_m}-n${optim.offline_train_subset_size}-seed${optim.seed}
+  out_dir: ${run.output_root}/out-modadd-clean-offline-bc-p${task.modadd_p}-m${task.modadd_m}-n${optim.offline_train_subset_size}-seed${optim.seed}
 
 optim:
   modadd_eval_metrics: true

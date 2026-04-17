@@ -10,8 +10,8 @@ defaults:
   - _self_
 
 run:
-  name: modadd-noisy-bc-p${task.modadd_p}-m${task.modadd_m}-n${task.subset_size}-eta${float_tag:${task.eta}}
-  out_dir: ${run.output_root}/out-modadd-noisy-bc-p${task.modadd_p}-m${task.modadd_m}-n${task.subset_size}-eta${float_tag:${task.eta}}
+  name: modadd-noisy-bc-p${task.modadd_p}-m${task.modadd_m}-n${task.subset_size}-eta${float_tag:${task.eta}}-seed${optim.seed}
+  out_dir: ${run.output_root}/out-modadd-noisy-bc-p${task.modadd_p}-m${task.modadd_m}-n${task.subset_size}-eta${float_tag:${task.eta}}-seed${optim.seed}
 
 optim:
   modadd_eval_metrics: true

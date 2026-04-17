@@ -20,6 +20,7 @@ optim:
   warmup_iters: 2000
   lr_decay_iters: ${optim.max_iters}
   min_lr: ${optim.learning_rate}
+  seed: 1337
   final_eval_on_exit: true
   s5_eval_n: 256
   s5_eval_batch_size: 512

@@ -10,8 +10,8 @@ defaults:
   - _self_
 
 run:
-  name: modadd-base-p7-m30-depth1
-  out_dir: ${run.output_root}/out-modadd-base-p7-m30-depth1
+  name: modadd-base-p7-m30-depth1-seed${optim.seed}
+  out_dir: ${run.output_root}/out-modadd-base-p7-m30-depth1-seed${optim.seed}
 
 optim:
   max_iters: 200000
