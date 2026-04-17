@@ -15,8 +15,8 @@ from data.s5_cot.opd import (
     extract_answer_logits,
     teacher_forward_kl,
 )
-from train_opd import validate_args
-from train_opd import validate_resume_metadata
+from nanogpt.trainers.opd import validate_args
+from nanogpt.trainers.opd import validate_resume_metadata
 
 
 VOCAB_SIZE = 8

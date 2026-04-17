@@ -3,16 +3,27 @@ from __future__ import annotations
 import json
 import random
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import torch
+from hydra import compose, initialize_config_dir
 
 from data.s5_cot.task import VOCAB_SIZE, sample_cot_example_ids_from_rng
 from model import GPT, GPTConfig
+from nanogpt.config_schema import materialize_config
+from nanogpt.trainers.configs import (
+    project_opd_config,
+    project_opd_hf_config,
+    project_pretrain_config,
+)
+from nanogpt.trainers.pretrain import run_pretrain
+from nanogpt.utils.resolvers import register_resolvers
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +41,24 @@ def _run_hydra(*args: str) -> subprocess.CompletedProcess[str]:
         stderr=subprocess.STDOUT,
         text=True,
     )
+
+
+def _compose_app(*overrides: str):
+    register_resolvers()
+    with initialize_config_dir(version_base=None, config_dir=str(REPO_ROOT / "hydra_configs")):
+        raw_cfg = compose(config_name="config", overrides=list(overrides))
+    return materialize_config(raw_cfg)
+
+
+def _can_bind_local_socket() -> bool:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", 0))
+    except OSError:
+        return False
+    finally:
+        sock.close()
+    return True
 
 
 def _write_s5_prompt_bank(root: Path, *, m: int, n_train: int, n_val: int, seed: int) -> None:
@@ -99,6 +128,42 @@ def _write_teacher_checkpoint(root: Path, *, block_size: int) -> None:
 
 
 class HydraConfigTests(unittest.TestCase):
+    def test_pretrain_projection_rejects_cpu_runtime_with_nccl_backend(self):
+        cfg = _compose_app(
+            "experiment=s5_noisy_bc",
+            "runtime=cpu",
+            "runtime.backend=nccl",
+        )
+        with self.assertRaisesRegex(ValueError, "runtime=cpu requires runtime.backend=gloo"):
+            project_pretrain_config(cfg)
+
+    def test_pretrain_projection_rejects_invalid_offline_warm_start_continuation(self):
+        cfg = _compose_app(
+            "experiment=s5_clean_offline_bc",
+            "optim.init_from=warm_start",
+            "optim.init_from_ckpt=/tmp/source.ckpt",
+            "optim.continue_from_subset_size=2",
+            "optim.offline_single_epoch=false",
+        )
+        with self.assertRaisesRegex(ValueError, "offline_single_epoch=True"):
+            project_pretrain_config(cfg)
+
+    def test_opd_projection_rejects_parallel_torchrun(self):
+        cfg = _compose_app(
+            "experiment=s5_opd",
+            "runtime.torchrun.nproc_per_node=2",
+        )
+        with self.assertRaisesRegex(ValueError, "single-process only"):
+            project_opd_config(cfg)
+
+    def test_opd_hf_projection_rejects_parallel_torchrun(self):
+        cfg = _compose_app(
+            "experiment=s5_opd_hf",
+            "runtime.torchrun.nproc_per_node=2",
+        )
+        with self.assertRaisesRegex(ValueError, "single-process only"):
+            project_opd_hf_config(cfg)
+
     def test_all_supported_experiments_compose(self):
         experiments = [
             "shakespeare_char",
@@ -202,6 +267,90 @@ class HydraConfigTests(unittest.TestCase):
             self.assertTrue((eta_b / "completed.txt").exists())
             self.assertTrue((eta_a / "launcher_config.json").exists())
             self.assertTrue((eta_b / "launcher_command.txt").exists())
+
+    def test_pretrain_ddp_bootstrap_writes_worker_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir) / "bootstrap-out"
+            cfg = project_pretrain_config(
+                _compose_app(
+                    "experiment=s5_cot_len21",
+                    "runtime=cpu",
+                    "runtime.torchrun.nproc_per_node=2",
+                    "logging=disabled",
+                    "model=tiny_debug",
+                    "model.block_size=28",
+                    "task.s5_m=2",
+                    f"run.out_dir={out_dir}",
+                    "optim.batch_size=1",
+                    "optim.gradient_accumulation_steps=2",
+                    "optim.learning_rate=0.001",
+                    "optim.max_iters=1",
+                    "optim.eval_interval=1",
+                    "optim.eval_iters=1",
+                    "optim.always_save_checkpoint=true",
+                    "optim.final_eval_on_exit=true",
+                    "optim.s5_eval_metrics=true",
+                    "optim.s5_eval_n=2",
+                    "optim.s5_eval_batch_size=2",
+                )
+            )
+
+            with mock.patch("nanogpt.trainers.pretrain.subprocess.run") as run_mock:
+                run_pretrain(
+                    cfg,
+                    launcher_command=[str(PYTHON), "-m", "nanogpt.run", "experiment=s5_cot_len21"],
+                )
+
+            run_mock.assert_called_once()
+            command = run_mock.call_args.args[0]
+            self.assertIn("-m", command)
+            self.assertIn("nanogpt.workers.pretrain", command)
+            self.assertTrue((out_dir / "worker_config.json").exists())
+            self.assertTrue((out_dir / "launcher_command.txt").exists())
+            with open(out_dir / "worker_config.json", "r", encoding="utf-8") as f:
+                worker_cfg = json.load(f)
+            self.assertEqual(worker_cfg["backend"], "gloo")
+            self.assertEqual(worker_cfg["device"], "cpu")
+
+    def test_pretrain_cpu_ddp_smoke_writes_worker_config(self):
+        if not _can_bind_local_socket():
+            self.skipTest("local socket binding is unavailable in this sandbox")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir) / "ddp-out"
+
+            _run_hydra(
+                "experiment=s5_cot_len21",
+                "runtime=cpu",
+                "runtime.torchrun.nproc_per_node=2",
+                "runtime.torchrun.standalone=false",
+                "runtime.torchrun.master_addr=127.0.0.1",
+                "runtime.torchrun.master_port=29671",
+                "logging=disabled",
+                "model=tiny_debug",
+                "model.block_size=28",
+                "task.s5_m=2",
+                f"run.out_dir={out_dir}",
+                "optim.batch_size=1",
+                "optim.gradient_accumulation_steps=2",
+                "optim.learning_rate=0.001",
+                "optim.max_iters=1",
+                "optim.eval_interval=1",
+                "optim.eval_iters=1",
+                "optim.always_save_checkpoint=true",
+                "optim.final_eval_on_exit=true",
+                "optim.s5_eval_metrics=true",
+                "optim.s5_eval_n=2",
+                "optim.s5_eval_batch_size=2",
+            )
+
+            self.assertTrue((out_dir / "worker_config.json").exists())
+            self.assertTrue((out_dir / "launcher_command.txt").exists())
+            self.assertTrue((out_dir / "completed.txt").exists())
+            with open(out_dir / "worker_config.json", "r", encoding="utf-8") as f:
+                worker_cfg = json.load(f)
+            self.assertEqual(worker_cfg["backend"], "gloo")
+            self.assertEqual(worker_cfg["device"], "cpu")
 
 
 if __name__ == "__main__":

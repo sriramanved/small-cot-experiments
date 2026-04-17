@@ -21,7 +21,7 @@ HF_AVAILABLE = importlib.util.find_spec("transformers") is not None
 if HF_AVAILABLE:
     from data.s5_cot.opd_hf import cached_teacher_token_probs_hf, rollout_student_hf
     from hf_checkpoint import build_hf_model_from_nanogpt_args
-    from train_opd_hf import validate_args, validate_resume_metadata
+    from nanogpt.trainers.opd_hf import validate_args, validate_resume_metadata
 else:
     cached_teacher_token_probs_hf = None
     rollout_student_hf = None

@@ -46,6 +46,7 @@ class RuntimeConfig:
     device: str = "cuda"
     dtype: str = "float16"
     compile: bool = False
+    backend: str = "nccl"
     torchrun: TorchrunConfig = field(default_factory=TorchrunConfig)
 
 
@@ -182,7 +183,4 @@ def materialize_config(raw_cfg: DictConfig) -> AppConfig:
             raise ValueError(f"{cfg.pipeline.name} experiments require task.prompt_bank_dir")
         if cfg.task.subset_size <= 0:
             raise ValueError(f"{cfg.pipeline.name} experiments require task.subset_size > 0")
-    if cfg.pipeline.name != "pretrain":
-        if cfg.runtime.torchrun.nproc_per_node != 1 or cfg.runtime.torchrun.nnodes != 1:
-            raise ValueError("OPD pipelines are single-process only; leave runtime.torchrun at 1")
     return cfg

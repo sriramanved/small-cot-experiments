@@ -1,14 +1,24 @@
 from __future__ import annotations
 
+from __future__ import annotations
+
 from nanogpt.config_schema import AppConfig
-from nanogpt.pipelines import opd, opd_hf, pretrain
+from nanogpt.trainers import run_opd, run_opd_hf, run_pretrain
+from nanogpt.trainers.configs import (
+    project_opd_config,
+    project_opd_hf_config,
+    project_pretrain_config,
+)
 
 
-def build_command(cfg: AppConfig) -> list[str]:
+def run_pipeline(cfg: AppConfig, *, launcher_command: list[str]) -> None:
     if cfg.pipeline.name == "pretrain":
-        return pretrain.build_command(cfg)
+        run_pretrain(project_pretrain_config(cfg), launcher_command=launcher_command)
+        return
     if cfg.pipeline.name == "opd":
-        return opd.build_command(cfg)
+        run_opd(project_opd_config(cfg), launcher_command=launcher_command)
+        return
     if cfg.pipeline.name == "opd_hf":
-        return opd_hf.build_command(cfg)
+        run_opd_hf(project_opd_hf_config(cfg), launcher_command=launcher_command)
+        return
     raise ValueError(f"unsupported pipeline {cfg.pipeline.name!r}")

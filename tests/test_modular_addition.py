@@ -15,7 +15,7 @@ from data.modular_addition.task import (
     sample_cot_example_ids_from_rng,
 )
 from data.s5_cot.opd import compute_teacher_token_probs
-from train_opd import validate_resume_metadata
+from nanogpt.trainers.opd import validate_resume_metadata
 
 
 class ModularAdditionTests(unittest.TestCase):
