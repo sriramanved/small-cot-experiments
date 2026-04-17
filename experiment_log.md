@@ -490,7 +490,10 @@ Common run family:
   - `compile = False`
   - `eval_batch_size = 512`
 
-Final val metrics:
+<details>
+<summary>Final val metrics:</summary>
+
+
 
 - NAIL-OPD (full KL distributional info)
   - `eta = 0.05`
@@ -595,6 +598,8 @@ Final val metrics:
     - `val/cot_exact = 0.0`
     - `val/clean_full_exact = 0.0`
     - `val/clean_final_exact = 0.0032`
+
+</details>
 
 Main takeaways:
 
