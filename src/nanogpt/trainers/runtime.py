@@ -36,11 +36,39 @@ def build_grad_scaler(*, device: str, torch_dtype: torch.dtype):
     return torch.cuda.amp.GradScaler(enabled=enabled)
 
 
-def get_linear_warmup_lr(step: int, *, learning_rate: float, warmup_iters: int) -> float:
-    if warmup_iters <= 0 or step >= warmup_iters:
-        return learning_rate
+def get_nanogpt_lr(
+    step: int,
+    *,
+    learning_rate: float,
+    warmup_iters: int,
+    lr_decay_iters: int,
+    min_lr: float,
+) -> float:
     lr_start = 1e-6
-    return lr_start + (learning_rate - lr_start) * (step + 1) / (warmup_iters + 1)
+
+    if warmup_iters > 0 and step < warmup_iters:
+        return lr_start + (learning_rate - lr_start) * (step + 1) / (warmup_iters + 1)
+
+    if lr_decay_iters <= warmup_iters:
+        return learning_rate
+
+    if step > lr_decay_iters:
+        return min_lr
+
+    decay_ratio = (step - warmup_iters) / (lr_decay_iters - warmup_iters)
+    assert 0 <= decay_ratio <= 1
+    coeff = 0.5 * (1.0 + np.cos(np.pi * decay_ratio))
+    return min_lr + coeff * (learning_rate - min_lr)
+
+
+def get_linear_warmup_lr(step: int, *, learning_rate: float, warmup_iters: int) -> float:
+    return get_nanogpt_lr(
+        step,
+        learning_rate=learning_rate,
+        warmup_iters=warmup_iters,
+        lr_decay_iters=warmup_iters,
+        min_lr=learning_rate,
+    )
 
 
 def capture_rng_state(device: str) -> dict[str, object]:

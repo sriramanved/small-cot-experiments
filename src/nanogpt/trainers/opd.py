@@ -39,7 +39,7 @@ from nanogpt.trainers.runtime import (
     build_autocast_context,
     build_grad_scaler,
     capture_rng_state,
-    get_linear_warmup_lr,
+    get_nanogpt_lr,
     resolve_device,
     resolve_dtype,
     restore_rng_state,
@@ -507,7 +507,17 @@ def run_opd(cfg: OpdConfig, *, launcher_command: list[str]) -> None:
         if cfg.single_epoch and not prompt_cycle.has_remaining_in_epoch():
             break
 
-        lr = get_linear_warmup_lr(iter_num, learning_rate=cfg.learning_rate, warmup_iters=cfg.warmup_iters)
+        lr = (
+            get_nanogpt_lr(
+                iter_num,
+                learning_rate=cfg.learning_rate,
+                warmup_iters=cfg.warmup_iters,
+                lr_decay_iters=cfg.lr_decay_iters,
+                min_lr=cfg.min_lr,
+            )
+            if cfg.decay_lr
+            else cfg.learning_rate
+        )
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 

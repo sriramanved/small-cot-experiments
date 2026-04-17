@@ -95,7 +95,10 @@ class OpdConfig:
     batch_size: int
     max_iters: int
     learning_rate: float
+    decay_lr: bool
     warmup_iters: int
+    lr_decay_iters: int
+    min_lr: float
     weight_decay: float
     beta1: float
     beta2: float
@@ -277,7 +280,10 @@ def project_opd_config(cfg: AppConfig) -> OpdConfig:
         batch_size=cfg.optim.batch_size,
         max_iters=cfg.optim.max_iters,
         learning_rate=cfg.optim.learning_rate,
+        decay_lr=cfg.optim.decay_lr,
         warmup_iters=cfg.optim.warmup_iters,
+        lr_decay_iters=cfg.optim.lr_decay_iters,
+        min_lr=cfg.optim.min_lr,
         weight_decay=cfg.optim.weight_decay,
         beta1=cfg.optim.beta1,
         beta2=cfg.optim.beta2,
