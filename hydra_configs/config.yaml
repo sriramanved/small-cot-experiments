@@ -6,7 +6,7 @@ defaults:
 run:
   output_root: .
   name: default-run
-  out_dir: ${run.output_root}/${run.name}
+  out_dir: ${path_join:${run.output_root},${run.name}}
 
 hydra:
   job:

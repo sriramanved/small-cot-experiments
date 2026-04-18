@@ -1,0 +1,12 @@
+# @package _global_
+defaults:
+  - /pipeline: s5_prompt_bank
+  - /task: s5_prompt_bank
+  - /runtime: cpu
+  - /logging: disabled
+  - /cluster: local
+  - _self_
+
+run:
+  name: ${s5_prompt_bank_name:${task.s5_m},${task.n_train},${task.n_val},${task.bank_seed}}
+  out_dir: ${task.prompt_bank_dir}

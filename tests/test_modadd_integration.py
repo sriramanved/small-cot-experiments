@@ -212,7 +212,7 @@ def _run_train_py_offline_modadd(
     continue_from_subset_size: int = 0,
 ) -> subprocess.CompletedProcess[str]:
     overrides = [
-        "experiment=modadd_clean_offline_bc",
+        "experiment=modadd_noisy_bc",
         "runtime=cpu",
         "logging=disabled",
         "model=tiny_debug",
@@ -344,7 +344,7 @@ class ModularAdditionIntegrationTests(unittest.TestCase):
             shutil.rmtree(out_dir, ignore_errors=True)
 
     def test_train_py_offline_modadd_uses_dataset_meta_and_writes_eval_artifacts(self):
-        dataset_name = "modadd_clean_offline_p3_m4_datasetmeta_test"
+        dataset_name = "modadd_noisy_offline_greedy_then_corrupt_p3_m4_n4_eta_0p0_datasetmeta_test"
         dataset_dir = DATA_ROOT / dataset_name
         prompt_bank_dir = DATA_ROOT / "test_modadd_prompt_bank_for_train"
         out_dir = Path(tempfile.mkdtemp(prefix="modadd-train-out-"))
@@ -354,7 +354,7 @@ class ModularAdditionIntegrationTests(unittest.TestCase):
             _write_offline_dataset(dataset_dir, prompt_bank_dir=prompt_bank_dir, subset_size=4, eta=0.0)
 
             _run_hydra(
-                "experiment=modadd_clean_offline_bc",
+                "experiment=modadd_noisy_bc",
                 "runtime=cpu",
                 "logging=disabled",
                 "model=tiny_debug",

@@ -1,0 +1,4 @@
+# @package _global_
+pipeline:
+  name: modadd_prompt_bank
+  entrypoint: data/modular_addition/generate_clean_prompt_bank.py

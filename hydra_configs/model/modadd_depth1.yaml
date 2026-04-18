@@ -5,4 +5,4 @@ model:
   n_embd: 512
   dropout: 0.0
   bias: false
-  block_size: 42
+  block_size: ${modadd_block_size:${task.modadd_m},cot}

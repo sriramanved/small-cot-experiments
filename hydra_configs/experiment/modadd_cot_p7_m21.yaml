@@ -1,19 +1,8 @@
 # @package _global_
 defaults:
-  - /pipeline: pretrain
-  - /task: modadd_cot_p7_m21
-  - /model: modadd_p7_m21
-  - /optim: synthetic_expert
-  - /runtime: gpu_float16
-  - /logging: enabled
-  - /cluster: local
+  - modadd_cot
   - _self_
 
-run:
-  name: modadd-cot-p7-m21-depth1-seed${optim.seed}
-  out_dir: ${run.output_root}/out-modadd-cot-p7-m21-depth1-seed${optim.seed}
-
-optim:
-  max_iters: 200000
-  lr_decay_iters: ${optim.max_iters}
-  modadd_eval_metrics: true
+task:
+  modadd_p: 7
+  modadd_m: 21

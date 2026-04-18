@@ -1,0 +1,20 @@
+# @package _global_
+task:
+  data_root: data
+  teacher_output_root: ${modadd_teacher_root:${task.modadd_p},${task.modadd_m},${task.teacher_seed}}
+  bank_seed: 1337
+  teacher_seed: 1337
+  render_seed: 1337
+  teacher_depth: 1
+  modadd_p: 7
+  modadd_m: 31
+  n_train: 15000000
+  n_val: 5000
+  subset_size: ${task.n_train}
+  eta: 0.0
+  rollout_mode: greedy_then_corrupt
+  gen_batch_size: 1024
+  prompt_bank_dir: ${path_join:${task.data_root},${modadd_prompt_bank_name:${task.modadd_p},${task.modadd_m},${task.n_train},${task.n_val},${task.bank_seed}}}
+  teacher_checkpoint: ${path_join:${task.teacher_output_root},${out_name:${modadd_expert_run_name:${task.modadd_p},${task.modadd_m},${task.teacher_depth},${task.teacher_seed},cot}}}
+  dataset_prefix: ${modadd_noisy_dataset_prefix:${task.rollout_mode},${task.render_seed}}
+  dataset: ${modadd_noisy_dataset_name:${task.dataset_prefix},${task.modadd_p},${task.modadd_m},${task.subset_size},${task.eta}}

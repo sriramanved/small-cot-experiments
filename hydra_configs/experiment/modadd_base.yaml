@@ -9,10 +9,18 @@ defaults:
   - /cluster: local
   - _self_
 
+task:
+  dataset: modadd_base
+  modadd_p: 7
+  modadd_m: 30
+
 run:
   output_root: ${task.teacher_output_root}
-  name: ${modadd_expert_run_name:${task.modadd_p},${task.modadd_m},${model.n_layer},${optim.seed},cot}
+  name: ${modadd_expert_run_name:${task.modadd_p},${task.modadd_m},${model.n_layer},${optim.seed},base}
   out_dir: ${path_join:${run.output_root},${out_name:${run.name}}}
+
+model:
+  block_size: ${modadd_block_size:${task.modadd_m},base}
 
 optim:
   max_iters: 200000

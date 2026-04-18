@@ -8,7 +8,7 @@ task:
   teacher_depth: 1
   dataset_prefix: ${modadd_noisy_dataset_prefix:${task.rollout_mode},${task.render_seed}}
   modadd_p: 7
-  modadd_m: 21
+  modadd_m: 31
   subset_size: 1000000
   eta: 0.0
   dataset: ${modadd_noisy_dataset_name:${task.dataset_prefix},${task.modadd_p},${task.modadd_m},${task.subset_size},${task.eta}}

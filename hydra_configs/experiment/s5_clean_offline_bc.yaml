@@ -2,7 +2,7 @@
 defaults:
   - /pipeline: pretrain
   - /task: s5_clean_offline
-  - /model: s5_len21_cot
+  - /model: s5_depth1
   - /optim: synthetic_offline_bc
   - /runtime: gpu_float16
   - /logging: enabled
@@ -10,8 +10,9 @@ defaults:
   - _self_
 
 run:
-  name: s5-clean-offline-bc
-  out_dir: ${run.output_root}/out-s5-clean-offline-bc
+  output_root: ${path_join:${s5_suite_root:${task.s5_m},${task.teacher_seed},${task.render_seed},${optim.seed}},offline_bc}
+  name: ${s5_clean_offline_run_name:${task.s5_m},${optim.offline_train_subset_size},${optim.seed}}
+  out_dir: ${path_join:${run.output_root},${out_name:${run.name}}}
 
 optim:
   s5_eval_metrics: true

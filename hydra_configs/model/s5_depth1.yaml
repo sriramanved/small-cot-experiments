@@ -5,4 +5,4 @@ model:
   n_embd: 512
   dropout: 0.0
   bias: false
-  block_size: 31
+  block_size: ${s5_block_size:${task.s5_m},${task.s5_mode}}

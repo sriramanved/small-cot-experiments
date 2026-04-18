@@ -1,0 +1,9 @@
+# @package _global_
+task:
+  task: s5
+  data_root: data
+  s5_m: 21
+  n_train: 6000000
+  n_val: 5000
+  bank_seed: 1337
+  prompt_bank_dir: ${path_join:${task.data_root},${s5_prompt_bank_name:${task.s5_m},${task.n_train},${task.n_val},${task.bank_seed}}}

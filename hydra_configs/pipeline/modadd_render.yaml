@@ -1,0 +1,4 @@
+# @package _global_
+pipeline:
+  name: modadd_render
+  entrypoint: data/modular_addition/generate_noisy_rollouts.py

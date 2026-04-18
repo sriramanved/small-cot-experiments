@@ -1,10 +1,10 @@
 # @package _global_
+defaults:
+  - s5_render
+  - _self_
+
 task:
-  dataset_prefix: s5_noisy_offline_full_dist_sample_then_corrupt
   subset_size: 1000000
   eta: 0.1
-  dataset: ${task.dataset_prefix}_n${task.subset_size}_eta_${float_tag:${task.eta}}
-  s5_mode: cot
-  s5_m: 21
   rollout_mode: sample_then_corrupt
   target_mode: teacher_probs

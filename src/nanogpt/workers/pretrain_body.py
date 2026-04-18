@@ -987,3 +987,6 @@ while True:
 
 if ddp:
     destroy_process_group()
+
+if wandb is not None:
+    wandb.finish()

@@ -48,6 +48,7 @@ def collect_rows(root: Path) -> list[dict[str, object]]:
             "val_loss": eval_summary.get("val/loss"),
             "val_clean_full_exact": eval_summary.get("val/clean_full_exact"),
             "val_clean_final_exact": eval_summary.get("val/clean_final_exact"),
+            "rollout_mode": "",
         }
 
         run_meta_path = out_dir / "run_meta.json"
@@ -63,6 +64,7 @@ def collect_rows(root: Path) -> list[dict[str, object]]:
                     "eta": run_meta["eta"],
                     "objective": run_meta["objective"],
                     "teacher_law": run_meta["teacher_law"],
+                    "rollout_mode": "",
                 }
             )
             rows.append(row)
@@ -79,17 +81,18 @@ def collect_rows(root: Path) -> list[dict[str, object]]:
         if dataset_meta_path.exists():
             dataset_meta = load_json(dataset_meta_path)
 
-        is_clean = dataset.startswith("modadd_clean_offline")
+        rollout_mode = dataset_meta.get("train_decode_mode", "")
         row.update(
             {
-                "method": "offline_bc_clean" if is_clean else "offline_bc_noisy",
+                "method": "offline_bc",
                 "task": "modadd",
                 "p": config.get("modadd_p", dataset_meta.get("p")),
                 "m": config.get("modadd_m", dataset_meta.get("m")),
                 "subset_size": config.get("offline_train_subset_size", dataset_meta.get("subset_size")),
-                "eta": 0.0 if is_clean else dataset_meta.get("eta"),
+                "eta": dataset_meta.get("eta", 0.0 if dataset.startswith("modadd_clean_offline") else None),
                 "objective": "",
                 "teacher_law": "",
+                "rollout_mode": rollout_mode,
             }
         )
         rows.append(row)
@@ -106,6 +109,7 @@ def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
         "eta",
         "objective",
         "teacher_law",
+        "rollout_mode",
         "val_loss",
         "val_clean_full_exact",
         "val_clean_final_exact",
@@ -126,7 +130,8 @@ def write_markdown(path: Path, rows: list[dict[str, object]]) -> None:
         "m",
         "subset_size",
         "eta",
-        "objective",
+        "rollout_mode",
+        "teacher_law",
         "val_clean_full_exact",
         "val_clean_final_exact",
         "out_dir",

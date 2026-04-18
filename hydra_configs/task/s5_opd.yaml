@@ -1,12 +1,18 @@
 # @package _global_
 task:
   task: s5
+  data_root: data
+  teacher_output_root: ${s5_teacher_root:${task.s5_m},${task.teacher_seed}}
+  bank_seed: 1337
+  teacher_seed: 1337
+  render_seed: 1337
+  teacher_depth: 1
   s5_m: 21
   n_train: 6000000
   n_val: 5000
-  teacher_checkpoint: out-s5-cot-len21-depth1-400k
-  prompt_bank_dir: data/s5_clean_prompt_bank_m${task.s5_m}_n${task.n_train}_val${task.n_val}
-  subset_size: 8000000
+  teacher_checkpoint: ${path_join:${task.teacher_output_root},${out_name:${s5_expert_run_name:${task.s5_m},${task.teacher_depth},${task.teacher_seed},cot}}}
+  prompt_bank_dir: ${path_join:${task.data_root},${s5_prompt_bank_name:${task.s5_m},${task.n_train},${task.n_val},${task.bank_seed}}}
+  subset_size: 1000000
   eta: 0.05
   teacher_law: distributional_noise
   objective: reverse_kl_tm

@@ -4,7 +4,7 @@ optim:
   init_from_ckpt: ""
   continue_from_subset_size: 0
   batch_size: 64
-  max_iters: 125000
+  max_iters: ${epoch_steps:${task.subset_size},${optim.batch_size}}
   learning_rate: 0.00001
   decay_lr: true
   warmup_iters: 2000

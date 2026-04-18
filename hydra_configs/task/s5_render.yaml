@@ -1,0 +1,22 @@
+# @package _global_
+task:
+  task: s5
+  data_root: data
+  teacher_output_root: ${s5_teacher_root:${task.s5_m},${task.teacher_seed}}
+  bank_seed: 1337
+  teacher_seed: 1337
+  render_seed: 1337
+  teacher_depth: 1
+  s5_mode: cot
+  s5_m: 21
+  n_train: 6000000
+  n_val: 5000
+  subset_size: ${task.n_train}
+  eta: 0.0
+  rollout_mode: greedy_then_corrupt
+  target_mode: tokens
+  gen_batch_size: 1024
+  prompt_bank_dir: ${path_join:${task.data_root},${s5_prompt_bank_name:${task.s5_m},${task.n_train},${task.n_val},${task.bank_seed}}}
+  teacher_checkpoint: ${path_join:${task.teacher_output_root},${out_name:${s5_expert_run_name:${task.s5_m},${task.teacher_depth},${task.teacher_seed},cot}}}
+  dataset_prefix: ${s5_dataset_prefix:${task.rollout_mode},${task.target_mode},${task.render_seed}}
+  dataset: ${s5_dataset_name:${task.dataset_prefix},${task.s5_m},${task.subset_size},${task.eta}}

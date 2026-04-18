@@ -1,0 +1,9 @@
+# @package _global_
+task:
+  dataset: s5_cot
+  task: s5
+  s5_mode: cot
+  s5_m: 21
+  teacher_seed: 1337
+  teacher_depth: 1
+  teacher_output_root: ${s5_teacher_root:${task.s5_m},${task.teacher_seed}}

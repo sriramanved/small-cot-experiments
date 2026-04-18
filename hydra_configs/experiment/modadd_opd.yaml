@@ -10,5 +10,6 @@ defaults:
   - _self_
 
 run:
-  name: modadd-opd-${task.objective}-p${task.modadd_p}-m${task.modadd_m}-n${task.subset_size}-eta${float_tag:${task.eta}}-${task.teacher_law}-${temp_tag:${task.student_temperature}}-seed${optim.seed}
-  out_dir: ${run.output_root}/out-modadd-opd-${task.objective}-p${task.modadd_p}-m${task.modadd_m}-n${task.subset_size}-eta${float_tag:${task.eta}}-${task.teacher_law}-${temp_tag:${task.student_temperature}}-seed${optim.seed}
+  output_root: ${path_join:${modadd_suite_root:${task.modadd_p},${task.modadd_m},${task.teacher_seed},${task.render_seed},${optim.seed}},opd_${task.objective}}
+  name: ${modadd_opd_run_name:${task.objective},${task.modadd_p},${task.modadd_m},${task.subset_size},${task.eta},${task.teacher_law},${task.student_temperature},${optim.seed}}
+  out_dir: ${path_join:${run.output_root},${out_name:${run.name}}}

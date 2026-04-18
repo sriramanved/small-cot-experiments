@@ -1,0 +1,4 @@
+# @package _global_
+pipeline:
+  name: s5_render
+  entrypoint: data/s5_cot/generate_noisy_rollouts.py

@@ -173,14 +173,17 @@ class HydraConfigTests(unittest.TestCase):
             "eval_gpt2_medium",
             "eval_gpt2_large",
             "eval_gpt2_xl",
+            "s5_cot",
             "s5_cot_len21",
+            "s5_base",
             "s5_base_len21",
+            "s5_prompt_bank",
+            "s5_render",
             "s5_clean_offline_bc",
             "s5_noisy_bc",
             "s5_noisy_bc_full_dist",
             "modadd_cot_p7_m21",
             "modadd_base_p7_m30",
-            "modadd_clean_offline_bc",
             "modadd_noisy_bc",
             "s5_opd",
             "modadd_opd",
@@ -197,7 +200,6 @@ class HydraConfigTests(unittest.TestCase):
     def test_all_supported_sweeps_compose(self):
         sweep_matrix = {
             "s5_clean_offline_subset": "s5_clean_offline_bc",
-            "modadd_clean_offline_subset": "modadd_clean_offline_bc",
             "s5_noisy_bc_eta": "s5_noisy_bc",
             "s5_noisy_bc_eta_full_dist": "s5_noisy_bc_full_dist",
             "modadd_noisy_bc_eta": "modadd_noisy_bc",
@@ -246,6 +248,7 @@ class HydraConfigTests(unittest.TestCase):
                 "experiment=s5_opd",
                 "runtime=cpu",
                 "logging=disabled",
+                "task.s5_m=2",
                 f"task.teacher_checkpoint={teacher_dir}",
                 f"task.prompt_bank_dir={prompt_bank_dir}",
                 "task.subset_size=4",
@@ -261,8 +264,8 @@ class HydraConfigTests(unittest.TestCase):
                 f"run.output_root={output_root}",
             )
 
-            eta_a = output_root / "out-s5-opd-reverse_kl_tm-n4-eta0p1-distributional_noise-t1p0"
-            eta_b = output_root / "out-s5-opd-reverse_kl_tm-n4-eta0p2-distributional_noise-t1p0"
+            eta_a = output_root / "out-s5-opd-reverse_kl_tm-m2-n4-eta0p1-distributional_noise-t1p0-seed1337"
+            eta_b = output_root / "out-s5-opd-reverse_kl_tm-m2-n4-eta0p2-distributional_noise-t1p0-seed1337"
             self.assertTrue((eta_a / "completed.txt").exists())
             self.assertTrue((eta_b / "completed.txt").exists())
             self.assertTrue((eta_a / "launcher_config.json").exists())

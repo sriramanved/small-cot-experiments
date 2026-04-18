@@ -1,5 +1,7 @@
 # @package _global_
+defaults:
+  - s5_base
+  - _self_
+
 task:
-  dataset: s5_cot
-  s5_mode: base
   s5_m: 21

@@ -1,8 +1,8 @@
 # @package _global_
 defaults:
   - /pipeline: pretrain
-  - /task: modadd_cot
-  - /model: modadd_depth1
+  - /task: s5_cot
+  - /model: s5_depth1
   - /optim: synthetic_expert
   - /runtime: gpu_float16
   - /logging: enabled
@@ -11,10 +11,13 @@ defaults:
 
 run:
   output_root: ${task.teacher_output_root}
-  name: ${modadd_expert_run_name:${task.modadd_p},${task.modadd_m},${model.n_layer},${optim.seed},cot}
+  name: ${s5_expert_run_name:${task.s5_m},${model.n_layer},${optim.seed},cot}
   out_dir: ${path_join:${run.output_root},${out_name:${run.name}}}
+
+runtime:
+  compile: true
 
 optim:
   max_iters: 200000
   lr_decay_iters: ${optim.max_iters}
-  modadd_eval_metrics: true
+  s5_eval_metrics: true

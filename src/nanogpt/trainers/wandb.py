@@ -67,10 +67,35 @@ def maybe_init_wandb(
             settings=wandb.Settings(init_timeout=init_timeout),
         )
     except Exception as exc:
-        print(
-            f"warning: wandb.init failed ({exc}). Continuing with wandb logging disabled for this process."
+        deleted_run_id_error = "previously created and deleted" in str(exc)
+        can_retry_fresh = (
+            deleted_run_id_error
+            and init_from != "resume"
+            and not has_explicit_resume_id
         )
-        return None
+        if can_retry_fresh:
+            print(
+                "warning: deterministic fallback W&B run id refers to a deleted run; "
+                "retrying with a fresh anonymous run id."
+            )
+            try:
+                wandb.init(
+                    project=project,
+                    name=run_name,
+                    config=config,
+                    settings=wandb.Settings(init_timeout=init_timeout),
+                )
+            except Exception as retry_exc:
+                print(
+                    "warning: wandb.init retry failed "
+                    f"({retry_exc}). Continuing with wandb logging disabled for this process."
+                )
+                return None
+        else:
+            print(
+                f"warning: wandb.init failed ({exc}). Continuing with wandb logging disabled for this process."
+            )
+            return None
     with open(state_path, "w", encoding="utf-8") as f:
         json.dump(
             {

@@ -73,11 +73,18 @@ class TaskConfig:
     dataset_prefix: str = ""
     run_prefix: str = ""
     out_prefix: str = ""
+    data_root: str = "data"
+    teacher_output_root: str = "."
     task: str = "s5"
     s5_mode: str = "cot"
     s5_m: int = 21
     modadd_p: int = 7
     modadd_m: int = 21
+    bank_seed: int = 1337
+    teacher_seed: int = 1337
+    render_seed: int = 1337
+    teacher_depth: int = 1
+    gen_batch_size: int = 1024
     n_train: int = 0
     n_val: int = 0
     subset_size: int = 0
@@ -172,7 +179,15 @@ def materialize_config(raw_cfg: DictConfig) -> AppConfig:
     if not cfg.run.out_dir:
         cfg.run.out_dir = str(Path(cfg.run.output_root) / cfg.run.name)
 
-    if cfg.pipeline.name not in {"pretrain", "opd", "opd_hf"}:
+    if cfg.pipeline.name not in {
+        "pretrain",
+        "opd",
+        "opd_hf",
+        "modadd_prompt_bank",
+        "modadd_render",
+        "s5_prompt_bank",
+        "s5_render",
+    }:
         raise ValueError(f"unsupported pipeline {cfg.pipeline.name!r}")
     if cfg.pipeline.name == "pretrain" and not cfg.task.dataset:
         raise ValueError("pretrain experiments require task.dataset")
@@ -183,4 +198,32 @@ def materialize_config(raw_cfg: DictConfig) -> AppConfig:
             raise ValueError(f"{cfg.pipeline.name} experiments require task.prompt_bank_dir")
         if cfg.task.subset_size <= 0:
             raise ValueError(f"{cfg.pipeline.name} experiments require task.subset_size > 0")
+    if cfg.pipeline.name == "modadd_prompt_bank":
+        if not cfg.task.prompt_bank_dir:
+            raise ValueError("modadd_prompt_bank experiments require task.prompt_bank_dir")
+        if cfg.task.n_train <= 0 or cfg.task.n_val <= 0:
+            raise ValueError("modadd_prompt_bank experiments require task.n_train > 0 and task.n_val > 0")
+    if cfg.pipeline.name == "modadd_render":
+        if not cfg.task.teacher_checkpoint:
+            raise ValueError("modadd_render experiments require task.teacher_checkpoint")
+        if not cfg.task.prompt_bank_dir:
+            raise ValueError("modadd_render experiments require task.prompt_bank_dir")
+        if not cfg.task.dataset:
+            raise ValueError("modadd_render experiments require task.dataset")
+        if cfg.task.subset_size <= 0:
+            raise ValueError("modadd_render experiments require task.subset_size > 0")
+    if cfg.pipeline.name == "s5_prompt_bank":
+        if not cfg.task.prompt_bank_dir:
+            raise ValueError("s5_prompt_bank experiments require task.prompt_bank_dir")
+        if cfg.task.n_train <= 0 or cfg.task.n_val <= 0:
+            raise ValueError("s5_prompt_bank experiments require task.n_train > 0 and task.n_val > 0")
+    if cfg.pipeline.name == "s5_render":
+        if not cfg.task.teacher_checkpoint:
+            raise ValueError("s5_render experiments require task.teacher_checkpoint")
+        if not cfg.task.prompt_bank_dir:
+            raise ValueError("s5_render experiments require task.prompt_bank_dir")
+        if not cfg.task.dataset:
+            raise ValueError("s5_render experiments require task.dataset")
+        if cfg.task.subset_size <= 0:
+            raise ValueError("s5_render experiments require task.subset_size > 0")
     return cfg
