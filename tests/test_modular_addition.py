@@ -14,7 +14,7 @@ from data.modular_addition.task import (
     get_batch,
     sample_cot_example_ids_from_rng,
 )
-from data.s5_cot.opd import compute_teacher_token_probs
+from nanogpt.methods.student_prefix import compute_teacher_token_probs
 from nanogpt.trainers.opd import validate_resume_metadata
 
 
@@ -121,8 +121,9 @@ class ModularAdditionTests(unittest.TestCase):
                         "subset_size": 4,
                         "eta": 0.1,
                         "teacher_law": "distributional_noise",
-                        "objective": "forward_kl_full",
-                        "student_temperature": 1.0,
+                        "method_family": "nail",
+                        "teacher_signal": "full",
+                        "loss": "forward",
                         "shuffle_prompts": False,
                         "seed": 123,
                     },

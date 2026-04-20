@@ -16,6 +16,6 @@ task:
   eta: 0.05
   teacher_law: distributional_noise
   teacher_signal: mc
-  loss: reverse
+  loss: forward
   rollout_temperature_override: null
   loss_temperature_override: null

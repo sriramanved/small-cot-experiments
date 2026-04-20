@@ -9,16 +9,16 @@ This training script can also be run both on a single gpu in debug mode,
 and in a larger training run with distributed data parallel (ddp).
 
 To run on a single GPU, example:
-$ python train.py --batch_size=32 --compile=False
+$ python -m nanogpt.run experiment=shakespeare_char optim.batch_size=32 runtime.compile=false
 
 To run with DDP on 4 gpus on 1 node, example:
-$ torchrun --standalone --nproc_per_node=4 train.py
+$ torchrun --standalone --nproc_per_node=4 -m nanogpt.run experiment=gpt2
 
 To run with DDP on 4 gpus across 2 nodes, example:
 - Run on the first (master) node with example IP 123.456.123.456:
-$ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr=123.456.123.456 --master_port=1234 train.py
+$ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr=123.456.123.456 --master_port=1234 -m nanogpt.run experiment=gpt2
 - Run on the worker node:
-$ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123.456 --master_port=1234 train.py
+$ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123.456 --master_port=1234 -m nanogpt.run experiment=gpt2
 (If your cluster does not have Infiniband interconnect prepend NCCL_IB_DISABLE=1)
 """
 
@@ -221,7 +221,7 @@ if is_synthetic_offline_dataset(dataset):
     from data.synthetic.offline_losses import offline_teacher_prob_loss_from_logits
 if synthetic_task == 's5':
     from data.s5_cot.task import VOCAB_SIZE as s5_vocab_size
-    from data.s5_cot.opd import forward_kl_full_loss
+    from nanogpt.methods.student_prefix import forward_kl_full_loss
     from data.s5_cot.task import (
         estimate_saved_clean_train_loss as s5_estimate_saved_clean_train_loss,
         evaluate_saved_clean_s5_metrics,

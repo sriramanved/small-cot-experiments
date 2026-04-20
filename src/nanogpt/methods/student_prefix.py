@@ -1,12 +1,130 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import nullcontext
+from typing import Any
 
 import torch
 import torch.nn.functional as F
 
 from data.s5_cot.prompt_bank import PromptBank, build_xy_from_prompt_and_target
 from data.s5_cot.task import CORRUPTIBLE_IDS
+
+
+DEFAULT_ROLLOUT_TEMPERATURE = {
+    "opd": 1.0,
+    "nail": 0.0,
+}
+
+LEGACY_OBJECTIVE_MAP = {
+    "forward_kl_simple": ("mc", "forward"),
+    "forward_kl_full": ("full", "forward"),
+    "reverse_kl_simple": ("mc", "reverse"),
+    "reverse_kl_tm": ("mc", "reverse"),
+    "reverse_kl_full": ("full", "reverse"),
+}
+
+
+def _lookup(value: Mapping[str, Any] | object, key: str) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(key)
+    return getattr(value, key, None)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    return float(value)
+
+
+def default_rollout_temperature(method_family: str) -> float:
+    try:
+        return DEFAULT_ROLLOUT_TEMPERATURE[method_family]
+    except KeyError as exc:
+        raise ValueError(f"unknown method_family {method_family!r}") from exc
+
+
+def legacy_objective_to_teacher_signal_loss(objective: str) -> tuple[str, str]:
+    try:
+        return LEGACY_OBJECTIVE_MAP[objective]
+    except KeyError as exc:
+        raise ValueError(f"unknown legacy objective {objective!r}") from exc
+
+
+def resolve_method_family_for_reverse_loss(
+    *,
+    loss: str,
+    rollout_temperature: float | None,
+    default_method_family: str | None,
+) -> str:
+    if loss == "forward":
+        return "nail"
+    if default_method_family is not None:
+        return default_method_family
+    if rollout_temperature is not None and float(rollout_temperature) == 0.0:
+        return "nail"
+    return "opd"
+
+
+def normalize_student_prefix_method(
+    value: Mapping[str, Any] | object,
+    *,
+    default_method_family: str | None = None,
+) -> dict[str, Any]:
+    method_family = _lookup(value, "method_family") or default_method_family
+    teacher_signal = _lookup(value, "teacher_signal")
+    loss = _lookup(value, "loss")
+    rollout_override = _optional_float(_lookup(value, "rollout_temperature_override"))
+    loss_override = _optional_float(_lookup(value, "loss_temperature_override"))
+
+    objective = _lookup(value, "objective")
+    legacy_loss_temperature = _optional_float(_lookup(value, "student_temperature"))
+    legacy_rollout_temperature = _optional_float(_lookup(value, "student_rollout_temperature"))
+
+    if teacher_signal is None or loss is None:
+        if objective in (None, ""):
+            teacher_signal, loss = ("mc", "reverse")
+        else:
+            teacher_signal, loss = legacy_objective_to_teacher_signal_loss(str(objective))
+
+    resolved_rollout = rollout_override
+    if resolved_rollout is None:
+        if legacy_rollout_temperature is not None:
+            resolved_rollout = legacy_rollout_temperature
+        elif objective not in (None, "") and legacy_loss_temperature is not None:
+            # Older configs used one temperature knob for both rollout and loss.
+            resolved_rollout = legacy_loss_temperature
+
+    method_family = method_family or resolve_method_family_for_reverse_loss(
+        loss=str(loss),
+        rollout_temperature=resolved_rollout,
+        default_method_family=default_method_family,
+    )
+
+    if resolved_rollout is None:
+        resolved_rollout = default_rollout_temperature(str(method_family))
+
+    resolved_loss = loss_override
+    if resolved_loss is None and objective not in (None, "") and str(loss) == "forward":
+        resolved_loss = legacy_loss_temperature
+
+    return {
+        "method_family": str(method_family),
+        "teacher_signal": str(teacher_signal),
+        "loss": str(loss),
+        "rollout_temperature_override": rollout_override,
+        "loss_temperature_override": loss_override,
+        "resolved_rollout_temperature": float(resolved_rollout),
+        "resolved_loss_temperature": None if resolved_loss is None else float(resolved_loss),
+    }
+
+
+def format_temperature_tag(temperature: float | None) -> str:
+    if temperature is None:
+        return "default"
+    if float(temperature) == 0.0:
+        return "greedy"
+    return f"t{str(float(temperature)).replace('.', 'p')}"
 
 
 class FixedPromptCycle:

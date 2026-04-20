@@ -1,4 +1,3 @@
 # @package _global_
 pipeline:
   name: s5_prompt_bank
-  entrypoint: data/s5_cot/generate_clean_prompt_bank.py

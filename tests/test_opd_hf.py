@@ -9,7 +9,7 @@ from pathlib import Path
 
 import torch
 
-from data.s5_cot.opd import (
+from nanogpt.methods.student_prefix import (
     compute_teacher_token_probs,
     extract_answer_logits,
     gather_action_log_probs,

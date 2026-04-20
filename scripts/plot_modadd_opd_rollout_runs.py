@@ -10,27 +10,31 @@ import pandas as pd
 from matplotlib.ticker import MultipleLocator
 
 
-OPD_RE = re.compile(
+LEGACY_OPD_RE = re.compile(
     r"^out-modadd-opd-(?P<objective>.+?)-"
     r"p(?P<p>\d+)-m(?P<m>\d+)-n(?P<subset_size>\d+)-eta(?P<eta>[^-]+)-"
     r"(?P<teacher_law>[^-]+)-(?P<temp_tag>.+)-seed(?P<seed>\d+)$"
 )
 
-OBJECTIVE_TO_METHOD = {
-    "forward_kl_simple": "Forward KL Simple",
-    "reverse_kl_tm": "Reverse KL TM",
-}
+STUDENT_PREFIX_RE = re.compile(
+    r"^out-modadd-(?P<method_family>opd|nail)-(?P<loss>forward|reverse)-(?P<teacher_signal>mc|full)-"
+    r"p(?P<p>\d+)-m(?P<m>\d+)-n(?P<subset_size>\d+)-eta(?P<eta>[^-]+)-"
+    r"(?P<teacher_law>[^-]+)(?P<temp_suffix>(?:-.*)?)\-seed(?P<seed>\d+)$"
+)
 
-OBJECTIVE_ORDER = {
-    "forward_kl_simple": 0,
-    "reverse_kl_tm": 1,
+METHOD_ORDER = {
+    "NAIL-forward": 0,
+    "NAIL-reverse": 1,
+    "OPD": 2,
 }
 
 CURVE_COLORS = {
-    ("forward_kl_simple", "greedy"): "#D1495B",
-    ("forward_kl_simple", "sampled"): "#EDA43B",
-    ("reverse_kl_tm", "greedy"): "#00798C",
-    ("reverse_kl_tm", "sampled"): "#5B8E7D",
+    ("NAIL-forward", "greedy"): "#D1495B",
+    ("NAIL-forward", "sampled"): "#EDA43B",
+    ("NAIL-reverse", "greedy"): "#F4A261",
+    ("NAIL-reverse", "sampled"): "#E9C46A",
+    ("OPD", "greedy"): "#00798C",
+    ("OPD", "sampled"): "#5B8E7D",
 }
 
 ROLLOUT_LINESTYLES = {
@@ -79,6 +83,40 @@ def eta_tag(eta: float) -> str:
 def load_json(path: Path) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def method_label(method_family: str, loss: str) -> str:
+    if method_family == "opd":
+        return "OPD"
+    if loss == "forward":
+        return "NAIL-forward"
+    return "NAIL-reverse"
+
+
+def legacy_method_label(
+    *,
+    objective: str,
+    temp_tag: str,
+    run_meta: dict[str, object] | None,
+) -> str | None:
+    if run_meta is not None and "method_family" in run_meta and "loss" in run_meta:
+        return method_label(str(run_meta["method_family"]), str(run_meta["loss"]))
+    if objective.startswith("forward_kl_"):
+        return "NAIL-forward"
+    if objective == "reverse_kl_tm":
+        return "OPD"
+    rollout_temp = None
+    if run_meta is not None:
+        rollout_temp = run_meta.get("resolved_rollout_temperature")
+        if rollout_temp is None:
+            rollout_temp = run_meta.get("student_rollout_temperature", run_meta.get("student_temperature"))
+    if rollout_temp is None and temp_tag == "greedy":
+        rollout_temp = 0.0
+    if rollout_temp is not None and float(rollout_temp) == 0.0:
+        return "NAIL-reverse"
+    if objective.startswith("reverse_kl_"):
+        return "OPD"
+    return None
 
 
 def coalesce_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -136,8 +174,8 @@ def parse_rollout_student_temps(
     student_temp = None
 
     if run_meta is not None:
-        raw_rollout = run_meta.get("student_rollout_temperature")
-        raw_student = run_meta.get("student_temperature")
+        raw_rollout = run_meta.get("resolved_rollout_temperature", run_meta.get("student_rollout_temperature"))
+        raw_student = run_meta.get("resolved_loss_temperature", run_meta.get("student_temperature"))
         if raw_rollout is not None:
             rollout_temp = float(raw_rollout)
         if raw_student is not None:
@@ -176,7 +214,7 @@ def discover_modadd_opd_runs(
     objective_set = None if objectives is None else set(objectives)
     records: list[RunRecord] = []
 
-    for out_dir in sorted(root.rglob("out-modadd-opd-*")):
+    for out_dir in sorted(root.rglob("out-modadd-*")):
         if not out_dir.is_dir():
             continue
 
@@ -184,31 +222,50 @@ def discover_modadd_opd_runs(
         if not eval_history_path.exists():
             continue
 
-        match = OPD_RE.match(out_dir.name)
-        if not match:
-            continue
+        student_prefix_match = STUDENT_PREFIX_RE.match(out_dir.name)
+        run_meta_path = out_dir / "run_meta.json"
+        run_meta = load_json(run_meta_path) if run_meta_path.exists() else None
+        if student_prefix_match:
+            run_p = int(student_prefix_match.group("p"))
+            run_m = int(student_prefix_match.group("m"))
+            run_n = int(student_prefix_match.group("subset_size"))
+            run_seed = int(student_prefix_match.group("seed"))
+            run_eta = parse_eta_tag(student_prefix_match.group("eta"))
+            method = method_label(
+                student_prefix_match.group("method_family"),
+                student_prefix_match.group("loss"),
+            )
+            objective = method
+            teacher_law = student_prefix_match.group("teacher_law")
+            temp_tag = student_prefix_match.group("temp_suffix").lstrip("-")
+        else:
+            match = LEGACY_OPD_RE.match(out_dir.name)
+            if not match:
+                continue
+            objective = match.group("objective")
+            method = legacy_method_label(
+                objective=objective,
+                temp_tag=match.group("temp_tag"),
+                run_meta=run_meta,
+            )
+            if method is None:
+                continue
+            run_p = int(match.group("p"))
+            run_m = int(match.group("m"))
+            run_n = int(match.group("subset_size"))
+            run_seed = int(match.group("seed"))
+            run_eta = parse_eta_tag(match.group("eta"))
+            teacher_law = match.group("teacher_law")
+            temp_tag = match.group("temp_tag")
 
-        objective = match.group("objective")
-        method = OBJECTIVE_TO_METHOD.get(objective)
-        if method is None:
-            continue
-        if objective_set is not None and objective not in objective_set:
-            continue
-
-        run_p = int(match.group("p"))
-        run_m = int(match.group("m"))
-        run_n = int(match.group("subset_size"))
-        run_seed = int(match.group("seed"))
-        run_eta = parse_eta_tag(match.group("eta"))
         if (run_p, run_m, run_n, run_seed) != (p, m, subset_size, seed):
             continue
         if eta_set is not None and run_eta not in eta_set:
             continue
-
-        run_meta_path = out_dir / "run_meta.json"
-        run_meta = load_json(run_meta_path) if run_meta_path.exists() else None
+        if objective_set is not None and objective not in objective_set:
+            continue
         rollout_temp, student_temp = parse_rollout_student_temps(
-            match.group("temp_tag"),
+            temp_tag,
             run_meta=run_meta,
         )
         rollout_variant, rollout_label = rollout_variant_label(rollout_temp)
@@ -218,13 +275,13 @@ def discover_modadd_opd_runs(
                 run_id=out_dir.name,
                 objective=objective,
                 method=method,
-                teacher_law=match.group("teacher_law"),
+                teacher_law=teacher_law,
                 p=run_p,
                 m=run_m,
                 subset_size=run_n,
                 eta=run_eta,
                 seed=run_seed,
-                temp_tag=match.group("temp_tag"),
+                temp_tag=temp_tag,
                 student_rollout_temperature=rollout_temp,
                 student_temperature=student_temp,
                 rollout_variant=rollout_variant,
@@ -295,7 +352,7 @@ def build_runs_df(records: list[RunRecord]) -> tuple[pd.DataFrame, dict[str, pd.
     if runs_df.empty:
         return runs_df, run_data
     runs_df = runs_df.sort_values(
-        ["eta", "objective", "student_rollout_temperature", "display_label"]
+        ["eta", "method", "student_rollout_temperature", "display_label"]
     ).reset_index(drop=True)
     return runs_df, run_data
 
@@ -316,10 +373,12 @@ def plot_per_eta(
     metric_name = metric.split("/")[-1]
 
     expected_combos = [
-        ("forward_kl_simple", "greedy"),
-        ("forward_kl_simple", "sampled"),
-        ("reverse_kl_tm", "greedy"),
-        ("reverse_kl_tm", "sampled"),
+        ("NAIL-forward", "greedy"),
+        ("NAIL-forward", "sampled"),
+        ("NAIL-reverse", "greedy"),
+        ("NAIL-reverse", "sampled"),
+        ("OPD", "greedy"),
+        ("OPD", "sampled"),
     ]
 
     for eta in etas:
@@ -329,13 +388,11 @@ def plot_per_eta(
 
         for objective, rollout_variant in expected_combos:
             row_df = eta_rows[
-                (eta_rows["objective"] == objective)
+                (eta_rows["method"] == objective)
                 & (eta_rows["rollout_variant"] == rollout_variant)
             ]
             if row_df.empty:
-                missing_labels.append(
-                    f"{OBJECTIVE_TO_METHOD[objective]}, {rollout_variant} rollout"
-                )
+                missing_labels.append(f"{objective}, {rollout_variant} rollout")
                 continue
 
             row = row_df.iloc[0]
@@ -353,7 +410,7 @@ def plot_per_eta(
 
         ax.set_title(
             f"ModAdd p={int(runs_df['p'].iloc[0])}, m={int(runs_df['m'].iloc[0])}, eta={eta:.2f}: "
-            f"Forward KL Simple vs Reverse KL TM ({metric_name})"
+            f"NAIL-forward vs NAIL-reverse vs OPD rollouts ({metric_name})"
         )
         ax.set_xlabel("iter")
         ax.set_ylabel(metric)

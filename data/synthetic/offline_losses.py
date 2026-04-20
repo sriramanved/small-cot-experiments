@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from data.s5_cot.opd import forward_kl_full_loss
+from nanogpt.methods.student_prefix import forward_kl_full_loss
 
 
 def extract_teacher_prob_student_logits(

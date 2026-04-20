@@ -16,34 +16,37 @@ NOISY_BC_RE = re.compile(
     r"(?:-(?P<rollout_mode>[^-]+))?-seed(?P<seed>\d+)$"
 )
 
-OPD_RE = re.compile(
+LEGACY_OPD_RE = re.compile(
     r"^out-modadd-opd-(?P<objective>.+?)-"
     r"p(?P<p>\d+)-m(?P<m>\d+)-n(?P<subset_size>\d+)-eta(?P<eta>[^-]+)-"
     r"(?P<teacher_law>[^-]+)-(?P<temp_tag>[^-]+)-seed(?P<seed>\d+)$"
 )
 
-OBJECTIVE_TO_METHOD = {
-    "forward_kl_simple": "NAIL-OPD MC",
-    "reverse_kl_simple": "OPD MC",
-    "reverse_kl_tm": "OPD MC",
-}
+STUDENT_PREFIX_RE = re.compile(
+    r"^out-modadd-(?P<method_family>opd|nail)-(?P<loss>forward|reverse)-(?P<teacher_signal>mc|full)-"
+    r"p(?P<p>\d+)-m(?P<m>\d+)-n(?P<subset_size>\d+)-eta(?P<eta>[^-]+)-"
+    r"(?P<teacher_law>[^-]+)(?P<temp_suffix>(?:-.*)?)\-seed(?P<seed>\d+)$"
+)
 
 METHOD_COLORS = {
-    "Offline BC MC": "#355070",
-    "NAIL-OPD MC": "#E76F51",
-    "OPD MC": "#2A9D8F",
+    "LogLossBC": "#355070",
+    "NAIL-forward": "#E76F51",
+    "NAIL-reverse": "#F4A261",
+    "OPD": "#2A9D8F",
 }
 
 METHOD_LINESTYLES = {
-    "Offline BC MC": "--",
-    "NAIL-OPD MC": "-",
-    "OPD MC": ":",
+    "LogLossBC": "--",
+    "NAIL-forward": "-",
+    "NAIL-reverse": "-.",
+    "OPD": ":",
 }
 
 METHOD_MARKERS = {
-    "Offline BC MC": "o",
-    "NAIL-OPD MC": "s",
-    "OPD MC": "^",
+    "LogLossBC": "o",
+    "NAIL-forward": "s",
+    "NAIL-reverse": "D",
+    "OPD": "^",
 }
 
 
@@ -117,6 +120,40 @@ def load_json(path: Path) -> dict:
         return json.load(f)
 
 
+def method_label(method_family: str, loss: str) -> str:
+    if method_family == "opd":
+        return "OPD"
+    if loss == "forward":
+        return "NAIL-forward"
+    return "NAIL-reverse"
+
+
+def legacy_method_label(
+    *,
+    objective: str,
+    temp_tag: str,
+    run_meta: dict[str, object] | None,
+) -> str | None:
+    if run_meta is not None and "method_family" in run_meta and "loss" in run_meta:
+        return method_label(str(run_meta["method_family"]), str(run_meta["loss"]))
+    if objective.startswith("forward_kl_"):
+        return "NAIL-forward"
+    if objective == "reverse_kl_tm":
+        return "OPD"
+    rollout_temp = None
+    if run_meta is not None:
+        rollout_temp = run_meta.get("resolved_rollout_temperature")
+        if rollout_temp is None:
+            rollout_temp = run_meta.get("student_rollout_temperature", run_meta.get("student_temperature"))
+    if rollout_temp is None and temp_tag == "greedy":
+        rollout_temp = 0.0
+    if rollout_temp is not None and float(rollout_temp) == 0.0:
+        return "NAIL-reverse"
+    if objective.startswith("reverse_kl_"):
+        return "OPD"
+    return None
+
+
 def discover_modadd_runs(
     root: Path,
     *,
@@ -152,7 +189,7 @@ def discover_modadd_runs(
             records.append(
                 RunRecord(
                     run_id=name,
-                    method="Offline BC MC",
+                    method="LogLossBC",
                     objective="sample_then_corrupt",
                     teacher_law="distributional_noise",
                     rollout_mode=offline_match.group("rollout_mode") or "greedy_then_corrupt",
@@ -169,20 +206,47 @@ def discover_modadd_runs(
             )
             continue
 
-        opd_match = OPD_RE.match(name)
-        if not opd_match:
-            continue
+        run_meta_path = out_dir / "run_meta.json"
+        run_meta = load_json(run_meta_path) if run_meta_path.exists() else None
 
-        objective = opd_match.group("objective")
-        method = OBJECTIVE_TO_METHOD.get(objective)
-        if method is None:
-            continue
+        student_prefix_match = STUDENT_PREFIX_RE.match(name)
+        if student_prefix_match:
+            run_p = int(student_prefix_match.group("p"))
+            run_m = int(student_prefix_match.group("m"))
+            run_n = int(student_prefix_match.group("subset_size"))
+            run_seed = int(student_prefix_match.group("seed"))
+            run_eta = parse_eta_tag(student_prefix_match.group("eta"))
+            objective = (
+                f"{student_prefix_match.group('method_family')}:"
+                f"{student_prefix_match.group('loss')}:"
+                f"{student_prefix_match.group('teacher_signal')}"
+            )
+            method = method_label(
+                student_prefix_match.group("method_family"),
+                student_prefix_match.group("loss"),
+            )
+            teacher_law = student_prefix_match.group("teacher_law")
+            temp_tag = student_prefix_match.group("temp_suffix").lstrip("-")
+        else:
+            opd_match = LEGACY_OPD_RE.match(name)
+            if not opd_match:
+                continue
+            objective = opd_match.group("objective")
+            method = legacy_method_label(
+                objective=objective,
+                temp_tag=opd_match.group("temp_tag"),
+                run_meta=run_meta,
+            )
+            if method is None:
+                continue
+            run_p = int(opd_match.group("p"))
+            run_m = int(opd_match.group("m"))
+            run_n = int(opd_match.group("subset_size"))
+            run_seed = int(opd_match.group("seed"))
+            run_eta = parse_eta_tag(opd_match.group("eta"))
+            teacher_law = opd_match.group("teacher_law")
+            temp_tag = opd_match.group("temp_tag")
 
-        run_p = int(opd_match.group("p"))
-        run_m = int(opd_match.group("m"))
-        run_n = int(opd_match.group("subset_size"))
-        run_seed = int(opd_match.group("seed"))
-        run_eta = parse_eta_tag(opd_match.group("eta"))
         if (run_p, run_m, run_n, run_seed) != (p, m, subset_size, seed):
             continue
         if eta_set is not None and run_eta not in eta_set:
@@ -193,14 +257,14 @@ def discover_modadd_runs(
                 run_id=name,
                 method=method,
                 objective=objective,
-                teacher_law=opd_match.group("teacher_law"),
+                teacher_law=teacher_law,
                 rollout_mode="",
                 p=run_p,
                 m=run_m,
                 subset_size=run_n,
                 eta=run_eta,
                 seed=run_seed,
-                temp_tag=opd_match.group("temp_tag"),
+                temp_tag=temp_tag,
                 out_dir=out_dir,
                 eval_history_path=eval_history_path,
                 last_eval_path=(out_dir / "last_eval.json") if (out_dir / "last_eval.json").exists() else None,
@@ -277,7 +341,7 @@ def plot_per_eta(
         method_rows = runs_df[runs_df["eta"] == eta].sort_values("method")
         missing_methods: list[str] = []
 
-        for method in ("Offline BC MC", "NAIL-OPD MC", "OPD MC"):
+        for method in ("LogLossBC", "NAIL-forward", "NAIL-reverse", "OPD"):
             row_df = method_rows[method_rows["method"] == method]
             if row_df.empty:
                 missing_methods.append(method)
@@ -297,7 +361,7 @@ def plot_per_eta(
 
         ax.set_title(
             f"ModAdd p={int(runs_df['p'].iloc[0])}, m={int(runs_df['m'].iloc[0])}, eta={eta:.2f}: "
-            f"Offline BC MC vs NAIL-OPD MC vs OPD MC ({metric_name})"
+            f"LogLossBC vs NAIL-forward vs NAIL-reverse vs OPD ({metric_name})"
         )
         ax.set_xlabel("iter")
         ax.set_ylabel(metric)
@@ -320,4 +384,3 @@ def plot_per_eta(
         if show:
             plt.show()
         plt.close(fig)
-

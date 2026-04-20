@@ -4,7 +4,6 @@ from pathlib import Path
 
 import torch
 
-from data.s5_cot.opd import compute_teacher_token_probs
 from data.s5_cot.prompt_bank import PromptBank, load_prompt_bank, select_train_subset
 from data.s5_cot.task import VOCAB_SIZE, CORRUPTIBLE_IDS
 from data.s5_cot.task import corrupt_ids
@@ -21,6 +20,7 @@ from data.synthetic.offline_render import (
     resolve_torch_dtype,
     save_rendered_dataset,
 )
+from nanogpt.methods.student_prefix import compute_teacher_token_probs
 
 
 def generate_teacher_targets(

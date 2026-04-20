@@ -5,8 +5,8 @@ from contextlib import nullcontext
 import torch
 import torch.nn.functional as F
 
-from data.s5_cot.opd import compute_teacher_token_probs, gather_action_log_probs
 from data.s5_cot.prompt_bank import PromptBank, build_xy_from_prompt_and_target
+from nanogpt.methods.student_prefix import compute_teacher_token_probs, gather_action_log_probs
 
 try:
     from transformers import StaticCache

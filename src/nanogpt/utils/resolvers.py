@@ -27,6 +27,24 @@ def _opd_student_tag(
     return f"roll{rollout_tag}-stud{student_tag}"
 
 
+def _student_prefix_temp_suffix(
+    method_family: object,
+    rollout_temperature_override: object,
+    loss_temperature_override: object,
+) -> str:
+    tags: list[str] = []
+    rollout_text = "" if rollout_temperature_override is None else str(rollout_temperature_override)
+    loss_text = "" if loss_temperature_override is None else str(loss_temperature_override)
+    default_rollout = 1.0 if str(method_family) == "opd" else 0.0
+    if rollout_text != "" and float(rollout_temperature_override) != default_rollout:
+        tags.append(f"roll{_temp_tag(rollout_temperature_override)}")
+    if loss_text != "":
+        tags.append(f"loss{_temp_tag(loss_temperature_override)}")
+    if not tags:
+        return ""
+    return "-" + "-".join(tags)
+
+
 def _rollout_tag(value: object) -> str:
     text = str(value)
     if text == "greedy_then_corrupt":
@@ -259,6 +277,26 @@ def _s5_opd_run_name(
     )
 
 
+def _s5_student_prefix_run_name(
+    method_family: object,
+    loss: object,
+    teacher_signal: object,
+    m: object,
+    subset_size: object,
+    eta: object,
+    teacher_law: object,
+    rollout_temperature_override: object,
+    loss_temperature_override: object,
+    seed: object,
+) -> str:
+    return (
+        f"s5-{method_family}-{loss}-{teacher_signal}-m{int(m)}-n{int(subset_size)}-"
+        f"eta{_float_tag(eta)}-{teacher_law}"
+        f"{_student_prefix_temp_suffix(method_family, rollout_temperature_override, loss_temperature_override)}-"
+        f"seed{int(seed)}"
+    )
+
+
 def _modadd_noisy_dataset_prefix(
     rollout_mode: object,
     render_seed: object = 1337,
@@ -325,6 +363,27 @@ def _modadd_opd_run_name(
     )
 
 
+def _modadd_student_prefix_run_name(
+    method_family: object,
+    loss: object,
+    teacher_signal: object,
+    p: object,
+    m: object,
+    subset_size: object,
+    eta: object,
+    teacher_law: object,
+    rollout_temperature_override: object,
+    loss_temperature_override: object,
+    seed: object,
+) -> str:
+    return (
+        f"modadd-{method_family}-{loss}-{teacher_signal}-p{int(p)}-m{int(m)}-n{int(subset_size)}-"
+        f"eta{_float_tag(eta)}-{teacher_law}"
+        f"{_student_prefix_temp_suffix(method_family, rollout_temperature_override, loss_temperature_override)}-"
+        f"seed{int(seed)}"
+    )
+
+
 def register_resolvers() -> None:
     OmegaConf.register_new_resolver("float_tag", _float_tag, replace=True)
     OmegaConf.register_new_resolver("temp_tag", _temp_tag, replace=True)
@@ -347,6 +406,7 @@ def register_resolvers() -> None:
     OmegaConf.register_new_resolver("s5_clean_offline_run_name", _s5_clean_offline_run_name, replace=True)
     OmegaConf.register_new_resolver("s5_noisy_bc_run_name", _s5_noisy_bc_run_name, replace=True)
     OmegaConf.register_new_resolver("s5_opd_run_name", _s5_opd_run_name, replace=True)
+    OmegaConf.register_new_resolver("s5_student_prefix_run_name", _s5_student_prefix_run_name, replace=True)
     OmegaConf.register_new_resolver("modadd_teacher_root", _modadd_teacher_root, replace=True)
     OmegaConf.register_new_resolver("modadd_suite_root", _modadd_suite_root, replace=True)
     OmegaConf.register_new_resolver("modadd_block_size", _modadd_block_size, replace=True)
@@ -356,3 +416,4 @@ def register_resolvers() -> None:
     OmegaConf.register_new_resolver("modadd_expert_run_name", _modadd_expert_run_name, replace=True)
     OmegaConf.register_new_resolver("modadd_noisy_bc_run_name", _modadd_noisy_bc_run_name, replace=True)
     OmegaConf.register_new_resolver("modadd_opd_run_name", _modadd_opd_run_name, replace=True)
+    OmegaConf.register_new_resolver("modadd_student_prefix_run_name", _modadd_student_prefix_run_name, replace=True)

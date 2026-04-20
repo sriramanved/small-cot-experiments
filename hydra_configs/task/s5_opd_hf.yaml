@@ -15,7 +15,6 @@ task:
   subset_size: 1000000
   eta: 0.05
   teacher_law: distributional_noise
-  teacher_signal: mc
-  loss: reverse
-  rollout_temperature_override: null
-  loss_temperature_override: null
+  objective: reverse_kl_tm
+  student_temperature: 1.0
+  student_rollout_temperature: 1.0

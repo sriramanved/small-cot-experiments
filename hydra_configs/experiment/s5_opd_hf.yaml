@@ -1,7 +1,7 @@
 # @package _global_
 defaults:
   - /pipeline: opd_hf
-  - /task: s5_opd
+  - /task: s5_opd_hf
   - /model: teacher_inferred
   - /optim: opd
   - /runtime: gpu_float16

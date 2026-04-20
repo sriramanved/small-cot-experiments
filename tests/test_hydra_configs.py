@@ -18,6 +18,7 @@ from data.s5_cot.task import VOCAB_SIZE, sample_cot_example_ids_from_rng
 from model import GPT, GPTConfig
 from nanogpt.config_schema import materialize_config
 from nanogpt.trainers.configs import (
+    project_nail_config,
     project_opd_config,
     project_opd_hf_config,
     project_pretrain_config,
@@ -156,6 +157,14 @@ class HydraConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "single-process only"):
             project_opd_config(cfg)
 
+    def test_nail_projection_rejects_parallel_torchrun(self):
+        cfg = _compose_app(
+            "experiment=s5_nail",
+            "runtime.torchrun.nproc_per_node=2",
+        )
+        with self.assertRaisesRegex(ValueError, "single-process only"):
+            project_nail_config(cfg)
+
     def test_opd_hf_projection_rejects_parallel_torchrun(self):
         cfg = _compose_app(
             "experiment=s5_opd_hf",
@@ -186,7 +195,9 @@ class HydraConfigTests(unittest.TestCase):
             "modadd_base_p7_m30",
             "modadd_noisy_bc",
             "s5_opd",
+            "s5_nail",
             "modadd_opd",
+            "modadd_nail",
             "s5_opd_hf",
         ]
 
@@ -204,7 +215,9 @@ class HydraConfigTests(unittest.TestCase):
             "s5_noisy_bc_eta_full_dist": "s5_noisy_bc_full_dist",
             "modadd_noisy_bc_eta": "modadd_noisy_bc",
             "s5_opd_eta": "s5_opd",
+            "s5_nail_eta": "s5_nail",
             "modadd_opd_eta": "modadd_opd",
+            "modadd_nail_eta": "modadd_nail",
             "s5_opd_hf_eta": "s5_opd_hf",
         }
 
@@ -264,8 +277,8 @@ class HydraConfigTests(unittest.TestCase):
                 f"run.output_root={output_root}",
             )
 
-            eta_a = output_root / "out-s5-opd-reverse_kl_tm-m2-n4-eta0p1-distributional_noise-rollgreedy-studt1p0-seed1337"
-            eta_b = output_root / "out-s5-opd-reverse_kl_tm-m2-n4-eta0p2-distributional_noise-rollgreedy-studt1p0-seed1337"
+            eta_a = output_root / "out-s5-opd-reverse-mc-m2-n4-eta0p1-distributional_noise-seed1337"
+            eta_b = output_root / "out-s5-opd-reverse-mc-m2-n4-eta0p2-distributional_noise-seed1337"
             self.assertTrue((eta_a / "completed.txt").exists())
             self.assertTrue((eta_b / "completed.txt").exists())
             self.assertTrue((eta_a / "launcher_config.json").exists())

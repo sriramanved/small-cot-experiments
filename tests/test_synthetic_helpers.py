@@ -8,7 +8,7 @@ from pathlib import Path
 
 import torch
 
-from data.s5_cot.opd import compute_teacher_token_probs
+from nanogpt.methods.student_prefix import compute_teacher_token_probs
 from data.synthetic.offline_render import build_dataset_meta, generate_teacher_targets
 from data.synthetic.prompt_bank import (
     PromptBank,

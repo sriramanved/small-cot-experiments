@@ -170,8 +170,22 @@ def _run_train_opd(
     seed: int = 7,
     single_epoch: bool = False,
 ) -> subprocess.CompletedProcess[str]:
+    if objective == "forward_kl_simple":
+        experiment = "modadd_nail"
+        extra = ["task.teacher_signal=mc", "task.loss=forward"]
+    elif objective == "forward_kl_full":
+        experiment = "modadd_nail"
+        extra = ["task.teacher_signal=full", "task.loss=forward"]
+    elif objective == "reverse_kl_full":
+        experiment = "modadd_opd"
+        extra = ["task.teacher_signal=full", "task.loss=reverse"]
+    elif objective == "reverse_kl_tm":
+        experiment = "modadd_opd"
+        extra = ["task.teacher_signal=mc", "task.loss=reverse"]
+    else:
+        raise ValueError(f"unsupported test objective {objective!r}")
     overrides = [
-        "experiment=modadd_opd",
+        f"experiment={experiment}",
         "runtime=cpu",
         "logging=disabled",
         f"task.teacher_checkpoint={teacher_dir}",
@@ -179,7 +193,6 @@ def _run_train_opd(
         f"task.subset_size={subset_size}",
         "task.eta=0.1",
         "task.teacher_law=distributional_noise",
-        f"task.objective={objective}",
         f"run.out_dir={out_dir}",
         f"optim.init_from={init_from}",
         "optim.batch_size=2",
@@ -192,6 +205,7 @@ def _run_train_opd(
         "optim.log_interval=1",
         "optim.save_interval=2",
         f"optim.seed={seed}",
+        *extra,
     ]
     if init_from_ckpt is not None:
         overrides.append(f"optim.init_from_ckpt={init_from_ckpt}")
@@ -464,7 +478,7 @@ class ModularAdditionIntegrationTests(unittest.TestCase):
             _write_teacher_checkpoint(teacher_dir, vocab_size=4, block_size=8)
 
             _run_hydra(
-                "experiment=modadd_opd",
+                "experiment=modadd_nail",
                 "runtime=cpu",
                 "logging=disabled",
                 f"task.teacher_checkpoint={teacher_dir}",
@@ -474,7 +488,8 @@ class ModularAdditionIntegrationTests(unittest.TestCase):
                 "task.subset_size=4",
                 "task.eta=0.1",
                 "task.teacher_law=distributional_noise",
-                "task.objective=forward_kl_full",
+                "task.teacher_signal=full",
+                "task.loss=forward",
                 f"run.out_dir={out_dir}",
                 "optim.batch_size=2",
                 "optim.max_iters=1",
@@ -494,6 +509,9 @@ class ModularAdditionIntegrationTests(unittest.TestCase):
             self.assertEqual(run_meta["prompt_len"], 5)
             self.assertEqual(run_meta["cot_len"], 4)
             self.assertEqual(run_meta["final_answer_len"], 1)
+            self.assertEqual(run_meta["method_family"], "nail")
+            self.assertEqual(run_meta["teacher_signal"], "full")
+            self.assertEqual(run_meta["loss"], "forward")
             self.assertTrue((out_dir / "subset_indices.pt").exists())
             self.assertTrue((out_dir / "last_eval.json").exists())
             self.assertTrue((out_dir / "eval_history.jsonl").exists())
@@ -524,7 +542,8 @@ class ModularAdditionIntegrationTests(unittest.TestCase):
                 "task.subset_size=4",
                 "task.eta=0.1",
                 "task.teacher_law=distributional_noise",
-                "task.objective=reverse_kl_full",
+                "task.teacher_signal=full",
+                "task.loss=reverse",
                 f"run.out_dir={out_dir}",
                 "optim.batch_size=2",
                 "optim.max_iters=1",
@@ -539,7 +558,9 @@ class ModularAdditionIntegrationTests(unittest.TestCase):
 
             run_meta = json.loads((out_dir / "run_meta.json").read_text(encoding="utf-8"))
             self.assertEqual(run_meta["task"], "modadd")
-            self.assertEqual(run_meta["objective"], "reverse_kl_full")
+            self.assertEqual(run_meta["method_family"], "opd")
+            self.assertEqual(run_meta["teacher_signal"], "full")
+            self.assertEqual(run_meta["loss"], "reverse")
             self.assertTrue((out_dir / "subset_indices.pt").exists())
             self.assertTrue((out_dir / "last_eval.json").exists())
             self.assertTrue((out_dir / "eval_history.jsonl").exists())

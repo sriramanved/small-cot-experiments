@@ -173,8 +173,16 @@ def _run_train_opd_s5(
     max_iters: int,
     seed: int = 37,
 ) -> subprocess.CompletedProcess[str]:
+    if objective == "forward_kl_full":
+        experiment = "s5_nail"
+        extra = ["task.teacher_signal=full", "task.loss=forward"]
+    elif objective == "reverse_kl_full":
+        experiment = "s5_opd"
+        extra = ["task.teacher_signal=full", "task.loss=reverse"]
+    else:
+        raise ValueError(f"unsupported test objective {objective!r}")
     return _run_hydra(
-        "experiment=s5_opd",
+        f"experiment={experiment}",
         "runtime=cpu",
         "logging=disabled",
         f"task.teacher_checkpoint={teacher_dir}",
@@ -182,7 +190,6 @@ def _run_train_opd_s5(
         "task.subset_size=12",
         "task.eta=0.2",
         "task.teacher_law=distributional_noise",
-        f"task.objective={objective}",
         f"run.out_dir={out_dir}",
         "optim.batch_size=2",
         f"optim.max_iters={max_iters}",
@@ -194,6 +201,7 @@ def _run_train_opd_s5(
         "optim.log_interval=1",
         "optim.save_interval=2",
         f"optim.seed={seed}",
+        *extra,
     )
 
 
@@ -506,7 +514,9 @@ class S5FullDistributionOfflineBCTests(unittest.TestCase):
 
             run_meta = _read_json(out_dir / "run_meta.json")
             self.assertEqual(run_meta["task"], "s5")
-            self.assertEqual(run_meta["objective"], "reverse_kl_full")
+            self.assertEqual(run_meta["method_family"], "opd")
+            self.assertEqual(run_meta["teacher_signal"], "full")
+            self.assertEqual(run_meta["loss"], "reverse")
             self.assertEqual(run_meta["teacher_law"], "distributional_noise")
             self.assertTrue((out_dir / "subset_indices.pt").exists())
             self.assertTrue((out_dir / "ckpt.pt").exists())

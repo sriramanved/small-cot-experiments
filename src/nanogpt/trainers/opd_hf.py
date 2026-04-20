@@ -12,13 +12,6 @@ import numpy as np
 import torch
 from transformers import GPT2LMHeadModel
 
-from data.s5_cot.opd import (
-    FixedPromptCycle,
-    extract_answer_logits,
-    gather_action_log_probs,
-    sample_teacher_actions,
-    teacher_forward_kl,
-)
 from data.s5_cot.opd_hf import (
     cached_teacher_token_probs_hf,
     evaluate_clean_ce_loss_hf,
@@ -32,6 +25,13 @@ from hf_checkpoint import (
     load_nanogpt_checkpoint,
     load_nanogpt_checkpoint_as_hf,
     set_hf_causal_lm_loss,
+)
+from nanogpt.methods.student_prefix import (
+    FixedPromptCycle,
+    extract_answer_logits,
+    gather_action_log_probs,
+    sample_teacher_actions,
+    teacher_forward_kl,
 )
 from nanogpt.trainers.configs import OpdHfConfig
 from nanogpt.trainers.runtime import (
@@ -314,7 +314,7 @@ def set_mode(model: torch.nn.Module, compiled_model: torch.nn.Module, train: boo
 def run_opd_hf(cfg: OpdHfConfig, *, launcher_command: list[str]) -> None:
     validate_config(cfg)
     if int(os.environ.get("WORLD_SIZE", "1")) != 1:
-        raise RuntimeError("train_opd_hf.py is single-GPU only in v1.")
+        raise RuntimeError("The HF OPD trainer is single-GPU only in v1.")
 
     device = resolve_device(cfg.device)
     torch_dtype = resolve_dtype(cfg.dtype, device)

@@ -25,27 +25,30 @@ OPD_RE = re.compile(
 )
 
 OBJECTIVE_TO_METHOD = {
-    "forward_kl_simple": "NAIL-OPD MC",
-    "reverse_kl_simple": "OPD MC",
-    "reverse_kl_tm": "OPD MC",
+    "forward_kl_simple": "NAIL-forward",
+    "reverse_kl_simple": "NAIL-reverse",
+    "reverse_kl_tm": "OPD",
 }
 
 METHOD_COLORS = {
-    "Offline BC MC": "#355070",
-    "NAIL-OPD MC": "#E76F51",
-    "OPD MC": "#2A9D8F",
+    "LogLossBC": "#355070",
+    "NAIL-forward": "#E76F51",
+    "NAIL-reverse": "#F4A261",
+    "OPD": "#2A9D8F",
 }
 
 METHOD_LINESTYLES = {
-    "Offline BC MC": "--",
-    "NAIL-OPD MC": "-",
-    "OPD MC": ":",
+    "LogLossBC": "--",
+    "NAIL-forward": "-",
+    "NAIL-reverse": "-.",
+    "OPD": ":",
 }
 
 METHOD_MARKERS = {
-    "Offline BC MC": "o",
-    "NAIL-OPD MC": "s",
-    "OPD MC": "^",
+    "LogLossBC": "o",
+    "NAIL-forward": "s",
+    "NAIL-reverse": "D",
+    "OPD": "^",
 }
 
 
@@ -166,7 +169,7 @@ def discover_runs(root: Path, *, p: int, m: int, subset_size: int, run_tag: str)
             records.append(
                 RunRecord(
                     run_id=name,
-                    method="Offline BC MC",
+                    method="LogLossBC",
                     objective="sample_then_corrupt",
                     teacher_law="distributional_noise",
                     p=run_p,
@@ -264,7 +267,7 @@ def build_runs_df(records: list[RunRecord]) -> tuple[pd.DataFrame, dict[str, pd.
 
 def plot_summary_vs_eta(runs_df: pd.DataFrame, *, metric: str, out_path: Path, show: bool) -> None:
     fig, ax = plt.subplots(figsize=(9.5, 5.5), constrained_layout=True)
-    for method in ("Offline BC MC", "NAIL-OPD MC", "OPD MC"):
+    for method in ("LogLossBC", "NAIL-forward", "NAIL-reverse", "OPD"):
         method_df = runs_df[runs_df["method"] == method].sort_values("eta")
         if method_df.empty:
             continue

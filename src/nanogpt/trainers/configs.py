@@ -80,14 +80,16 @@ class PretrainConfig:
 
 
 @dataclass
-class OpdConfig:
+class StudentPrefixConfig:
+    method_family: str
     task: str
     teacher_checkpoint: str
     prompt_bank_dir: str
     subset_size: int
     eta: float
     teacher_law: str
-    objective: str
+    teacher_signal: str
+    loss: str
     out_dir: str
     init_from: str
     init_from_ckpt: str | None
@@ -103,8 +105,8 @@ class OpdConfig:
     beta1: float
     beta2: float
     grad_clip: float
-    student_temperature: float
-    student_rollout_temperature: float
+    rollout_temperature_override: float | None
+    loss_temperature_override: float | None
     eval_interval: int
     eval_n: int
     eval_batch_size: int
@@ -125,6 +127,16 @@ class OpdConfig:
 
     def config_dict(self) -> dict[str, object]:
         return asdict(self)
+
+
+@dataclass
+class OpdConfig(StudentPrefixConfig):
+    pass
+
+
+@dataclass
+class NailConfig(StudentPrefixConfig):
+    pass
 
 
 @dataclass
@@ -262,19 +274,29 @@ def project_pretrain_config(cfg: AppConfig) -> PretrainConfig:
     )
 
 
-def project_opd_config(cfg: AppConfig) -> OpdConfig:
-    if cfg.pipeline.name != "opd":
-        raise ValueError(f"expected pipeline='opd', got {cfg.pipeline.name!r}")
+def _project_student_prefix_config(
+    cfg: AppConfig,
+    *,
+    expected_pipeline: str,
+    config_cls: type[StudentPrefixConfig],
+) -> StudentPrefixConfig:
+    if cfg.pipeline.name != expected_pipeline:
+        raise ValueError(f"expected pipeline={expected_pipeline!r}, got {cfg.pipeline.name!r}")
     if cfg.runtime.torchrun.nproc_per_node != 1 or cfg.runtime.torchrun.nnodes != 1:
-        raise ValueError("OPD pipelines are single-process only; leave runtime.torchrun at 1")
-    return OpdConfig(
+        raise ValueError(
+            f"{expected_pipeline.upper()} pipelines are single-process only; leave "
+            "runtime.torchrun at 1"
+        )
+    return config_cls(
+        method_family=expected_pipeline,
         task=cfg.task.task,
         teacher_checkpoint=cfg.task.teacher_checkpoint,
         prompt_bank_dir=cfg.task.prompt_bank_dir,
         subset_size=cfg.task.subset_size,
         eta=cfg.task.eta,
         teacher_law=cfg.task.teacher_law,
-        objective=cfg.task.objective,
+        teacher_signal=cfg.task.teacher_signal,
+        loss=cfg.task.loss,
         out_dir=cfg.run.out_dir,
         init_from=cfg.optim.init_from,
         init_from_ckpt=cfg.optim.init_from_ckpt or None,
@@ -290,8 +312,8 @@ def project_opd_config(cfg: AppConfig) -> OpdConfig:
         beta1=cfg.optim.beta1,
         beta2=cfg.optim.beta2,
         grad_clip=cfg.optim.grad_clip,
-        student_temperature=cfg.task.student_temperature,
-        student_rollout_temperature=cfg.task.student_rollout_temperature,
+        rollout_temperature_override=cfg.task.rollout_temperature_override,
+        loss_temperature_override=cfg.task.loss_temperature_override,
         eval_interval=cfg.optim.eval_interval,
         eval_n=cfg.optim.eval_n,
         eval_batch_size=cfg.optim.eval_batch_size,
@@ -309,6 +331,22 @@ def project_opd_config(cfg: AppConfig) -> OpdConfig:
         wandb_run_name=cfg.logging.wandb_run_name,
         wandb_run_id=cfg.logging.wandb_run_id,
         wandb_init_timeout=cfg.logging.wandb_init_timeout,
+    )
+
+
+def project_opd_config(cfg: AppConfig) -> OpdConfig:
+    return _project_student_prefix_config(
+        cfg,
+        expected_pipeline="opd",
+        config_cls=OpdConfig,
+    )
+
+
+def project_nail_config(cfg: AppConfig) -> NailConfig:
+    return _project_student_prefix_config(
+        cfg,
+        expected_pipeline="nail",
+        config_cls=NailConfig,
     )
 
 

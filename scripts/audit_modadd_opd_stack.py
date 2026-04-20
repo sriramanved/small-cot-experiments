@@ -27,10 +27,11 @@ from data.modular_addition.task import (  # noqa: E402
     equals_token_id as modadd_equals_token_id,
     evaluate_saved_clean_modadd_metrics,
 )
-from data.s5_cot.opd import (  # noqa: E402
+from nanogpt.methods.student_prefix import (  # noqa: E402
     cached_teacher_token_probs,
     extract_answer_logits,
     forward_kl_simple_loss,
+    normalize_student_prefix_method,
     reverse_kl_tm_loss,
     rollout_student,
     sample_teacher_actions,
@@ -50,8 +51,13 @@ OPD_RE = re.compile(
     r"p(?P<p>\d+)-m(?P<m>\d+)-n(?P<subset_size>\d+)-eta(?P<eta>[^-]+)-"
     r"(?P<teacher_law>[^-]+)-(?P<temp_tag>[^-]+)-seed(?P<seed>\d+)$"
 )
+STUDENT_PREFIX_RE = re.compile(
+    r"^out-modadd-(?P<method_family>opd|nail)-(?P<loss>forward|reverse)-(?P<teacher_signal>mc|full)-"
+    r"p(?P<p>\d+)-m(?P<m>\d+)-n(?P<subset_size>\d+)-eta(?P<eta>[^-]+)-"
+    r"(?P<teacher_law>[^-]+)(?P<temp_suffix>(?:-.*)?)\-seed(?P<seed>\d+)$"
+)
 
-EXPECTED_METHODS = ("Offline BC MC", "NAIL-OPD MC", "TM OPD MC")
+EXPECTED_METHODS = ("LogLossBC", "NAIL-forward", "NAIL-reverse", "OPD")
 DEFAULT_ETAS = (0.0, 0.1, 0.3, 0.5, 0.7, 0.9)
 
 
@@ -76,7 +82,7 @@ class RunRecord:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Audit the ModAdd offline-BC / NAIL-OPD / TM-OPD stack for one p,m,subset,seed sweep."
+            "Audit the ModAdd LogLossBC / NAIL / OPD stack for one p,m,subset,seed sweep."
         )
     )
     parser.add_argument("--root", type=Path, default=ROOT, help="Repo root to scan.")
@@ -165,10 +171,34 @@ def normalize_repo_path(value: str | None, root: Path) -> str | None:
 
 def extract_method_from_objective(objective: str) -> str | None:
     if objective == "forward_kl_simple":
-        return "NAIL-OPD MC"
+        return "NAIL-forward"
     if objective == "reverse_kl_tm":
-        return "TM OPD MC"
+        return "OPD"
+    if objective.startswith("reverse_kl_"):
+        return "NAIL-reverse"
     return None
+
+
+def method_from_student_prefix_state(run_meta: dict[str, Any]) -> str:
+    state = normalize_student_prefix_method(run_meta)
+    if state["method_family"] == "opd":
+        return "OPD"
+    if state["loss"] == "forward":
+        return "NAIL-forward"
+    return "NAIL-reverse"
+
+
+def objective_from_student_prefix_state(run_meta: dict[str, Any]) -> str:
+    state = normalize_student_prefix_method(run_meta)
+    if state["teacher_signal"] == "mc" and state["loss"] == "forward":
+        return "forward_kl_simple"
+    if state["teacher_signal"] == "full" and state["loss"] == "forward":
+        return "forward_kl_full"
+    if state["teacher_signal"] == "mc" and state["method_family"] == "opd":
+        return "reverse_kl_tm"
+    if state["teacher_signal"] == "mc":
+        return "reverse_kl_simple"
+    return "reverse_kl_full"
 
 
 def normalize_rollout_mode_tag(rollout_mode: str | None) -> str:
@@ -226,7 +256,7 @@ def per_step_stats(values: torch.Tensor) -> list[dict[str, float | None]]:
 
 
 def prompt_bank_dir_for_run(run: RunRecord, root: Path) -> Path | None:
-    if run.method == "Offline BC MC":
+    if run.method == "LogLossBC":
         value = run.dataset_meta.get("prompt_bank_dir") if run.dataset_meta is not None else None
     else:
         value = run.run_meta.get("prompt_bank_dir") if run.run_meta is not None else run.launcher_config.get("prompt_bank_dir")
@@ -239,7 +269,7 @@ def prompt_bank_dir_for_run(run: RunRecord, root: Path) -> Path | None:
 
 
 def teacher_checkpoint_for_run(run: RunRecord, root: Path) -> Path | None:
-    if run.method == "Offline BC MC":
+    if run.method == "LogLossBC":
         value = run.dataset_meta.get("teacher_checkpoint") if run.dataset_meta is not None else None
     else:
         value = run.run_meta.get("teacher_checkpoint") if run.run_meta is not None else run.launcher_config.get("teacher_checkpoint")
@@ -296,7 +326,7 @@ def discover_runs(
             records.append(
                 RunRecord(
                     run_id=name,
-                    method="Offline BC MC",
+                    method="LogLossBC",
                     objective="sample_then_corrupt",
                     eta=run_eta,
                     seed=run_seed,
@@ -315,24 +345,58 @@ def discover_runs(
             )
             continue
 
-        opd_match = OPD_RE.match(name)
-        if not opd_match:
-            continue
-        objective = opd_match.group("objective")
-        method = extract_method_from_objective(objective)
-        if method is None:
-            continue
-        run_p = int(opd_match.group("p"))
-        run_m = int(opd_match.group("m"))
-        run_n = int(opd_match.group("subset_size"))
-        run_seed = int(opd_match.group("seed"))
-        run_eta = parse_eta_tag(opd_match.group("eta"))
-        if (run_p, run_m, run_n, run_seed) != (p, m, subset_size, seed):
-            continue
-        if run_eta not in eta_set:
-            continue
         run_meta_path = out_dir / "run_meta.json"
         run_meta = load_json(run_meta_path) if run_meta_path.exists() else None
+
+        student_prefix_match = STUDENT_PREFIX_RE.match(name)
+        if student_prefix_match:
+            run_p = int(student_prefix_match.group("p"))
+            run_m = int(student_prefix_match.group("m"))
+            run_n = int(student_prefix_match.group("subset_size"))
+            run_seed = int(student_prefix_match.group("seed"))
+            run_eta = parse_eta_tag(student_prefix_match.group("eta"))
+            if (run_p, run_m, run_n, run_seed) != (p, m, subset_size, seed):
+                continue
+            if run_eta not in eta_set:
+                continue
+            if run_meta is not None:
+                method = method_from_student_prefix_state(run_meta)
+                objective = objective_from_student_prefix_state(run_meta)
+            else:
+                method = "OPD" if student_prefix_match.group("method_family") == "opd" else (
+                    "NAIL-forward" if student_prefix_match.group("loss") == "forward" else "NAIL-reverse"
+                )
+                objective = (
+                    f"{student_prefix_match.group('method_family')}:"
+                    f"{student_prefix_match.group('loss')}:"
+                    f"{student_prefix_match.group('teacher_signal')}"
+                )
+            teacher_law = student_prefix_match.group("teacher_law")
+            temp_tag = student_prefix_match.group("temp_suffix").lstrip("-")
+        else:
+            opd_match = OPD_RE.match(name)
+            if not opd_match:
+                continue
+            objective = opd_match.group("objective")
+            run_p = int(opd_match.group("p"))
+            run_m = int(opd_match.group("m"))
+            run_n = int(opd_match.group("subset_size"))
+            run_seed = int(opd_match.group("seed"))
+            run_eta = parse_eta_tag(opd_match.group("eta"))
+            if (run_p, run_m, run_n, run_seed) != (p, m, subset_size, seed):
+                continue
+            if run_eta not in eta_set:
+                continue
+            if run_meta is not None and ("method_family" in run_meta or "objective" in run_meta):
+                method = method_from_student_prefix_state(run_meta)
+                objective = objective_from_student_prefix_state(run_meta)
+            else:
+                method = extract_method_from_objective(objective)
+            if method is None:
+                continue
+            teacher_law = opd_match.group("teacher_law")
+            temp_tag = opd_match.group("temp_tag")
+
         records.append(
             RunRecord(
                 run_id=name,
@@ -341,9 +405,9 @@ def discover_runs(
                 eta=run_eta,
                 seed=run_seed,
                 out_dir=out_dir,
-                teacher_law=opd_match.group("teacher_law"),
+                teacher_law=teacher_law,
                 rollout_mode="",
-                temp_tag=opd_match.group("temp_tag"),
+                temp_tag=temp_tag,
                 launcher_config=launcher_config,
                 run_meta=run_meta,
                 last_eval=last_eval,
@@ -627,13 +691,30 @@ def objective_diagnostics_for_run(
 ) -> dict[str, Any]:
     policy_temperature = None
     if run.objective == "forward_kl_simple":
-        policy_temperature = float(run.run_meta.get("student_temperature", 1.0)) if run.run_meta else 1.0
+        if run.run_meta is not None:
+            policy_temperature = float(
+                run.run_meta.get(
+                    "resolved_loss_temperature",
+                    run.run_meta.get("student_temperature", 1.0),
+                )
+            )
+        else:
+            policy_temperature = 1.0
+
+    rollout_temperature = 0.0
+    if run.run_meta is not None:
+        rollout_temperature = float(
+            run.run_meta.get(
+                "resolved_rollout_temperature",
+                run.run_meta.get("student_rollout_temperature", run.run_meta.get("student_temperature", 0.0)),
+            )
+        )
 
     full_seq, actions, log_q = rollout_student(
         student,
         prompt_batch,
         target_len=prompt_bank.cot_len,
-        temperature=float(run.run_meta.get("student_temperature", 0.0)) if run.run_meta else 0.0,
+        temperature=rollout_temperature,
         device=device,
         autocast_context=nullcontext(),
     )
@@ -736,7 +817,7 @@ def subset_match_summary(
     run: RunRecord,
     expected_subset: torch.Tensor,
 ) -> dict[str, Any]:
-    if run.method == "Offline BC MC":
+    if run.method == "LogLossBC":
         subset_path = run.dataset_dir / "subset_indices.pt" if run.dataset_dir is not None else None
     else:
         subset_path = run.out_dir / "subset_indices.pt"
@@ -776,7 +857,7 @@ def parity_checks(
             values_by_key["teacher_checkpoint"].add(teacher_key)
         values_by_key["subset_size"].add(str(subset_size))
         values_by_key["train_seed"].add(str(run.seed))
-        if run.method == "Offline BC MC":
+        if run.method == "LogLossBC":
             values_by_key["offline_rollout_mode"].add(run.rollout_mode)
             values_by_key["offline_target_type"].add(
                 str((run.launcher_config or {}).get("offline_target_type", "tokens"))
@@ -801,7 +882,7 @@ def parity_checks(
 
     equivalence_rows: list[dict[str, Any]] = []
     for run in records:
-        if run.method != "Offline BC MC":
+        if run.method != "LogLossBC":
             continue
         expected_law = expected_teacher_law_for_rollout_mode(run.rollout_mode)
         equivalence_rows.append(
@@ -834,35 +915,43 @@ def method_gap_summary(eval_summary: dict[str, dict[str, Any]]) -> list[dict[str
     rows: list[dict[str, Any]] = []
     for eta in sorted(by_eta):
         methods = by_eta[eta]
-        offline = methods.get("Offline BC MC")
-        nail = methods.get("NAIL-OPD MC")
-        tm = methods.get("TM OPD MC")
+        offline = methods.get("LogLossBC")
+        nail_forward = methods.get("NAIL-forward")
+        nail_reverse = methods.get("NAIL-reverse")
+        opd = methods.get("OPD")
         row: dict[str, Any] = {"eta": eta}
-        if offline is not None and nail is not None:
-            row["greedy_clean_full_gap_offline_minus_nail"] = safe_float(
-                offline["greedy_eval"]["clean_full_exact"] - nail["greedy_eval"]["clean_full_exact"]
+        if offline is not None and nail_forward is not None:
+            row["greedy_clean_full_gap_loglossbc_minus_nail_forward"] = safe_float(
+                offline["greedy_eval"]["clean_full_exact"] - nail_forward["greedy_eval"]["clean_full_exact"]
             )
-            row["sampled_clean_full_gap_offline_minus_nail"] = safe_float(
-                offline["sampled_eval"]["clean_full_exact"] - nail["sampled_eval"]["clean_full_exact"]
+            row["sampled_clean_full_gap_loglossbc_minus_nail_forward"] = safe_float(
+                offline["sampled_eval"]["clean_full_exact"] - nail_forward["sampled_eval"]["clean_full_exact"]
             )
-            row["greedy_clean_final_gap_offline_minus_nail"] = safe_float(
-                offline["greedy_eval"]["clean_final_exact"] - nail["greedy_eval"]["clean_final_exact"]
+            row["greedy_clean_final_gap_loglossbc_minus_nail_forward"] = safe_float(
+                offline["greedy_eval"]["clean_final_exact"] - nail_forward["greedy_eval"]["clean_final_exact"]
             )
-            row["sampled_clean_final_gap_offline_minus_nail"] = safe_float(
-                offline["sampled_eval"]["clean_final_exact"] - nail["sampled_eval"]["clean_final_exact"]
+            row["sampled_clean_final_gap_loglossbc_minus_nail_forward"] = safe_float(
+                offline["sampled_eval"]["clean_final_exact"] - nail_forward["sampled_eval"]["clean_final_exact"]
             )
-        if nail is not None and tm is not None:
-            row["greedy_clean_full_gap_nail_minus_tm"] = safe_float(
-                nail["greedy_eval"]["clean_full_exact"] - tm["greedy_eval"]["clean_full_exact"]
+        if nail_forward is not None and opd is not None:
+            row["greedy_clean_full_gap_nail_forward_minus_opd"] = safe_float(
+                nail_forward["greedy_eval"]["clean_full_exact"] - opd["greedy_eval"]["clean_full_exact"]
             )
-            row["sampled_clean_full_gap_nail_minus_tm"] = safe_float(
-                nail["sampled_eval"]["clean_full_exact"] - tm["sampled_eval"]["clean_full_exact"]
+            row["sampled_clean_full_gap_nail_forward_minus_opd"] = safe_float(
+                nail_forward["sampled_eval"]["clean_full_exact"] - opd["sampled_eval"]["clean_full_exact"]
             )
-            row["greedy_clean_final_gap_nail_minus_tm"] = safe_float(
-                nail["greedy_eval"]["clean_final_exact"] - tm["greedy_eval"]["clean_final_exact"]
+            row["greedy_clean_final_gap_nail_forward_minus_opd"] = safe_float(
+                nail_forward["greedy_eval"]["clean_final_exact"] - opd["greedy_eval"]["clean_final_exact"]
             )
-            row["sampled_clean_final_gap_nail_minus_tm"] = safe_float(
-                nail["sampled_eval"]["clean_final_exact"] - tm["sampled_eval"]["clean_final_exact"]
+            row["sampled_clean_final_gap_nail_forward_minus_opd"] = safe_float(
+                nail_forward["sampled_eval"]["clean_final_exact"] - opd["sampled_eval"]["clean_final_exact"]
+            )
+        if nail_reverse is not None and opd is not None:
+            row["greedy_clean_full_gap_nail_reverse_minus_opd"] = safe_float(
+                nail_reverse["greedy_eval"]["clean_full_exact"] - opd["greedy_eval"]["clean_full_exact"]
+            )
+            row["sampled_clean_full_gap_nail_reverse_minus_opd"] = safe_float(
+                nail_reverse["sampled_eval"]["clean_full_exact"] - opd["sampled_eval"]["clean_full_exact"]
             )
         rows.append(row)
     return rows
@@ -988,7 +1077,7 @@ def main() -> None:
         if teacher_checkpoint is not None:
             teacher = load_model_cached(teacher_checkpoint, device=device, cache=model_cache)
 
-        if run.method == "Offline BC MC" and teacher is not None and run.dataset_dir is not None:
+        if run.method == "LogLossBC" and teacher is not None and run.dataset_dir is not None:
             offline_teacher_checks[run.run_id] = compare_offline_targets_to_teacher(
                 run=run,
                 teacher=teacher,
@@ -999,7 +1088,7 @@ def main() -> None:
                 p=args.p,
             )
 
-        if run.method != "Offline BC MC" and teacher is not None:
+        if run.method != "LogLossBC" and teacher is not None:
             objective_checks[run.run_id] = objective_diagnostics_for_run(
                 run=run,
                 prompt_batch=prompt_batch,

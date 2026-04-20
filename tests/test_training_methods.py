@@ -5,7 +5,7 @@ import unittest
 import torch
 import torch.nn.functional as F
 
-from data.s5_cot.opd import (
+from nanogpt.methods.student_prefix import (
     forward_kl_full_loss,
     forward_kl_simple_loss,
     gather_action_log_probs,

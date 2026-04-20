@@ -8,15 +8,17 @@ from pathlib import Path
 
 import torch
 
-from data.s5_cot.opd import (
+from nanogpt.methods.student_prefix import (
     cached_teacher_token_probs,
     compute_teacher_log_probs,
     compute_teacher_token_probs,
     extract_answer_logits,
     teacher_forward_kl,
 )
-from nanogpt.trainers.opd import validate_args
-from nanogpt.trainers.opd import validate_resume_metadata
+from nanogpt.trainers.nail import validate_args as validate_nail_args
+from nanogpt.trainers.nail import validate_resume_metadata as validate_nail_resume_metadata
+from nanogpt.trainers.opd import validate_args as validate_opd_args
+from nanogpt.trainers.opd import validate_resume_metadata as validate_opd_resume_metadata
 
 
 VOCAB_SIZE = 8
@@ -38,6 +40,25 @@ class ToyCachedModel:
 
 
 class OpdObjectiveTests(unittest.TestCase):
+    @staticmethod
+    def _cfg(**overrides):
+        base = dict(
+            method_family="opd",
+            teacher_signal="mc",
+            loss="reverse",
+            init_from="scratch",
+            init_from_ckpt=None,
+            continue_from_subset_size=0,
+            single_epoch=False,
+            shuffle_prompts=False,
+            subset_size=4,
+            rollout_temperature_override=None,
+            loss_temperature_override=None,
+            compile=False,
+        )
+        base.update(overrides)
+        return types.SimpleNamespace(**base)
+
     def test_distributional_teacher_probs_sum_to_one_and_match_log_probs(self):
         torch.manual_seed(0)
         clean_logits = torch.randn(2, 3, VOCAB_SIZE)
@@ -152,34 +173,30 @@ class OpdObjectiveTests(unittest.TestCase):
         torch.testing.assert_close(token_kl, torch.zeros_like(token_kl), atol=1e-6, rtol=1e-6)
         torch.testing.assert_close(teacher_ce, teacher_entropy, atol=1e-6, rtol=1e-6)
 
-    def test_forward_kl_rejects_zero_temperature(self):
-        with self.assertRaisesRegex(ValueError, "student_temperature must be > 0"):
-            validate_args(
-                types.SimpleNamespace(
-                    objective="forward_kl_simple",
-                    student_temperature=0.0,
-                    student_rollout_temperature=0.0,
+    def test_opd_rejects_forward_loss(self):
+        with self.assertRaisesRegex(ValueError, "OPD only supports reverse loss"):
+            validate_opd_args(self._cfg(loss="forward"))
+
+    def test_nail_accepts_forward_and_reverse_losses(self):
+        validate_nail_args(self._cfg(method_family="nail", loss="forward"))
+        validate_nail_args(self._cfg(method_family="nail", loss="reverse"))
+
+    def test_reverse_loss_rejects_loss_temperature_override(self):
+        with self.assertRaisesRegex(ValueError, "only supported for forward loss"):
+            validate_nail_args(
+                self._cfg(
+                    method_family="nail",
+                    loss="reverse",
+                    loss_temperature_override=1.0,
                 )
             )
-        validate_args(
-            types.SimpleNamespace(
-                objective="forward_kl_simple",
-                student_temperature=1.0,
-                student_rollout_temperature=0.0,
-            )
-        )
-        validate_args(
-            types.SimpleNamespace(
-                objective="reverse_kl_tm",
-                student_temperature=0.0,
-                student_rollout_temperature=0.0,
-            )
-        )
-        validate_args(
-            types.SimpleNamespace(
-                objective="reverse_kl_full",
-                student_temperature=0.0,
-                student_rollout_temperature=0.0,
+
+    def test_forward_loss_accepts_positive_temperature_override(self):
+        validate_nail_args(
+            self._cfg(
+                method_family="nail",
+                loss="forward",
+                loss_temperature_override=0.7,
             )
         )
 
@@ -217,7 +234,7 @@ class OpdObjectiveTests(unittest.TestCase):
         )
         self.assertGreater((dist_nondigit - greedy_nondigit).abs().max().item(), 1e-2)
 
-    def test_resume_metadata_defaults_missing_objective_to_reverse_kl(self):
+    def test_resume_metadata_translates_legacy_tm_opd_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             out_dir = Path(tmpdir)
             with open(out_dir / "run_meta.json", "w", encoding="utf-8") as f:
@@ -229,24 +246,26 @@ class OpdObjectiveTests(unittest.TestCase):
                         "eta": 0.1,
                         "teacher_law": "distributional_noise",
                         "student_temperature": 1.0,
-                        "shuffle_prompts": False,
                         "seed": 123,
                     },
                     f,
                 )
-            validate_resume_metadata(
+            validate_opd_resume_metadata(
                 out_dir,
                 {
+                    "task": "s5",
+                    "p": 5,
                     "teacher_checkpoint": "teacher",
                     "prompt_bank_dir": "prompt_bank",
                     "subset_size": 4,
                     "eta": 0.1,
                     "teacher_law": "distributional_noise",
-                    "objective": "reverse_kl_tm",
-                    "student_temperature": 1.0,
+                    "method_family": "opd",
+                    "teacher_signal": "mc",
+                    "loss": "reverse",
                     "shuffle_prompts": False,
                     "seed": 123,
-                    },
+                },
                 )
 
     def test_resume_metadata_defaults_missing_rollout_temperature_to_student_temperature(self):
@@ -267,17 +286,57 @@ class OpdObjectiveTests(unittest.TestCase):
                     },
                     f,
                 )
-            validate_resume_metadata(
+            validate_opd_resume_metadata(
                 out_dir,
                 {
+                    "task": "s5",
+                    "p": 5,
                     "teacher_checkpoint": "teacher",
                     "prompt_bank_dir": "prompt_bank",
                     "subset_size": 4,
                     "eta": 0.1,
                     "teacher_law": "distributional_noise",
-                    "objective": "reverse_kl_tm",
-                    "student_temperature": 1.0,
-                    "student_rollout_temperature": 1.0,
+                    "method_family": "opd",
+                    "teacher_signal": "mc",
+                    "loss": "reverse",
+                    "shuffle_prompts": False,
+                    "seed": 123,
+                },
+            )
+
+    def test_resume_metadata_maps_legacy_greedy_reverse_run_to_nail(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            with open(out_dir / "run_meta.json", "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "task": "s5",
+                        "teacher_checkpoint": "teacher",
+                        "prompt_bank_dir": "prompt_bank",
+                        "subset_size": 4,
+                        "eta": 0.1,
+                        "teacher_law": "distributional_noise",
+                        "objective": "reverse_kl_full",
+                        "student_temperature": 0.0,
+                        "student_rollout_temperature": 0.0,
+                        "shuffle_prompts": False,
+                        "seed": 123,
+                    },
+                    f,
+                )
+            validate_nail_resume_metadata(
+                out_dir,
+                {
+                    "task": "s5",
+                    "p": 5,
+                    "teacher_checkpoint": "teacher",
+                    "prompt_bank_dir": "prompt_bank",
+                    "subset_size": 4,
+                    "eta": 0.1,
+                    "teacher_law": "distributional_noise",
+                    "method_family": "nail",
+                    "teacher_signal": "full",
+                    "loss": "reverse",
                     "shuffle_prompts": False,
                     "seed": 123,
                 },

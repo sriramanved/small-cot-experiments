@@ -11,7 +11,6 @@ from omegaconf import DictConfig, MISSING, OmegaConf
 @dataclass
 class PipelineConfig:
     name: str = MISSING
-    entrypoint: str = MISSING
 
 
 @dataclass
@@ -92,9 +91,13 @@ class TaskConfig:
     teacher_checkpoint: str = ""
     prompt_bank_dir: str = ""
     teacher_law: str = "distributional_noise"
-    objective: str = "reverse_kl_tm"
-    student_temperature: float = 1.0
-    student_rollout_temperature: float = 0.0
+    teacher_signal: str = "mc"
+    loss: str = "reverse"
+    rollout_temperature_override: Optional[float] = None
+    loss_temperature_override: Optional[float] = None
+    objective: Optional[str] = None
+    student_temperature: Optional[float] = None
+    student_rollout_temperature: Optional[float] = None
     rollout_mode: str = "greedy_then_corrupt"
     target_mode: str = "tokens"
 
@@ -183,6 +186,7 @@ def materialize_config(raw_cfg: DictConfig) -> AppConfig:
     if cfg.pipeline.name not in {
         "pretrain",
         "opd",
+        "nail",
         "opd_hf",
         "modadd_prompt_bank",
         "modadd_render",
@@ -192,7 +196,7 @@ def materialize_config(raw_cfg: DictConfig) -> AppConfig:
         raise ValueError(f"unsupported pipeline {cfg.pipeline.name!r}")
     if cfg.pipeline.name == "pretrain" and not cfg.task.dataset:
         raise ValueError("pretrain experiments require task.dataset")
-    if cfg.pipeline.name in {"opd", "opd_hf"}:
+    if cfg.pipeline.name in {"opd", "nail", "opd_hf"}:
         if not cfg.task.teacher_checkpoint:
             raise ValueError(f"{cfg.pipeline.name} experiments require task.teacher_checkpoint")
         if not cfg.task.prompt_bank_dir:
