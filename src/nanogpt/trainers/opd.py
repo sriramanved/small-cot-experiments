@@ -48,6 +48,27 @@ from nanogpt.trainers.wandb import maybe_init_wandb
 from nanogpt.utils.repo import write_launch_metadata
 
 
+def resolve_student_rollout_temperature(cfg_or_meta) -> float:
+    rollout_temperature = getattr(cfg_or_meta, "student_rollout_temperature", None)
+    if rollout_temperature is None and isinstance(cfg_or_meta, dict):
+        rollout_temperature = cfg_or_meta.get("student_rollout_temperature")
+    if rollout_temperature is None:
+        rollout_temperature = getattr(cfg_or_meta, "student_temperature", None)
+    if rollout_temperature is None and isinstance(cfg_or_meta, dict):
+        rollout_temperature = cfg_or_meta.get("student_temperature")
+    if rollout_temperature is None:
+        return 0.0
+    return float(rollout_temperature)
+
+
+def format_student_rollout_tag(*, rollout_temperature: float, student_temperature: float) -> str:
+    rollout_tag = "greedy" if rollout_temperature == 0 else f"t{rollout_temperature}".replace(".", "p")
+    student_tag = "greedy" if student_temperature == 0 else f"t{student_temperature}".replace(".", "p")
+    if rollout_temperature == student_temperature:
+        return student_tag
+    return f"roll{rollout_tag}-stud{student_tag}"
+
+
 def validate_config(cfg: OpdConfig) -> None:
     init_from = getattr(cfg, "init_from", "scratch")
     init_from_ckpt = getattr(cfg, "init_from_ckpt", None)
@@ -55,12 +76,15 @@ def validate_config(cfg: OpdConfig) -> None:
     single_epoch = getattr(cfg, "single_epoch", False)
     shuffle_prompts = getattr(cfg, "shuffle_prompts", False)
     subset_size = getattr(cfg, "subset_size", 0)
+    student_rollout_temperature = resolve_student_rollout_temperature(cfg)
 
     if cfg.objective in {"forward_kl_simple", "forward_kl_full"} and cfg.student_temperature <= 0:
         raise ValueError(
             "student_temperature must be > 0 for forward-KL objectives because "
             "the loss is defined against the temperature-adjusted student policy."
         )
+    if student_rollout_temperature < 0:
+        raise ValueError("student_rollout_temperature must be non-negative.")
     if getattr(cfg, "compile", False) and not hasattr(torch, "compile"):
         raise ValueError("--compile requires a PyTorch build with torch.compile support.")
     if init_from == "warm_start" and not init_from_ckpt:
@@ -121,6 +145,7 @@ def validate_resume_metadata(out_dir: Path, metadata: dict[str, object]) -> None
         "teacher_law",
         "objective",
         "student_temperature",
+        "student_rollout_temperature",
         "shuffle_prompts",
         "single_epoch",
         "init_from_ckpt",
@@ -135,6 +160,8 @@ def validate_resume_metadata(out_dir: Path, metadata: dict[str, object]) -> None
             current_value = 5
         if key == "m" and current_value is None and current_task == "s5":
             current_value = saved.get("m")
+        if key == "student_rollout_temperature" and current_value is None:
+            current_value = resolve_student_rollout_temperature(metadata)
         saved_value = saved.get(key)
         if key == "task" and saved_value is None:
             saved_value = "s5"
@@ -144,9 +171,11 @@ def validate_resume_metadata(out_dir: Path, metadata: dict[str, object]) -> None
             saved_value = current_value
         if key == "objective" and saved_value is None:
             saved_value = "reverse_kl_tm"
+        if key == "student_rollout_temperature" and saved_value is None:
+            saved_value = resolve_student_rollout_temperature(saved)
         if saved_value != current_value:
             raise ValueError(
-            f"Resume mismatch for {key}: saved={saved_value!r} "
+                f"Resume mismatch for {key}: saved={saved_value!r} "
                 f"current={current_value!r}"
             )
 
@@ -229,11 +258,16 @@ def validate_warm_start_checkpoint(
         "teacher_law",
         "objective",
         "student_temperature",
+        "student_rollout_temperature",
         "shuffle_prompts",
         "single_epoch",
     ):
         source_value = source_config.get(key)
-        current_value = getattr(args, key)
+        current_value = getattr(args, key, None)
+        if key == "student_rollout_temperature":
+            if source_value is None:
+                source_value = resolve_student_rollout_temperature(source_config)
+            current_value = resolve_student_rollout_temperature(args)
         if source_value is not None and source_value != current_value:
             raise ValueError(
                 f"Warm-start mismatch for {key}: checkpoint has {source_value!r}, "
@@ -381,7 +415,10 @@ def run_opd(cfg: OpdConfig, *, launcher_command: list[str]) -> None:
 
     if cfg.wandb_run_name is None:
         eta_tag = str(cfg.eta).replace(".", "p")
-        temp_tag = "greedy" if cfg.student_temperature == 0 else f"t{cfg.student_temperature}".replace(".", "p")
+        temp_tag = format_student_rollout_tag(
+            rollout_temperature=resolve_student_rollout_temperature(cfg),
+            student_temperature=cfg.student_temperature,
+        )
         cfg.wandb_run_name = (
             f"{cfg.task}-opd-{cfg.objective}-p{prompt_bank.p}-m{prompt_bank.m}-n{cfg.subset_size}-eta{eta_tag}-"
             f"{cfg.teacher_law}-{temp_tag}"
@@ -413,6 +450,7 @@ def run_opd(cfg: OpdConfig, *, launcher_command: list[str]) -> None:
         "teacher_law": cfg.teacher_law,
         "objective": cfg.objective,
         "student_temperature": cfg.student_temperature,
+        "student_rollout_temperature": resolve_student_rollout_temperature(cfg),
         "shuffle_prompts": cfg.shuffle_prompts,
         "single_epoch": cfg.single_epoch,
         "init_from_ckpt": cfg.init_from_ckpt,
@@ -499,6 +537,7 @@ def run_opd(cfg: OpdConfig, *, launcher_command: list[str]) -> None:
     )
 
     policy_temperature = cfg.student_temperature if cfg.student_temperature > 0 else None
+    rollout_temperature = resolve_student_rollout_temperature(cfg)
     running_metrics: dict[str, float] = {}
     running_steps = 0
     t0 = time.time()
@@ -573,7 +612,7 @@ def run_opd(cfg: OpdConfig, *, launcher_command: list[str]) -> None:
                 student,
                 prompt_ids,
                 target_len=prompt_bank.cot_len,
-                temperature=cfg.student_temperature,
+                temperature=rollout_temperature,
                 device=device,
                 autocast_context=autocast_context,
             )

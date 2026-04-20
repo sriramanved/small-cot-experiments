@@ -17,3 +17,4 @@ task:
   teacher_law: distributional_noise
   objective: reverse_kl_tm
   student_temperature: 1.0
+  student_rollout_temperature: 0.0

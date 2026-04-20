@@ -94,6 +94,7 @@ class TaskConfig:
     teacher_law: str = "distributional_noise"
     objective: str = "reverse_kl_tm"
     student_temperature: float = 1.0
+    student_rollout_temperature: float = 0.0
     rollout_mode: str = "greedy_then_corrupt"
     target_mode: str = "tokens"
 

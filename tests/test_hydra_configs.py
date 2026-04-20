@@ -264,8 +264,8 @@ class HydraConfigTests(unittest.TestCase):
                 f"run.output_root={output_root}",
             )
 
-            eta_a = output_root / "out-s5-opd-reverse_kl_tm-m2-n4-eta0p1-distributional_noise-t1p0-seed1337"
-            eta_b = output_root / "out-s5-opd-reverse_kl_tm-m2-n4-eta0p2-distributional_noise-t1p0-seed1337"
+            eta_a = output_root / "out-s5-opd-reverse_kl_tm-m2-n4-eta0p1-distributional_noise-rollgreedy-studt1p0-seed1337"
+            eta_b = output_root / "out-s5-opd-reverse_kl_tm-m2-n4-eta0p2-distributional_noise-rollgreedy-studt1p0-seed1337"
             self.assertTrue((eta_a / "completed.txt").exists())
             self.assertTrue((eta_b / "completed.txt").exists())
             self.assertTrue((eta_a / "launcher_config.json").exists())

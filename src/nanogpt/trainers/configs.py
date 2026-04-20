@@ -104,6 +104,7 @@ class OpdConfig:
     beta2: float
     grad_clip: float
     student_temperature: float
+    student_rollout_temperature: float
     eval_interval: int
     eval_n: int
     eval_batch_size: int
@@ -145,6 +146,7 @@ class OpdHfConfig:
     beta2: float
     grad_clip: float
     student_temperature: float
+    student_rollout_temperature: float
     eval_interval: int
     eval_n: int
     eval_batch_size: int
@@ -289,6 +291,7 @@ def project_opd_config(cfg: AppConfig) -> OpdConfig:
         beta2=cfg.optim.beta2,
         grad_clip=cfg.optim.grad_clip,
         student_temperature=cfg.task.student_temperature,
+        student_rollout_temperature=cfg.task.student_rollout_temperature,
         eval_interval=cfg.optim.eval_interval,
         eval_n=cfg.optim.eval_n,
         eval_batch_size=cfg.optim.eval_batch_size,
@@ -332,6 +335,7 @@ def project_opd_hf_config(cfg: AppConfig) -> OpdHfConfig:
         beta2=cfg.optim.beta2,
         grad_clip=cfg.optim.grad_clip,
         student_temperature=cfg.task.student_temperature,
+        student_rollout_temperature=cfg.task.student_rollout_temperature,
         eval_interval=cfg.optim.eval_interval,
         eval_n=cfg.optim.eval_n,
         eval_batch_size=cfg.optim.eval_batch_size,

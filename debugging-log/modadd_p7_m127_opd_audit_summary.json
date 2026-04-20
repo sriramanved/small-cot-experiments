@@ -1,0 +1,157 @@
+{
+  "scope": {
+    "root": "/Users/vedsriraman/columbia/code/small-cot-experiments/nanoGPT",
+    "p": 7,
+    "m": 127,
+    "subset_size": 1000000,
+    "seed": 20260417,
+    "etas": [
+      0.0,
+      0.1,
+      0.3,
+      0.5,
+      0.7,
+      0.9
+    ],
+    "diagnostic_batch_size": 512,
+    "eval_n": 256,
+    "eval_batch_size": 256,
+    "sample_eval_temperature": 1.0,
+    "device": "cpu"
+  },
+  "discovery": {
+    "coverage_rows": [
+      {
+        "eta": 0.0,
+        "method": "Offline BC MC",
+        "count": 0,
+        "run_ids": []
+      },
+      {
+        "eta": 0.0,
+        "method": "NAIL-OPD MC",
+        "count": 0,
+        "run_ids": []
+      },
+      {
+        "eta": 0.0,
+        "method": "TM OPD MC",
+        "count": 0,
+        "run_ids": []
+      },
+      {
+        "eta": 0.1,
+        "method": "Offline BC MC",
+        "count": 0,
+        "run_ids": []
+      },
+      {
+        "eta": 0.1,
+        "method": "NAIL-OPD MC",
+        "count": 0,
+        "run_ids": []
+      },
+      {
+        "eta": 0.1,
+        "method": "TM OPD MC",
+        "count": 0,
+        "run_ids": []
+      },
+      {
+        "eta": 0.3,
+        "method": "Offline BC MC",
+        "count": 0,
+        "run_ids": []
+      },
+      {
+        "eta": 0.3,
+        "method": "NAIL-OPD MC",
+        "count": 0,
+        "run_ids": []
+      },
+      {
+        "eta": 0.3,
+        "method": "TM OPD MC",
+        "count": 0,
+        "run_ids": []
+      },
+      {
+        "eta": 0.5,
+        "method": "Offline BC MC",
+        "count": 0,
+        "run_ids": []
+      },
+      {
+        "eta": 0.5,
+        "method": "NAIL-OPD MC",
+        "count": 0,
+        "run_ids": []
+      },
+      {
+        "eta": 0.5,
+        "method": "TM OPD MC",
+        "count": 0,
+        "run_ids": []
+      },
+      {
+        "eta": 0.7,
+        "method": "Offline BC MC",
+        "count": 0,
+        "run_ids": []
+      },
+      {
+        "eta": 0.7,
+        "method": "NAIL-OPD MC",
+        "count": 0,
+        "run_ids": []
+      },
+      {
+        "eta": 0.7,
+        "method": "TM OPD MC",
+        "count": 0,
+        "run_ids": []
+      },
+      {
+        "eta": 0.9,
+        "method": "Offline BC MC",
+        "count": 0,
+        "run_ids": []
+      },
+      {
+        "eta": 0.9,
+        "method": "NAIL-OPD MC",
+        "count": 0,
+        "run_ids": []
+      },
+      {
+        "eta": 0.9,
+        "method": "TM OPD MC",
+        "count": 0,
+        "run_ids": []
+      }
+    ],
+    "missing_expected_runs": [
+      "eta=0.0: missing Offline BC MC",
+      "eta=0.0: missing NAIL-OPD MC",
+      "eta=0.0: missing TM OPD MC",
+      "eta=0.1: missing Offline BC MC",
+      "eta=0.1: missing NAIL-OPD MC",
+      "eta=0.1: missing TM OPD MC",
+      "eta=0.3: missing Offline BC MC",
+      "eta=0.3: missing NAIL-OPD MC",
+      "eta=0.3: missing TM OPD MC",
+      "eta=0.5: missing Offline BC MC",
+      "eta=0.5: missing NAIL-OPD MC",
+      "eta=0.5: missing TM OPD MC",
+      "eta=0.7: missing Offline BC MC",
+      "eta=0.7: missing NAIL-OPD MC",
+      "eta=0.7: missing TM OPD MC",
+      "eta=0.9: missing Offline BC MC",
+      "eta=0.9: missing NAIL-OPD MC",
+      "eta=0.9: missing TM OPD MC"
+    ],
+    "duplicate_runs": []
+  },
+  "run_count": 0,
+  "status": "no_matching_runs_found"
+}

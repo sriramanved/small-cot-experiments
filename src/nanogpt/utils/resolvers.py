@@ -16,6 +16,17 @@ def _temp_tag(value: object) -> str:
     return f"t{_float_tag(value)}"
 
 
+def _opd_student_tag(
+    rollout_temperature: object,
+    student_temperature: object,
+) -> str:
+    rollout_tag = _temp_tag(rollout_temperature)
+    student_tag = _temp_tag(student_temperature)
+    if float(rollout_temperature) == float(student_temperature):
+        return student_tag
+    return f"roll{rollout_tag}-stud{student_tag}"
+
+
 def _rollout_tag(value: object) -> str:
     text = str(value)
     if text == "greedy_then_corrupt":
@@ -235,6 +246,7 @@ def _s5_opd_run_name(
     subset_size: object,
     eta: object,
     teacher_law: object,
+    student_rollout_temperature: object,
     student_temperature: object,
     seed: object,
     backend: object = "nanogpt",
@@ -242,7 +254,8 @@ def _s5_opd_run_name(
     prefix = "s5-opd-hf" if str(backend) == "hf" else "s5-opd"
     return (
         f"{prefix}-{objective}-m{int(m)}-n{int(subset_size)}-eta{_float_tag(eta)}-"
-        f"{teacher_law}-{_temp_tag(student_temperature)}-seed{int(seed)}"
+        f"{teacher_law}-{_opd_student_tag(student_rollout_temperature, student_temperature)}-"
+        f"seed{int(seed)}"
     )
 
 
@@ -301,12 +314,14 @@ def _modadd_opd_run_name(
     subset_size: object,
     eta: object,
     teacher_law: object,
+    student_rollout_temperature: object,
     student_temperature: object,
     seed: object,
 ) -> str:
     return (
         f"modadd-opd-{objective}-p{int(p)}-m{int(m)}-n{int(subset_size)}-eta{_float_tag(eta)}-"
-        f"{teacher_law}-{_temp_tag(student_temperature)}-seed{int(seed)}"
+        f"{teacher_law}-{_opd_student_tag(student_rollout_temperature, student_temperature)}-"
+        f"seed{int(seed)}"
     )
 
 

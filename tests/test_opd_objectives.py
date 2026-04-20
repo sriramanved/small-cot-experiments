@@ -158,18 +158,28 @@ class OpdObjectiveTests(unittest.TestCase):
                 types.SimpleNamespace(
                     objective="forward_kl_simple",
                     student_temperature=0.0,
+                    student_rollout_temperature=0.0,
                 )
             )
         validate_args(
             types.SimpleNamespace(
+                objective="forward_kl_simple",
+                student_temperature=1.0,
+                student_rollout_temperature=0.0,
+            )
+        )
+        validate_args(
+            types.SimpleNamespace(
                 objective="reverse_kl_tm",
                 student_temperature=0.0,
+                student_rollout_temperature=0.0,
             )
         )
         validate_args(
             types.SimpleNamespace(
                 objective="reverse_kl_full",
                 student_temperature=0.0,
+                student_rollout_temperature=0.0,
             )
         )
 
@@ -234,6 +244,40 @@ class OpdObjectiveTests(unittest.TestCase):
                     "teacher_law": "distributional_noise",
                     "objective": "reverse_kl_tm",
                     "student_temperature": 1.0,
+                    "shuffle_prompts": False,
+                    "seed": 123,
+                    },
+                )
+
+    def test_resume_metadata_defaults_missing_rollout_temperature_to_student_temperature(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            with open(out_dir / "run_meta.json", "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "teacher_checkpoint": "teacher",
+                        "prompt_bank_dir": "prompt_bank",
+                        "subset_size": 4,
+                        "eta": 0.1,
+                        "teacher_law": "distributional_noise",
+                        "objective": "reverse_kl_tm",
+                        "student_temperature": 1.0,
+                        "shuffle_prompts": False,
+                        "seed": 123,
+                    },
+                    f,
+                )
+            validate_resume_metadata(
+                out_dir,
+                {
+                    "teacher_checkpoint": "teacher",
+                    "prompt_bank_dir": "prompt_bank",
+                    "subset_size": 4,
+                    "eta": 0.1,
+                    "teacher_law": "distributional_noise",
+                    "objective": "reverse_kl_tm",
+                    "student_temperature": 1.0,
+                    "student_rollout_temperature": 1.0,
                     "shuffle_prompts": False,
                     "seed": 123,
                 },
