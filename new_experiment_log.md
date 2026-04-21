@@ -6,8 +6,6 @@ This log tracks the current S5, `m = 21` experiment suite under the native Hydra
 
 For the S5, `m = 21` task, we first trained a clean expert with online CoT training for `100k` iterations.
 
-Expert run details:
-
 - Experiment: `s5_cot_len21`
 - Teacher seed: `20260417`
 - Optim seed: `20260417`
@@ -16,10 +14,78 @@ Expert run details:
 - Fill in final metrics from `last_eval.json`: `[insert final val/loss, clean_full_exact, clean_final_exact]`
 - Fill in any provenance notes: `[insert notes]`
 
+<details>
+<summary>Show clean expert hyperparameters and run details</summary>
+
+- Hydra experiment: `s5_cot_len21`
+- Pipeline: `pretrain`
+- Task config family: `hydra_configs/task/s5_cot.yaml`
+- Model config family: `hydra_configs/model/s5_len21_cot.yaml`
+- Optim config family: `hydra_configs/optim/synthetic_expert.yaml`
+- Runtime config family: `hydra_configs/runtime/gpu_float16.yaml`
+- Cluster default: `local`
+- Logging default: `enabled`
+- Task:
+  - `dataset = s5_cot`
+  - `task = s5`
+  - `s5_mode = cot`
+  - `s5_m = 21`
+  - `teacher_depth = 1`
+  - `teacher_seed = 20260417`
+- Model:
+  - `n_layer = 1`
+  - `n_head = 8`
+  - `n_embd = 512`
+  - `dropout = 0.0`
+  - `bias = false`
+  - `block_size = s5_block_size(task.s5_m, task.s5_mode)`
+- Runtime:
+  - `device = cuda`
+  - `dtype = float16`
+  - `backend = nccl`
+  - `compile = true` at the experiment level
+  - `torchrun.nproc_per_node = 1`
+- Optimizer / training:
+  - `init_from = scratch`
+  - `batch_size = 64`
+  - `gradient_accumulation_steps = 1`
+  - `learning_rate = 1e-5`
+  - `max_iters = 100000` for this run
+  - `lr_decay_iters = 100000` for this run
+  - `warmup_iters = 2000`
+  - `decay_lr = true`
+  - `min_lr = learning_rate`
+  - `weight_decay = 0.0`
+  - `beta1 = 0.9`
+  - `beta2 = 0.95`
+  - `grad_clip = 1.0`
+  - `eval_interval = 5000`
+  - `eval_iters = 200`
+  - `log_interval = 50`
+  - `always_save_checkpoint = true`
+  - `save_every = 0`
+  - `final_eval_on_exit = true`
+  - `s5_eval_metrics = true`
+  - `s5_eval_n = 5000` for this run
+  - `s5_eval_batch_size = 512`
+  - `s5_eval_seed = 123`
+  - `optim.seed = 20260417`
+- Output directory:
+  - `reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417`
+- Suggested provenance to record here:
+  - exact launch command
+  - host or machine used
+  - wall-clock duration
+  - final `last_eval.json`
+  - whether the run converged before the full budget
+
+</details>
+
 We then use the fixed prompt bank
 `data/s5_clean_prompt_bank_m21_n15000000_val5000`.
 
-This prompt bank stores:
+<details>
+<summary>Show what the prompt bank stores</summary>
 
 - `clean_train_prompt_ids.pt`
 - `clean_train_cot_ids.pt`
@@ -27,6 +93,8 @@ This prompt bank stores:
 - `clean_val_cot_ids.pt`
 - `train_order.pt`
 - `meta.json`
+
+</details>
 
 The consistency policy for the current S5 comparisons is:
 
@@ -60,6 +128,9 @@ Verification notes for the prompt bank:
 
 ## Shared Hydra Backbone
 
+<details>
+<summary>Show shared Hydra backbone details</summary>
+
 All native online methods in this log share the same default optimizer backbone from `hydra_configs/optim/opd.yaml` unless explicitly overridden:
 
 - `batch_size = 64`
@@ -90,20 +161,33 @@ Shared model / runtime defaults for the current S5 work:
   - `dropout = 0.0`
   - `bias = false`
 
-Offline BC is close but not identical:
+</details>
+
+<details>
+<summary>Show offline BC caveats</summary>
+
+Offline BC is close but not identical to the native online methods:
 
 - it uses `experiment=s5_noisy_bc`
-- it runs through the `pretrain` pipeline
+- it runs through the `pretrain` pipeline rather than the native student-prefix trainer
 - it uses `hydra_configs/optim/synthetic_offline_bc.yaml`
 - the main optimizer values match the online defaults above
 - it uses `offline_single_epoch = true` rather than the online trainer's `single_epoch = true`
+- it consumes rendered datasets from disk rather than reading the prompt bank directly during training
+- it depends on `task.render_seed`
+- offline rollout law and online `teacher_law` are different config surfaces and should not be conflated
+- for the current matching rule, compare:
+  - offline BC with `rollout_mode=sample_then_corrupt`
+  - online NAIL / OPD with `teacher_law=distributional_noise`
+
+</details>
 
 ## Sweep Matrix With Seed 20260417
 
 | Sweep | Etas | Matched law | Status | Notes |
 |---|---|---|---|---|
 | Offline BC | `0.0, 0.1, 0.7` | `sample_then_corrupt` | 🚫 | Interleave render and train per eta; uses rendered offline datasets rather than the prompt bank directly |
-| NAIL-forward, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ | Native `nail` with `loss=forward`; greedy rollout is the default NAIL behavior |
+| NAIL-forward, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ | Native `nail` with `loss=forward`; greedy rollout is the default NAIL behavior; `nail_forward_m21_seed20260417_n8m_remaining_resume.out` for eta `0.1` due to broken run |
 | NAIL-reverse, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ | Native `nail` with `loss=reverse`; same MC reverse estimator as TM-OPD but on greedy student prefixes |
 | NAIL-forward, sampled student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | 🚫 | Same as forward NAIL except override rollout temperature to `1.0` |
 | TM OPD | `0.0, 0.1, 0.7` | `distributional_noise` | 🚫 | Native `opd`; reverse-KL on sampled student rollouts |
@@ -168,7 +252,67 @@ Important notes:
 
 Commands:
 
-- `[paste render/train commands here]`
+```bash
+nohup bash -lc '
+for eta in 0.0 0.1; do
+  .venv/bin/python -m nanogpt.run \
+    experiment=s5_render \
+    task.s5_m=21 \
+    task.bank_seed=1337 \
+    task.teacher_seed=20260417 \
+    task.render_seed=20260417 \
+    task.n_train=15000000 \
+    task.n_val=5000 \
+    task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 \
+    task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 \
+    task.subset_size=8000000 \
+    task.rollout_mode=sample_then_corrupt \
+    task.target_mode=tokens \
+    task.eta=$eta || exit 1
+
+  .venv/bin/python -m nanogpt.run \
+    experiment=s5_noisy_bc \
+    task.s5_m=21 \
+    task.teacher_seed=20260417 \
+    task.render_seed=20260417 \
+    optim.seed=20260417 \
+    task.subset_size=8000000 \
+    task.rollout_mode=sample_then_corrupt \
+    task.target_mode=tokens \
+    task.eta=$eta || exit 1
+done
+' > logs/s5_bc_interleaved_m21_seed20260417_n8m_eta0p0_0p1.out 2>&1 &
+
+nohup bash -lc '
+eta=0.7
+
+.venv/bin/python -m nanogpt.run \
+  experiment=s5_render \
+  task.s5_m=21 \
+  task.bank_seed=1337 \
+  task.teacher_seed=20260417 \
+  task.render_seed=20260417 \
+  task.n_train=15000000 \
+  task.n_val=5000 \
+  task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 \
+  task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 \
+  task.subset_size=12000000 \
+  task.rollout_mode=sample_then_corrupt \
+  task.target_mode=tokens \
+  task.eta=$eta || exit 1
+
+.venv/bin/python -m nanogpt.run \
+  experiment=s5_noisy_bc \
+  task.s5_m=21 \
+  task.teacher_seed=20260417 \
+  task.render_seed=20260417 \
+  optim.seed=20260417 \
+  task.subset_size=12000000 \
+  task.rollout_mode=sample_then_corrupt \
+  task.target_mode=tokens \
+  task.eta=$eta || exit 1
+' > logs/s5_bc_interleaved_m21_seed20260417_n12m_eta0p7.out 2>&1 &
+```
 
 Results:
 
@@ -199,7 +343,63 @@ Key settings:
 
 Commands:
 
-- `[paste commands here]`
+```bash
+nohup .venv/bin/python -m nanogpt.run --multirun \
+  experiment=s5_nail \
+  task.s5_m=21 \
+  task.bank_seed=1337 \
+  task.teacher_seed=20260417 \
+  optim.seed=20260417 \
+  task.n_train=15000000 \
+  task.n_val=5000 \
+  task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 \
+  task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 \
+  task.teacher_signal=mc \
+  task.loss=forward \
+  task.rollout_temperature_override=0.0 \
+  task.subset_size=8000000 \
+  task.eta=0.0,0.1 \
+  > logs/nail_forward_m21_seed20260417_n8m.out 2>&1 &
+```
+
+Example of resume usage below
+
+```bash
+nohup .venv/bin/python -m nanogpt.run --multirun \
+  experiment=s5_nail \
+  optim.init_from=resume \
+  task.s5_m=21 \
+  task.bank_seed=1337 \
+  task.teacher_seed=20260417 \
+  optim.seed=20260417 \
+  task.n_train=15000000 \
+  task.n_val=5000 \
+  task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 \
+  task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 \
+  task.teacher_signal=mc \
+  task.loss=forward \
+  task.rollout_temperature_override=0.0 \
+  task.subset_size=8000000 \
+  task.eta=0.1 \
+  > logs/nail_forward_m21_seed20260417_n8m_remaining_resume.out 2>&1 &
+
+nohup .venv/bin/python -m nanogpt.run \
+  experiment=s5_nail \
+  task.s5_m=21 \
+  task.bank_seed=1337 \
+  task.teacher_seed=20260417 \
+  optim.seed=20260417 \
+  task.n_train=15000000 \
+  task.n_val=5000 \
+  task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 \
+  task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 \
+  task.teacher_signal=mc \
+  task.loss=forward \
+  task.rollout_temperature_override=0.0 \
+  task.subset_size=12000000 \
+  task.eta=0.7 \
+  > logs/nail_forward_m21_seed20260417_n12m.out 2>&1 &
+```
 
 Results:
 
@@ -233,7 +433,41 @@ Important note:
 
 Commands:
 
-- `[paste commands here]`
+```bash
+nohup .venv/bin/python -m nanogpt.run --multirun \
+  experiment=s5_nail \
+  task.s5_m=21 \
+  task.bank_seed=1337 \
+  task.teacher_seed=20260417 \
+  optim.seed=20260417 \
+  task.n_train=15000000 \
+  task.n_val=5000 \
+  task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 \
+  task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 \
+  task.teacher_signal=mc \
+  task.loss=reverse \
+  task.rollout_temperature_override=0.0 \
+  task.subset_size=8000000 \
+  task.eta=0.0,0.1 \
+  > logs/nail_reverse_m21_seed20260417_n8m.out 2>&1 &
+
+nohup .venv/bin/python -m nanogpt.run \
+  experiment=s5_nail \
+  task.s5_m=21 \
+  task.bank_seed=1337 \
+  task.teacher_seed=20260417 \
+  optim.seed=20260417 \
+  task.n_train=15000000 \
+  task.n_val=5000 \
+  task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 \
+  task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 \
+  task.teacher_signal=mc \
+  task.loss=reverse \
+  task.rollout_temperature_override=0.0 \
+  task.subset_size=12000000 \
+  task.eta=0.7 \
+  > logs/nail_reverse_m21_seed20260417_n12m.out 2>&1 &
+```
 
 Results:
 
@@ -242,7 +476,7 @@ Results:
 </details>
 
 <details>
-<summary>NAIL-forward, sampled student rollout</summary>
+<summary>NAIL-forward, sampled student rollout with temperature 1</summary>
 
 Definition:
 
@@ -263,7 +497,41 @@ Key settings:
 
 Commands:
 
-- `[paste commands here]`
+```bash
+nohup .venv/bin/python -m nanogpt.run --multirun \
+  experiment=s5_nail \
+  task.s5_m=21 \
+  task.bank_seed=1337 \
+  task.teacher_seed=20260417 \
+  optim.seed=20260417 \
+  task.n_train=15000000 \
+  task.n_val=5000 \
+  task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 \
+  task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 \
+  task.teacher_signal=mc \
+  task.loss=forward \
+  task.rollout_temperature_override=1.0 \
+  task.subset_size=8000000 \
+  task.eta=0.0,0.1 \
+  > logs/nail_forward_sampled_m21_seed20260417_n8m_eta0p0_0p1.out 2>&1 &
+
+nohup .venv/bin/python -m nanogpt.run \
+  experiment=s5_nail \
+  task.s5_m=21 \
+  task.bank_seed=1337 \
+  task.teacher_seed=20260417 \
+  optim.seed=20260417 \
+  task.n_train=15000000 \
+  task.n_val=5000 \
+  task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 \
+  task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 \
+  task.teacher_signal=mc \
+  task.loss=forward \
+  task.rollout_temperature_override=1.0 \
+  task.subset_size=12000000 \
+  task.eta=0.7 \
+  > logs/nail_forward_sampled_m21_seed20260417_n12m_eta0p7.out 2>&1 &
+```
 
 Results:
 
@@ -294,7 +562,41 @@ Key settings:
 
 Commands:
 
-- `[paste commands here]`
+```bash
+nohup .venv/bin/python -m nanogpt.run --multirun \
+  experiment=s5_opd \
+  task.s5_m=21 \
+  task.bank_seed=1337 \
+  task.teacher_seed=20260417 \
+  optim.seed=20260417 \
+  task.n_train=15000000 \
+  task.n_val=5000 \
+  task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 \
+  task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 \
+  task.teacher_signal=mc \
+  task.loss=reverse \
+  task.rollout_temperature_override=1.0 \
+  task.subset_size=8000000 \
+  task.eta=0.0,0.1 \
+  > logs/tm_opd_m21_seed20260417_n8m_eta0p0_0p1.out 2>&1 &
+
+nohup .venv/bin/python -m nanogpt.run \
+  experiment=s5_opd \
+  task.s5_m=21 \
+  task.bank_seed=1337 \
+  task.teacher_seed=20260417 \
+  optim.seed=20260417 \
+  task.n_train=15000000 \
+  task.n_val=5000 \
+  task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 \
+  task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 \
+  task.teacher_signal=mc \
+  task.loss=reverse \
+  task.rollout_temperature_override=1.0 \
+  task.subset_size=12000000 \
+  task.eta=0.7 \
+  > logs/tm_opd_m21_seed20260417_n12m_eta0p7.out 2>&1 &
+```
 
 Results:
 
@@ -339,6 +641,5 @@ Results:
 ## Open Notes
 
 - Fill in the clean expert metrics from `reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417/last_eval.json`
-- Fill in concrete run commands after launching each sweep family
 - Fill in per-eta result summaries once runs complete
 - Add explicit seed-X and seed-Y values when those sweeps are planned
