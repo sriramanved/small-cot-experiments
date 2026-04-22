@@ -187,10 +187,10 @@ Offline BC is close but not identical to the native online methods:
 | Sweep | Etas | Matched law | Status | Notes |
 |---|---|---|---|---|
 | Offline BC | `0.0, 0.1, 0.7` | `sample_then_corrupt` | 🚫 | Interleave render and train per eta; uses rendered offline datasets rather than the prompt bank directly |
-| NAIL-forward, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ | Native `nail` with `loss=forward`; greedy rollout is the default NAIL behavior; `nail_forward_m21_seed20260417_n8m_remaining_resume.out` for eta `0.1` due to broken run |
-| NAIL-reverse, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ | Native `nail` with `loss=reverse`; same MC reverse estimator as TM-OPD but on greedy student prefixes |
-| NAIL-forward, sampled student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | 🚫 | Same as forward NAIL except override rollout temperature to `1.0` |
-| TM OPD | `0.0, 0.1, 0.7` | `distributional_noise` | 🚫 | Native `opd`; reverse-KL on sampled student rollouts |
+| NAIL-forward, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ on dev node | Native `nail` with `loss=forward`; greedy rollout is the default NAIL behavior; `nail_forward_m21_seed20260417_n8m_remaining_resume.out` for eta `0.1` due to broken run |
+| NAIL-reverse, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ on dev node | Native `nail` with `loss=reverse`; same MC reverse estimator as TM-OPD but on greedy student prefixes |
+| NAIL-forward, sampled student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ on aics cluster | Same as forward NAIL except override rollout temperature to `1.0` |
+| TM OPD | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ on dev node | Native `opd`; reverse-KL on sampled student rollouts |
 
 ## Sweep Matrix With Seed X
 
