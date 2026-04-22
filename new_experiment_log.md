@@ -182,33 +182,35 @@ Offline BC is close but not identical to the native online methods:
 
 </details>
 
+For all of the below sweeps, we use the same clean expert (we used online CoT training for `100k` iterations) with seed `20260417`. So when running sweeps for other seeds, we change `task.render_seed` and `optim.seed` while keeping `task.teacher_seed` the same. 
+
 ## Sweep Matrix With Seed 20260417
 
 | Sweep | Etas | Matched law | Status | Notes |
 |---|---|---|---|---|
-| Offline BC | `0.0, 0.1, 0.7` | `sample_then_corrupt` | 🚫 | Interleave render and train per eta; uses rendered offline datasets rather than the prompt bank directly |
+| Offline BC | `0.0, 0.1, 0.7` | `sample_then_corrupt` | ⚠️ on dev node | Interleave render and train per eta; uses rendered offline datasets rather than the prompt bank directly |
 | NAIL-forward, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ on dev node | Native `nail` with `loss=forward`; greedy rollout is the default NAIL behavior; `nail_forward_m21_seed20260417_n8m_remaining_resume.out` for eta `0.1` due to broken run |
-| NAIL-reverse, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ on dev node | Native `nail` with `loss=reverse`; same MC reverse estimator as TM-OPD but on greedy student prefixes |
-| NAIL-forward, sampled student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ on aics cluster | Same as forward NAIL except override rollout temperature to `1.0` |
-| TM OPD | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ on dev node | Native `opd`; reverse-KL on sampled student rollouts |
+| NAIL-reverse, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ on dev node | Native `nail` with `loss=reverse`; same MC reverse estimator as TM-OPD but on greedy student prefixes |
+| NAIL-forward, sampled student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ `0.0, 0.1` ran on aics cluster, ⚠️ check `0.7` | Same as forward NAIL except override rollout temperature to `1.0` |
+| TM OPD | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ on dev node | Native `opd`; reverse-KL on sampled student rollouts |
 
-## Sweep Matrix With Seed X
+## Sweep Matrix With Seed 20260418
+
+| Sweep | Etas | Matched law | Status | Notes |
+|---|---|---|---|---|
+| Offline BC | `0.0, 0.1, 0.7` | `sample_then_corrupt` | 🚫 queue on dev node next | N/A |
+| NAIL-forward, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ pending on aics cluster | N/A |
+| NAIL-reverse, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ pending on aics cluster | ran all for 12M |
+| NAIL-forward, sampled student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | 🚫 queue on dev node next | N/A |
+| TM OPD | `0.0, 0.1, 0.7` | `distributional_noise` | 🚫 queue on dev node next | N/A |
+
+## Sweep Matrix With Seed 20260419
 
 | Sweep | Etas | Matched law | Status | Notes |
 |---|---|---|---|---|
 | Offline BC | `0.0, 0.1, 0.7` | `sample_then_corrupt` | 🚫 | N/A |
-| NAIL-forward, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | 🚫 | N/A |
-| NAIL-reverse, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | 🚫 | N/A |
-| NAIL-forward, sampled student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | 🚫 | N/A |
-| TM OPD | `0.0, 0.1, 0.7` | `distributional_noise` | 🚫 | N/A |
-
-## Sweep Matrix With Seed Y
-
-| Sweep | Etas | Matched law | Status | Notes |
-|---|---|---|---|---|
-| Offline BC | `0.0, 0.1, 0.7` | `sample_then_corrupt` | 🚫 | N/A |
-| NAIL-forward, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | 🚫 | N/A |
-| NAIL-reverse, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | 🚫 | N/A |
+| NAIL-forward, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ pending on aics cluster | N/A |
+| NAIL-reverse, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ pending on aics cluster | ran all for 12M |
 | NAIL-forward, sampled student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | 🚫 | N/A |
 | TM OPD | `0.0, 0.1, 0.7` | `distributional_noise` | 🚫 | N/A |
 
@@ -250,7 +252,7 @@ Important notes:
 - depends on `task.render_seed`
 - should be compared against online runs with `teacher_law=distributional_noise`
 
-Commands:
+Commands for seed `20260417`:
 
 ```bash
 nohup bash -lc '
@@ -341,7 +343,7 @@ Key settings:
 - rollout is greedy by default for NAIL
 - equivalently, `task.rollout_temperature_override=0.0`
 
-Commands:
+Commands for seed `20260417`:
 
 ```bash
 nohup .venv/bin/python -m nanogpt.run --multirun \
@@ -431,7 +433,7 @@ Important note:
 
 - in the current MC setup, this uses the same sampled reverse-KL estimator as TM-OPD, but with greedy student rollouts instead of sampled student rollouts
 
-Commands:
+Commands for seed `20260417`:
 
 ```bash
 nohup .venv/bin/python -m nanogpt.run --multirun \
@@ -495,7 +497,7 @@ Key settings:
 - `task.teacher_signal=mc`
 - `task.rollout_temperature_override=1.0`
 
-Commands:
+Commands for seed `20260417`:
 
 ```bash
 nohup .venv/bin/python -m nanogpt.run --multirun \
@@ -560,7 +562,7 @@ Key settings:
 - sampled student rollout is the OPD default
 - equivalently, `task.rollout_temperature_override=1.0`
 
-Commands:
+Commands for seed `20260417`:
 
 ```bash
 nohup .venv/bin/python -m nanogpt.run --multirun \
