@@ -214,6 +214,27 @@ For all of the below sweeps, we use the same clean expert (we used online CoT tr
 | NAIL-forward, sampled student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ on aics cluster | N/A |
 | TM OPD | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ on dev node | ran all for 12M |
 
+<details>
+<summary>S5 m=21 Seed-Sweep Plots</summary>
+
+Clean full exact:
+
+![eta 0.0 clean full exact](analysis/figures/s5_method_seed_sweeps_m21_teacher20260417/eta0p0_clean_full_exact_online_seed_sweeps.png)
+
+![eta 0.1 clean full exact](analysis/figures/s5_method_seed_sweeps_m21_teacher20260417/eta0p1_clean_full_exact_online_seed_sweeps.png)
+
+![eta 0.7 clean full exact](analysis/figures/s5_method_seed_sweeps_m21_teacher20260417/eta0p7_clean_full_exact_online_seed_sweeps.png)
+
+Clean final exact:
+
+![eta 0.0 clean final exact](analysis/figures/s5_method_seed_sweeps_m21_teacher20260417/eta0p0_clean_final_exact_online_seed_sweeps.png)
+
+![eta 0.1 clean final exact](analysis/figures/s5_method_seed_sweeps_m21_teacher20260417/eta0p1_clean_final_exact_online_seed_sweeps.png)
+
+![eta 0.7 clean final exact](analysis/figures/s5_method_seed_sweeps_m21_teacher20260417/eta0p7_clean_final_exact_online_seed_sweeps.png)
+
+</details>
+
 ## Methods Glossary
 
 - All methods share:
