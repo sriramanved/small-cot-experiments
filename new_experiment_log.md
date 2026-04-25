@@ -219,7 +219,7 @@ For all of the below sweeps, we use the same clean expert (we used online CoT tr
 
 Clean full exact:
 
-![eta 0.0 clean full exact](analysis/figures/s5_method_seed_sweeps_m21_teacher20260417/eta0p0_clean_full_exact_online_seed_sweeps.png)
+![eta 0.0 clean full exact](analysis/figures/s5_method_seed_sweeps_m21_teacher20260417/eta0_clean_full_exact_online_seed_sweeps.png)
 
 ![eta 0.1 clean full exact](analysis/figures/s5_method_seed_sweeps_m21_teacher20260417/eta0p1_clean_full_exact_online_seed_sweeps.png)
 
@@ -227,7 +227,7 @@ Clean full exact:
 
 Clean final exact:
 
-![eta 0.0 clean final exact](analysis/figures/s5_method_seed_sweeps_m21_teacher20260417/eta0p0_clean_final_exact_online_seed_sweeps.png)
+![eta 0.0 clean final exact](analysis/figures/s5_method_seed_sweeps_m21_teacher20260417/eta0_clean_final_exact_online_seed_sweeps.png)
 
 ![eta 0.1 clean final exact](analysis/figures/s5_method_seed_sweeps_m21_teacher20260417/eta0p1_clean_final_exact_online_seed_sweeps.png)
 
