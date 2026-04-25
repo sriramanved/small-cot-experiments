@@ -17,6 +17,7 @@ from hydra import compose, initialize_config_dir
 from data.s5_cot.task import VOCAB_SIZE, sample_cot_example_ids_from_rng
 from model import GPT, GPTConfig
 from nanogpt.config_schema import materialize_config
+from nanogpt.trainers.nail import run_nail
 from nanogpt.trainers.configs import (
     project_nail_config,
     project_opd_config,
@@ -165,6 +166,18 @@ class HydraConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "single-process only"):
             project_nail_config(cfg)
 
+    def test_s5_nail_reverse_debug_projection_wires_reverse_controls(self):
+        cfg = _compose_app(
+            "experiment=s5_nail_reverse_debug",
+            "task.rollout_temperature_override=0.2",
+            "optim.shuffle_prompts=true",
+        )
+        projected = project_nail_config(cfg)
+        self.assertEqual(projected.loss, "reverse")
+        self.assertEqual(projected.teacher_signal, "mc")
+        self.assertEqual(projected.rollout_temperature_override, 0.2)
+        self.assertTrue(projected.shuffle_prompts)
+
     def test_opd_hf_projection_rejects_parallel_torchrun(self):
         cfg = _compose_app(
             "experiment=s5_opd_hf",
@@ -196,6 +209,7 @@ class HydraConfigTests(unittest.TestCase):
             "modadd_noisy_bc",
             "s5_opd",
             "s5_nail",
+            "s5_nail_reverse_debug",
             "modadd_opd",
             "modadd_nail",
             "s5_opd_hf",
@@ -232,6 +246,78 @@ class HydraConfigTests(unittest.TestCase):
                 )
                 self.assertIn("hydra:", result.stdout)
                 self.assertIn("params:", result.stdout)
+
+    def test_s5_nail_reverse_debug_logs_reverse_diagnostics_to_wandb(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            prompt_bank_dir = root / "prompt_bank"
+            teacher_dir = root / "teacher"
+            out_dir = root / "nail_reverse_debug_out"
+
+            _write_s5_prompt_bank(prompt_bank_dir, m=2, n_train=4, n_val=2, seed=17)
+            _write_teacher_checkpoint(teacher_dir, block_size=28)
+
+            cfg = project_nail_config(
+                _compose_app(
+                    "experiment=s5_nail_reverse_debug",
+                    "runtime=cpu",
+                    "logging.wandb_log=true",
+                    "task.s5_m=2",
+                    f"task.teacher_checkpoint={teacher_dir}",
+                    f"task.prompt_bank_dir={prompt_bank_dir}",
+                    "task.subset_size=4",
+                    f"run.out_dir={out_dir}",
+                    "optim.batch_size=2",
+                    "optim.max_iters=1",
+                    "optim.learning_rate=0.001",
+                    "optim.warmup_iters=0",
+                    "optim.eval_interval=1",
+                    "optim.eval_n=2",
+                    "optim.eval_batch_size=2",
+                    "optim.log_interval=1",
+                    "optim.seed=7",
+                )
+            )
+
+            logged_payloads: list[dict[str, object]] = []
+
+            class FakeWandb:
+                def log(self, payload):
+                    logged_payloads.append(dict(payload))
+
+                def finish(self):
+                    return None
+
+            with mock.patch(
+                "nanogpt.trainers.native_student_prefix.maybe_init_wandb",
+                return_value=FakeWandb(),
+            ):
+                run_nail(
+                    cfg,
+                    launcher_command=[str(PYTHON), "-m", "nanogpt.run", "experiment=s5_nail_reverse_debug"],
+                )
+
+            train_payloads = [payload for payload in logged_payloads if "train/loss" in payload]
+            self.assertTrue(train_payloads)
+            train_payload = train_payloads[-1]
+            for key in (
+                "train/log_p",
+                "train/importance_weight_mean",
+                "train/importance_weight_std",
+                "train/importance_weight_max",
+                "train/importance_weight_min",
+                "train/pre_clip_grad_norm",
+                "train/post_clip_grad_norm",
+                "train/grad_clipped",
+                "train/clipping_fraction_ema",
+                "train/lr",
+                "train/param_norm",
+            ):
+                self.assertIn(key, train_payload)
+
+            checkpoint = torch.load(out_dir / "ckpt.pt", map_location="cpu", weights_only=False)
+            self.assertIn("diagnostics_state", checkpoint)
+            self.assertIn("clipping_fraction_ema", checkpoint["diagnostics_state"])
 
     def test_submitit_aics_config_composes(self):
         result = _run_hydra(

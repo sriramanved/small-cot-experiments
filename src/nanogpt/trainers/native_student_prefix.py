@@ -109,6 +109,69 @@ def task_reports_cot_exact(task_name: str) -> bool:
     return False
 
 
+CLIPPING_FRACTION_EMA_DECAY = 0.95
+
+
+def build_reverse_mc_step_metrics(
+    *,
+    loss: torch.Tensor,
+    objective_stats: dict[str, torch.Tensor],
+    log_q: torch.Tensor,
+) -> dict[str, float]:
+    importance_weight = objective_stats["importance_weight"]
+    return {
+        "train/loss": float(loss.item()),
+        "train/advantage": float(objective_stats["advantage"].mean().item()),
+        "train/log_q": float(log_q.mean().item()),
+        "train/log_teacher": float(objective_stats["log_teacher"].mean().item()),
+        "train/log_p": float(objective_stats["log_p"].mean().item()),
+        "train/importance_weight_mean": float(importance_weight.mean().item()),
+        "train/importance_weight_std": float(importance_weight.std(unbiased=False).item()),
+        "train/importance_weight_max": float(importance_weight.max().item()),
+        "train/importance_weight_min": float(importance_weight.min().item()),
+    }
+
+
+def _compute_total_grad_norm(model: torch.nn.Module) -> float:
+    total_sq_norm = 0.0
+    for param in model.parameters():
+        if param.grad is None:
+            continue
+        grad = param.grad.detach().float()
+        total_sq_norm += float(torch.sum(grad * grad).item())
+    return total_sq_norm ** 0.5
+
+
+def _compute_total_param_norm(model: torch.nn.Module) -> float:
+    total_sq_norm = 0.0
+    for param in model.parameters():
+        value = param.detach().float()
+        total_sq_norm += float(torch.sum(value * value).item())
+    return total_sq_norm ** 0.5
+
+
+def apply_grad_clip_with_diagnostics(
+    model: torch.nn.Module,
+    *,
+    grad_clip: float,
+) -> dict[str, float]:
+    with torch.no_grad():
+        pre_clip_grad_norm = _compute_total_grad_norm(model)
+        param_norm = _compute_total_param_norm(model)
+        grad_clipped = float(grad_clip > 0 and pre_clip_grad_norm > float(grad_clip))
+        if grad_clip > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            post_clip_grad_norm = _compute_total_grad_norm(model)
+        else:
+            post_clip_grad_norm = pre_clip_grad_norm
+    return {
+        "train/pre_clip_grad_norm": pre_clip_grad_norm,
+        "train/post_clip_grad_norm": post_clip_grad_norm,
+        "train/grad_clipped": grad_clipped,
+        "train/param_norm": param_norm,
+    }
+
+
 def save_run_metadata(
     out_dir: Path,
     *,
@@ -402,6 +465,7 @@ def save_checkpoint(
     config: dict[str, object],
     prompt_cycle: FixedPromptCycle,
     device: str,
+    clipping_fraction_ema: float,
 ) -> None:
     checkpoint = {
         "model": normalize_state_dict_for_save(model.state_dict()),
@@ -412,6 +476,9 @@ def save_checkpoint(
         "config": config,
         "prompt_cycle_state": prompt_cycle.state_dict(),
         "rng_state": capture_rng_state(device),
+        "diagnostics_state": {
+            "clipping_fraction_ema": float(clipping_fraction_ema),
+        },
     }
     torch.save(checkpoint, out_dir / "ckpt.pt")
 
@@ -627,6 +694,11 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
     loss_temperature = method_state["resolved_loss_temperature"]
     running_metrics: dict[str, float] = {}
     running_steps = 0
+    clipping_fraction_ema = 0.0
+    if source_checkpoint is not None:
+        diagnostics_state = source_checkpoint.get("diagnostics_state") or {}
+        clipping_fraction_ema = float(diagnostics_state.get("clipping_fraction_ema", 0.0))
+    latest_step_metrics: dict[str, float] = {}
     t0 = time.time()
 
     while iter_num < cfg.max_iters:
@@ -676,6 +748,7 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                 config=config,
                 prompt_cycle=prompt_cycle,
                 device=device,
+                clipping_fraction_ema=clipping_fraction_ema,
             )
             if cfg.save_interval > 0 and iter_num > 0 and iter_num % cfg.save_interval == 0:
                 torch.save(
@@ -694,8 +767,6 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
         teacher_targets = None
         teacher_target_probs = None
         log_teacher_target = None
-        advantage = None
-        log_teacher = None
 
         student.eval()
         with torch.no_grad():
@@ -718,11 +789,7 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                 device=device,
                 autocast_context=autocast_context,
             )
-            if cfg.teacher_signal == "mc" and cfg.loss == "reverse":
-                teacher_action_probs = teacher_probs.gather(2, actions.unsqueeze(-1)).squeeze(-1)
-                log_teacher = torch.log(teacher_action_probs.clamp_min(cfg.eps))
-                advantage = log_teacher - log_q
-            elif cfg.teacher_signal == "mc" and cfg.loss == "forward":
+            if cfg.teacher_signal == "mc" and cfg.loss == "forward":
                 teacher_targets = sample_teacher_actions(teacher_probs)
                 teacher_target_probs = teacher_probs.gather(2, teacher_targets.unsqueeze(-1)).squeeze(-1)
                 log_teacher_target = torch.log(teacher_target_probs.clamp_min(cfg.eps))
@@ -743,12 +810,11 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                     teacher_probs=teacher_probs,
                     eps=cfg.eps,
                 )
-                step_metrics = {
-                    "train/loss": float(loss.item()),
-                    "train/advantage": float(objective_stats["advantage"].mean().item()),
-                    "train/log_q": float(log_q.mean().item()),
-                    "train/log_teacher": float(objective_stats["log_teacher"].mean().item()),
-                }
+                step_metrics = build_reverse_mc_step_metrics(
+                    loss=loss,
+                    objective_stats=objective_stats,
+                    log_q=log_q,
+                )
             elif cfg.teacher_signal == "full" and cfg.loss == "reverse":
                 loss, objective_stats = reverse_kl_full_loss(
                     p_answer_logits,
@@ -791,9 +857,20 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                 }
 
         scaler.scale(loss).backward()
-        if cfg.grad_clip > 0:
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(student.parameters(), cfg.grad_clip)
+        scaler.unscale_(optimizer)
+        optimizer_step_metrics = apply_grad_clip_with_diagnostics(
+            student,
+            grad_clip=cfg.grad_clip,
+        )
+        clipping_fraction_ema = (
+            CLIPPING_FRACTION_EMA_DECAY * clipping_fraction_ema
+            + (1.0 - CLIPPING_FRACTION_EMA_DECAY) * optimizer_step_metrics["train/grad_clipped"]
+        )
+        latest_step_metrics = {
+            **optimizer_step_metrics,
+            "train/clipping_fraction_ema": float(clipping_fraction_ema),
+            "train/lr": float(lr),
+        }
         scaler.step(optimizer)
         scaler.update()
         optimizer.zero_grad(set_to_none=True)
@@ -807,7 +884,7 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
             t0 = time.time()
             denom = max(1, running_steps)
             train_stats = {key: value / denom for key, value in running_metrics.items()}
-            train_stats["lr"] = lr
+            train_stats.update(latest_step_metrics)
             train_stats["iter"] = iter_num
             metric_str = ", ".join(
                 f"{key.split('/')[-1]} {train_stats[key]:.4f}"
@@ -850,6 +927,7 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
         config=config,
         prompt_cycle=prompt_cycle,
         device=device,
+        clipping_fraction_ema=clipping_fraction_ema,
     )
     mark_complete(out_dir, iter_num)
     if wandb is not None:

@@ -5,7 +5,7 @@ defaults:
   - /model: s5_depth1
   - /optim: synthetic_offline_bc
   - /runtime: gpu_float16
-  - /logging: disabled
+  - /logging: enabled
   - /cluster: local
   - _self_
 

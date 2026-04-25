@@ -182,37 +182,37 @@ Offline BC is close but not identical to the native online methods:
 
 </details>
 
-For all of the below sweeps, we use the same clean expert (we used online CoT training for `100k` iterations) with seed `20260417`. So when running sweeps for other seeds, we change `task.render_seed` and `optim.seed` while keeping `task.teacher_seed` the same. 
+For all of the below sweeps, we use the same clean expert (we used online CoT training for `100k` iterations) with seed `20260417`. So when running sweeps for other seeds, we change `task.render_seed` (for offline rendering) and `optim.seed` (for training) while keeping `task.teacher_seed = 20260417` the same. 
 
 ## Sweep Matrix With Seed 20260417
 
 | Sweep | Etas | Matched law | Status | Notes |
 |---|---|---|---|---|
-| Offline BC | `0.0, 0.1, 0.7` | `sample_then_corrupt` | ⚠️ running on dev node but broke 🚫 | Interleave render and train per eta; uses rendered offline datasets rather than the prompt bank directly |
+| Offline BC | `0.0, 0.1, 0.7` | `sample_then_corrupt` | ✅ ran (again) on dev node | Interleave render and train per eta; uses rendered offline datasets rather than the prompt bank directly |
 | NAIL-forward, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ on dev node | Native `nail` with `loss=forward`; greedy rollout is the default NAIL behavior; `nail_forward_m21_seed20260417_n8m_remaining_resume.out` for eta `0.1` due to broken run |
 | NAIL-reverse, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ on dev node | Native `nail` with `loss=reverse`; same MC reverse estimator as TM-OPD but on greedy student prefixes |
-| NAIL-forward, sampled student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ `0.0, 0.1` ran on aics cluster, ⚠️ check `0.7` | Same as forward NAIL except override rollout temperature to `1.0` |
+| NAIL-forward, sampled student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ `0.0, 0.1, 0.7` ran on aics cluster | Same as forward NAIL except override rollout temperature to `1.0` |
 | TM OPD | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ on dev node | Native `opd`; reverse-KL on sampled student rollouts |
 
 ## Sweep Matrix With Seed 20260418
 
 | Sweep | Etas | Matched law | Status | Notes |
 |---|---|---|---|---|
-| Offline BC | `0.0, 0.1, 0.7` | `sample_then_corrupt` | 🚫 queue on dev node next | N/A |
-| NAIL-forward, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ pending on aics cluster | N/A |
-| NAIL-reverse, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ pending on aics cluster | ran all for 12M |
-| NAIL-forward, sampled student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ preempt on aics cluster | N/A |
-| TM OPD | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ running on dev node | ran all for 12M |
+| Offline BC | `0.0, 0.1, 0.7` | `sample_then_corrupt` | ✅ on dev node | N/A |
+| NAIL-forward, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ `0.0, 0.1, 0.7` ran on aics cluster | N/A |
+| NAIL-reverse, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ ran on aics cluster | ran all for 12M |
+| NAIL-forward, sampled student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ ran on aics cluster | N/A |
+| TM OPD | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ on dev node | ran all for 12M |
 
 ## Sweep Matrix With Seed 20260419
 
 | Sweep | Etas | Matched law | Status | Notes |
 |---|---|---|---|---|
-| Offline BC | `0.0, 0.1, 0.7` | `sample_then_corrupt` | 🚫 | N/A |
-| NAIL-forward, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ pending on aics cluster | N/A |
-| NAIL-reverse, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ pending on aics cluster | ran all for 12M |
-| NAIL-forward, sampled student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ preempt on aics cluster | N/A |
-| TM OPD | `0.0, 0.1, 0.7` | `distributional_noise` | ⚠️ running on dev node | ran all for 12M |
+| Offline BC | `0.0, 0.1, 0.7` | `sample_then_corrupt` | ✅ on dev node | N/A |
+| NAIL-forward, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ on aics cluster | N/A |
+| NAIL-reverse, greedy student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ on aics cluster | ran all for 12M |
+| NAIL-forward, sampled student rollout | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ on aics cluster | N/A |
+| TM OPD | `0.0, 0.1, 0.7` | `distributional_noise` | ✅ on dev node | ran all for 12M |
 
 ## Methods Glossary
 

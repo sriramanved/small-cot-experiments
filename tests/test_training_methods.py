@@ -13,6 +13,10 @@ from nanogpt.methods.student_prefix import (
     reverse_kl_tm_loss,
     teacher_forward_kl,
 )
+from nanogpt.trainers.native_student_prefix import (
+    apply_grad_clip_with_diagnostics,
+    build_reverse_mc_step_metrics,
+)
 from data.synthetic.offline_losses import offline_teacher_prob_loss_from_logits
 from model import causal_lm_loss
 
@@ -288,6 +292,93 @@ class TrainingMethodTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(student_logits.grad).all().item())
         self.assertGreater(student_logits.grad.abs().sum().item(), 0.0)
         self.assertIsNone(log_q.grad)
+
+    def test_build_reverse_mc_step_metrics_surfaces_log_p_and_importance_summaries(self):
+        student_logits = torch.tensor(
+            [[[1.2, -0.3, 0.4], [0.1, 0.5, -0.7]]],
+            dtype=torch.float32,
+        )
+        teacher_probs = torch.tensor(
+            [[[0.7, 0.2, 0.1], [0.15, 0.25, 0.6]]],
+            dtype=torch.float32,
+        )
+        actions = torch.tensor([[0, 2]], dtype=torch.long)
+        log_q = torch.tensor([[-0.8, -1.4]], dtype=torch.float32)
+
+        loss, objective_stats = reverse_kl_tm_loss(
+            student_logits,
+            actions,
+            log_q=log_q,
+            teacher_probs=teacher_probs,
+            eps=1e-10,
+        )
+        step_metrics = build_reverse_mc_step_metrics(
+            loss=loss,
+            objective_stats=objective_stats,
+            log_q=log_q,
+        )
+
+        self.assertEqual(
+            set(step_metrics),
+            {
+                "train/loss",
+                "train/advantage",
+                "train/log_q",
+                "train/log_teacher",
+                "train/log_p",
+                "train/importance_weight_mean",
+                "train/importance_weight_std",
+                "train/importance_weight_max",
+                "train/importance_weight_min",
+            },
+        )
+        self.assertAlmostEqual(step_metrics["train/loss"], float(loss.item()))
+        self.assertAlmostEqual(
+            step_metrics["train/log_p"],
+            float(objective_stats["log_p"].mean().item()),
+        )
+        self.assertAlmostEqual(
+            step_metrics["train/importance_weight_mean"],
+            float(objective_stats["importance_weight"].mean().item()),
+        )
+        self.assertAlmostEqual(
+            step_metrics["train/importance_weight_std"],
+            float(objective_stats["importance_weight"].std(unbiased=False).item()),
+        )
+        self.assertAlmostEqual(
+            step_metrics["train/importance_weight_max"],
+            float(objective_stats["importance_weight"].max().item()),
+        )
+        self.assertAlmostEqual(
+            step_metrics["train/importance_weight_min"],
+            float(objective_stats["importance_weight"].min().item()),
+        )
+
+    def test_apply_grad_clip_with_diagnostics_handles_enabled_clipping(self):
+        model = torch.nn.Linear(2, 1, bias=False)
+        with torch.no_grad():
+            model.weight.copy_(torch.tensor([[3.0, 4.0]], dtype=torch.float32))
+        model.weight.grad = torch.tensor([[6.0, 8.0]], dtype=torch.float32)
+
+        metrics = apply_grad_clip_with_diagnostics(model, grad_clip=5.0)
+
+        self.assertAlmostEqual(metrics["train/pre_clip_grad_norm"], 10.0, places=5)
+        self.assertAlmostEqual(metrics["train/post_clip_grad_norm"], 5.0, places=5)
+        self.assertEqual(metrics["train/grad_clipped"], 1.0)
+        self.assertAlmostEqual(metrics["train/param_norm"], 5.0, places=5)
+
+    def test_apply_grad_clip_with_diagnostics_handles_disabled_clipping(self):
+        model = torch.nn.Linear(2, 1, bias=False)
+        with torch.no_grad():
+            model.weight.copy_(torch.tensor([[3.0, 4.0]], dtype=torch.float32))
+        model.weight.grad = torch.tensor([[6.0, 8.0]], dtype=torch.float32)
+
+        metrics = apply_grad_clip_with_diagnostics(model, grad_clip=0.0)
+
+        self.assertAlmostEqual(metrics["train/pre_clip_grad_norm"], 10.0, places=5)
+        self.assertAlmostEqual(metrics["train/post_clip_grad_norm"], 10.0, places=5)
+        self.assertEqual(metrics["train/grad_clipped"], 0.0)
+        self.assertAlmostEqual(metrics["train/param_norm"], 5.0, places=5)
 
     def test_mc_and_full_forward_objectives_diverge_on_the_same_wrong_batch(self):
         student_logits = torch.tensor(

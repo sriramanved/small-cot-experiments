@@ -13,3 +13,5 @@ venv/
 .venv/
 hydra_outputs/
 hydra_multirun/
+analysis/cache/
+analysis/imports/
