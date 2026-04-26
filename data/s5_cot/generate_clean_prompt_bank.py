@@ -88,6 +88,12 @@ def main():
         "n_val": args.n_val,
         "seed": args.seed,
         "nested_subset_order_saved": True,
+        "prompt_len": prompt_len,
+        "cot_len": cot_len,
+        "target_len": cot_len,
+        "final_answer_len": 7,
+        "answer_len": 7,
+        "target_span": "cot_with_final_answer_suffix",
         "duplicate_check_performed": False,
         "duplicate_collision_probability_negligible": True,
     }

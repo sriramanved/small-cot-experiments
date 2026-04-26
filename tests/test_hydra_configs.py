@@ -17,6 +17,7 @@ from hydra import compose, initialize_config_dir
 from data.s5_cot.task import VOCAB_SIZE, sample_cot_example_ids_from_rng
 from model import GPT, GPTConfig
 from nanogpt.config_schema import materialize_config
+from nanogpt.methods.student_prefix import reverse_kl_tm_loss as method_reverse_kl_tm_loss
 from nanogpt.trainers.nail import run_nail
 from nanogpt.trainers.configs import (
     project_nail_config,
@@ -24,6 +25,7 @@ from nanogpt.trainers.configs import (
     project_opd_hf_config,
     project_pretrain_config,
 )
+from nanogpt.trainers.opd import run_opd
 from nanogpt.trainers.pretrain import run_pretrain
 from nanogpt.utils.resolvers import register_resolvers
 
@@ -166,9 +168,9 @@ class HydraConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "single-process only"):
             project_nail_config(cfg)
 
-    def test_s5_nail_reverse_debug_projection_wires_reverse_controls(self):
+    def test_s5_nail_reverse_mc_fixed_projection_wires_reverse_controls(self):
         cfg = _compose_app(
-            "experiment=s5_nail_reverse_debug",
+            "experiment=s5_nail_reverse_mc_fixed",
             "task.rollout_temperature_override=0.2",
             "optim.shuffle_prompts=true",
         )
@@ -176,6 +178,17 @@ class HydraConfigTests(unittest.TestCase):
         self.assertEqual(projected.loss, "reverse")
         self.assertEqual(projected.teacher_signal, "mc")
         self.assertEqual(projected.rollout_temperature_override, 0.2)
+        self.assertTrue(projected.shuffle_prompts)
+
+    def test_s5_nail_reverse_full_projection_wires_full_reverse_controls(self):
+        cfg = _compose_app(
+            "experiment=s5_nail_reverse_full",
+            "optim.shuffle_prompts=true",
+        )
+        projected = project_nail_config(cfg)
+        self.assertEqual(projected.loss, "reverse")
+        self.assertEqual(projected.teacher_signal, "full")
+        self.assertEqual(projected.rollout_temperature_override, 0.0)
         self.assertTrue(projected.shuffle_prompts)
 
     def test_opd_hf_projection_rejects_parallel_torchrun(self):
@@ -209,6 +222,8 @@ class HydraConfigTests(unittest.TestCase):
             "modadd_noisy_bc",
             "s5_opd",
             "s5_nail",
+            "s5_nail_reverse_full",
+            "s5_nail_reverse_mc_fixed",
             "s5_nail_reverse_debug",
             "modadd_opd",
             "modadd_nail",
@@ -247,19 +262,19 @@ class HydraConfigTests(unittest.TestCase):
                 self.assertIn("hydra:", result.stdout)
                 self.assertIn("params:", result.stdout)
 
-    def test_s5_nail_reverse_debug_logs_reverse_diagnostics_to_wandb(self):
+    def test_s5_nail_reverse_mc_fixed_logs_auxiliary_reverse_diagnostics_to_wandb(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             prompt_bank_dir = root / "prompt_bank"
             teacher_dir = root / "teacher"
-            out_dir = root / "nail_reverse_debug_out"
+            out_dir = root / "nail_reverse_mc_fixed_out"
 
             _write_s5_prompt_bank(prompt_bank_dir, m=2, n_train=4, n_val=2, seed=17)
             _write_teacher_checkpoint(teacher_dir, block_size=28)
 
             cfg = project_nail_config(
                 _compose_app(
-                    "experiment=s5_nail_reverse_debug",
+                    "experiment=s5_nail_reverse_mc_fixed",
                     "runtime=cpu",
                     "logging.wandb_log=true",
                     "task.s5_m=2",
@@ -294,7 +309,7 @@ class HydraConfigTests(unittest.TestCase):
             ):
                 run_nail(
                     cfg,
-                    launcher_command=[str(PYTHON), "-m", "nanogpt.run", "experiment=s5_nail_reverse_debug"],
+                    launcher_command=[str(PYTHON), "-m", "nanogpt.run", "experiment=s5_nail_reverse_mc_fixed"],
                 )
 
             train_payloads = [payload for payload in logged_payloads if "train/loss" in payload]
@@ -306,6 +321,9 @@ class HydraConfigTests(unittest.TestCase):
                 "train/importance_weight_std",
                 "train/importance_weight_max",
                 "train/importance_weight_min",
+                "train/rollout_log_q_mean",
+                "train/aux_log_q_mean",
+                "train/aux_equals_rollout_rate",
                 "train/pre_clip_grad_norm",
                 "train/post_clip_grad_norm",
                 "train/grad_clipped",
@@ -318,6 +336,217 @@ class HydraConfigTests(unittest.TestCase):
             checkpoint = torch.load(out_dir / "ckpt.pt", map_location="cpu", weights_only=False)
             self.assertIn("diagnostics_state", checkpoint)
             self.assertIn("clipping_fraction_ema", checkpoint["diagnostics_state"])
+
+    def test_s5_nail_reverse_mc_fixed_uses_rollout_prefixes_and_auxiliary_actions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            prompt_bank_dir = root / "prompt_bank"
+            teacher_dir = root / "teacher"
+            out_dir = root / "nail_reverse_mc_fixed_out"
+
+            _write_s5_prompt_bank(prompt_bank_dir, m=1, n_train=2, n_val=1, seed=19)
+            _write_teacher_checkpoint(teacher_dir, block_size=14)
+
+            cfg = project_nail_config(
+                _compose_app(
+                    "experiment=s5_nail_reverse_mc_fixed",
+                    "runtime=cpu",
+                    "logging=disabled",
+                    "task.s5_m=1",
+                    f"task.teacher_checkpoint={teacher_dir}",
+                    f"task.prompt_bank_dir={prompt_bank_dir}",
+                    "task.subset_size=2",
+                    f"run.out_dir={out_dir}",
+                    "optim.batch_size=2",
+                    "optim.max_iters=1",
+                    "optim.learning_rate=0.001",
+                    "optim.warmup_iters=0",
+                    "optim.eval_interval=1",
+                    "optim.eval_n=1",
+                    "optim.eval_batch_size=1",
+                    "optim.log_interval=1",
+                    "optim.seed=7",
+                )
+            )
+
+            rollout_actions = torch.tensor(
+                [[0, 1, 2, 3, 4, 5, 6], [1, 2, 3, 4, 5, 6, 0]],
+                dtype=torch.long,
+            )
+            rollout_log_q = torch.full((2, 7), -0.7, dtype=torch.float32)
+            aux_actions = torch.tensor(
+                [[6, 5, 4, 3, 2, 1, 0], [0, 6, 5, 4, 3, 2, 1]],
+                dtype=torch.long,
+            )
+            aux_log_q = torch.full((2, 7), -1.1, dtype=torch.float32)
+            teacher_probs = torch.full((2, 7, VOCAB_SIZE), 1.0 / VOCAB_SIZE, dtype=torch.float32)
+            captured: dict[str, torch.Tensor] = {}
+
+            def fake_rollout_student(model, prompt_ids, *, target_len, temperature, device, autocast_context):
+                del model, temperature, autocast_context
+                self.assertEqual(target_len, rollout_actions.size(1))
+                prompt = prompt_ids.to(device=device, dtype=torch.long)
+                actions = rollout_actions.to(device=device)
+                full_seq = torch.cat((prompt, actions), dim=1)
+                return full_seq, actions, rollout_log_q.to(device=device)
+
+            def fake_cached_teacher_token_probs(
+                model,
+                prompt_ids,
+                actions,
+                *,
+                eta,
+                teacher_law,
+                corruptible_token_ids,
+                device,
+                autocast_context,
+            ):
+                del model, prompt_ids, eta, teacher_law, corruptible_token_ids, autocast_context
+                captured["teacher_actions"] = actions.detach().cpu().clone()
+                return teacher_probs.to(device=device)
+
+            def wrapped_reverse_kl_tm_loss(student_logits, actions, *, log_q, teacher_probs, eps):
+                captured["reverse_actions"] = actions.detach().cpu().clone()
+                captured["reverse_log_q"] = log_q.detach().cpu().clone()
+                return method_reverse_kl_tm_loss(
+                    student_logits,
+                    actions,
+                    log_q=log_q,
+                    teacher_probs=teacher_probs,
+                    eps=eps,
+                )
+
+            with mock.patch(
+                "nanogpt.trainers.native_student_prefix.run_eval",
+                return_value={
+                    "val/loss": 0.0,
+                    "val/clean_full_exact": 0.0,
+                    "val/clean_final_exact": 0.0,
+                },
+            ), mock.patch(
+                "nanogpt.trainers.native_student_prefix.rollout_student",
+                side_effect=fake_rollout_student,
+            ), mock.patch(
+                "nanogpt.trainers.native_student_prefix.cached_teacher_token_probs",
+                side_effect=fake_cached_teacher_token_probs,
+            ), mock.patch(
+                "nanogpt.trainers.native_student_prefix.sample_student_aux_actions",
+                return_value=(aux_actions, aux_log_q),
+            ), mock.patch(
+                "nanogpt.trainers.native_student_prefix.reverse_kl_tm_loss",
+                side_effect=wrapped_reverse_kl_tm_loss,
+            ):
+                run_nail(
+                    cfg,
+                    launcher_command=[str(PYTHON), "-m", "nanogpt.run", "experiment=s5_nail_reverse_mc_fixed"],
+                )
+
+            torch.testing.assert_close(captured["teacher_actions"], rollout_actions)
+            torch.testing.assert_close(captured["reverse_actions"], aux_actions)
+            torch.testing.assert_close(captured["reverse_log_q"], aux_log_q)
+
+    def test_s5_opd_reverse_mc_keeps_rollout_actions_and_log_q(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            prompt_bank_dir = root / "prompt_bank"
+            teacher_dir = root / "teacher"
+            out_dir = root / "opd_reverse_out"
+
+            _write_s5_prompt_bank(prompt_bank_dir, m=1, n_train=2, n_val=1, seed=19)
+            _write_teacher_checkpoint(teacher_dir, block_size=14)
+
+            cfg = project_opd_config(
+                _compose_app(
+                    "experiment=s5_opd",
+                    "runtime=cpu",
+                    "logging=disabled",
+                    "task.s5_m=1",
+                    f"task.teacher_checkpoint={teacher_dir}",
+                    f"task.prompt_bank_dir={prompt_bank_dir}",
+                    "task.subset_size=2",
+                    f"run.out_dir={out_dir}",
+                    "optim.batch_size=2",
+                    "optim.max_iters=1",
+                    "optim.learning_rate=0.001",
+                    "optim.warmup_iters=0",
+                    "optim.eval_interval=1",
+                    "optim.eval_n=1",
+                    "optim.eval_batch_size=1",
+                    "optim.log_interval=1",
+                    "optim.seed=7",
+                )
+            )
+
+            rollout_actions = torch.tensor(
+                [[0, 1, 2, 3, 4, 5, 6], [1, 2, 3, 4, 5, 6, 0]],
+                dtype=torch.long,
+            )
+            rollout_log_q = torch.full((2, 7), -0.7, dtype=torch.float32)
+            teacher_probs = torch.full((2, 7, VOCAB_SIZE), 1.0 / VOCAB_SIZE, dtype=torch.float32)
+            captured: dict[str, torch.Tensor] = {}
+
+            def fake_rollout_student(model, prompt_ids, *, target_len, temperature, device, autocast_context):
+                del model, temperature, autocast_context
+                self.assertEqual(target_len, rollout_actions.size(1))
+                prompt = prompt_ids.to(device=device, dtype=torch.long)
+                actions = rollout_actions.to(device=device)
+                full_seq = torch.cat((prompt, actions), dim=1)
+                return full_seq, actions, rollout_log_q.to(device=device)
+
+            def fake_cached_teacher_token_probs(
+                model,
+                prompt_ids,
+                actions,
+                *,
+                eta,
+                teacher_law,
+                corruptible_token_ids,
+                device,
+                autocast_context,
+            ):
+                del model, prompt_ids, eta, teacher_law, corruptible_token_ids, autocast_context
+                captured["teacher_actions"] = actions.detach().cpu().clone()
+                return teacher_probs.to(device=device)
+
+            def wrapped_reverse_kl_tm_loss(student_logits, actions, *, log_q, teacher_probs, eps):
+                captured["reverse_actions"] = actions.detach().cpu().clone()
+                captured["reverse_log_q"] = log_q.detach().cpu().clone()
+                return method_reverse_kl_tm_loss(
+                    student_logits,
+                    actions,
+                    log_q=log_q,
+                    teacher_probs=teacher_probs,
+                    eps=eps,
+                )
+
+            with mock.patch(
+                "nanogpt.trainers.native_student_prefix.run_eval",
+                return_value={
+                    "val/loss": 0.0,
+                    "val/clean_full_exact": 0.0,
+                    "val/clean_final_exact": 0.0,
+                },
+            ), mock.patch(
+                "nanogpt.trainers.native_student_prefix.rollout_student",
+                side_effect=fake_rollout_student,
+            ), mock.patch(
+                "nanogpt.trainers.native_student_prefix.cached_teacher_token_probs",
+                side_effect=fake_cached_teacher_token_probs,
+            ), mock.patch(
+                "nanogpt.trainers.native_student_prefix.sample_student_aux_actions",
+                side_effect=AssertionError("OPD reverse-MC should keep rollout actions"),
+            ), mock.patch(
+                "nanogpt.trainers.native_student_prefix.reverse_kl_tm_loss",
+                side_effect=wrapped_reverse_kl_tm_loss,
+            ):
+                run_opd(
+                    cfg,
+                    launcher_command=[str(PYTHON), "-m", "nanogpt.run", "experiment=s5_opd"],
+                )
+
+            torch.testing.assert_close(captured["teacher_actions"], rollout_actions)
+            torch.testing.assert_close(captured["reverse_actions"], rollout_actions)
+            torch.testing.assert_close(captured["reverse_log_q"], rollout_log_q)
 
     def test_submitit_aics_config_composes(self):
         result = _run_hydra(

@@ -19,6 +19,10 @@ from data.s5_cot.opd_hf import (
     rollout_student_hf,
 )
 from data.s5_cot.prompt_bank import load_prompt_bank, select_train_subset
+from data.synthetic.target_spans import (
+    canonical_target_len,
+    print_prompt_bank_target_span_diagnostic,
+)
 from hf_checkpoint import (
     apply_nanogpt_bias_policy,
     build_hf_model_from_nanogpt_args,
@@ -343,10 +347,28 @@ def run_opd_hf(cfg: OpdHfConfig, *, launcher_command: list[str]) -> None:
         torch.cuda.manual_seed_all(cfg.seed)
 
     prompt_bank = load_prompt_bank(cfg.prompt_bank_dir)
+    target_len = canonical_target_len(prompt_bank)
+    training_seq_len = prompt_bank.prompt_len + target_len - 1
+    print_prompt_bank_target_span_diagnostic(
+        method_name=f"opd_hf/{cfg.objective}",
+        prompt_bank=prompt_bank,
+        actual_target_len=target_len,
+        total_sequence_len=training_seq_len,
+        target_description=(
+            "clean reference continuation; HF online teacher supervision is applied "
+            "over the same target positions"
+        ),
+    )
     subset_indices = select_train_subset(prompt_bank, cfg.subset_size)
 
     run_metadata = {
         "backend": "hf",
+        "prompt_len": prompt_bank.prompt_len,
+        "cot_len": prompt_bank.cot_len,
+        "target_len": prompt_bank.target_len,
+        "final_answer_len": prompt_bank.final_answer_len,
+        "answer_len": prompt_bank.answer_len,
+        "target_span": prompt_bank.meta.get("target_span", "cot_with_final_answer_suffix"),
         "teacher_checkpoint": cfg.teacher_checkpoint,
         "prompt_bank_dir": cfg.prompt_bank_dir,
         "subset_size": cfg.subset_size,
@@ -420,6 +442,10 @@ def run_opd_hf(cfg: OpdHfConfig, *, launcher_command: list[str]) -> None:
             "resolved_dtype": str(torch_dtype).replace("torch.", ""),
             "prompt_len": prompt_bank.prompt_len,
             "cot_len": prompt_bank.cot_len,
+            "target_len": prompt_bank.target_len,
+            "final_answer_len": prompt_bank.final_answer_len,
+            "answer_len": prompt_bank.answer_len,
+            "target_span": prompt_bank.meta.get("target_span", "cot_with_final_answer_suffix"),
             "backend": "hf",
         }
     )
@@ -496,7 +522,7 @@ def run_opd_hf(cfg: OpdHfConfig, *, launcher_command: list[str]) -> None:
             full_seq, actions, log_q = rollout_student_hf(
                 student,
                 prompt_ids,
-                target_len=prompt_bank.cot_len,
+                target_len=target_len,
                 temperature=rollout_temperature,
                 device=device,
                 autocast_context=autocast_context,
@@ -529,8 +555,14 @@ def run_opd_hf(cfg: OpdHfConfig, *, launcher_command: list[str]) -> None:
             p_answer_logits = extract_answer_logits(
                 outputs.logits,
                 prompt_len=prompt_bank.prompt_len,
-                target_len=prompt_bank.cot_len,
+                target_len=target_len,
             )
+            if (
+                int(actions.size(1)) != target_len
+                or int(teacher_probs.size(1)) != target_len
+                or int(p_answer_logits.size(1)) != target_len
+            ):
+                raise ValueError("HF OPD target tensors do not match target_len")
             if cfg.objective == "reverse_kl_tm":
                 log_p = gather_action_log_probs(p_answer_logits, actions)
                 importance_weight = torch.exp(log_p - log_q.detach())

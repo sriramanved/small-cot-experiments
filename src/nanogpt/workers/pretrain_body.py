@@ -215,6 +215,7 @@ if is_synthetic_offline_dataset(dataset):
         get_train_batch_once,
         get_train_epoch_state,
         iter_eval_batches,
+        print_offline_target_span_diagnostic,
         reset_train_epoch,
         set_train_epoch_state,
     )
@@ -284,6 +285,32 @@ if offline_target_type == 'teacher_probs':
             f"Dataset {dataset} has train_decode_mode="
             f"{offline_dataset_meta.get('train_decode_mode')!r}, expected "
             "'sample_then_corrupt' for offline full-distribution BC"
+        )
+
+if is_synthetic_offline_dataset(dataset) and master_process:
+    print_offline_target_span_diagnostic(
+        data_dir,
+        method_name=f"offline_bc/{offline_target_type}",
+        target_type=offline_target_type,
+    )
+    if offline_dataset_meta is not None:
+        config['prompt_len'] = int(offline_dataset_meta.get('prompt_len', 0))
+        config['cot_len'] = int(offline_dataset_meta.get('cot_len', 0))
+        config['target_len'] = int(
+            offline_dataset_meta.get('target_len', offline_dataset_meta.get('cot_len', 0))
+        )
+        config['final_answer_len'] = int(
+            offline_dataset_meta.get(
+                'final_answer_len',
+                offline_dataset_meta.get('answer_len', 0),
+            )
+        )
+        config['answer_len'] = int(
+            offline_dataset_meta.get('answer_len', config['final_answer_len'])
+        )
+        config['target_span'] = offline_dataset_meta.get(
+            'target_span',
+            'cot_with_final_answer_suffix',
         )
 
 resolved_modadd_p = modadd_p

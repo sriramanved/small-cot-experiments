@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from data.synthetic.prompt_bank import PromptBank, build_xy_from_prompt_and_target
+from data.synthetic.target_spans import canonical_target_len
 from nanogpt_checkpoint import load_nanogpt_model
 from torch_dtypes import DTYPE_LOOKUP
 
@@ -57,6 +58,10 @@ def load_hf_teacher(
 
 ROLLOUT_MODE_CHOICES = ("greedy_then_corrupt", "sample_then_corrupt")
 TARGET_MODE_CHOICES = ("tokens", "teacher_probs")
+
+
+def resolve_offline_target_len(prompt_bank: PromptBank) -> int:
+    return canonical_target_len(prompt_bank)
 
 
 @torch.inference_mode()
@@ -153,6 +158,7 @@ def render_train_split(
     teacher_probs_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
     subset_size = int(subset_idx.numel())
+    target_len = resolve_offline_target_len(prompt_bank)
     train_x = torch.empty((subset_size, prompt_bank.xy_len), dtype=prompt_bank.token_dtype)
     train_y = torch.empty((subset_size, prompt_bank.xy_len), dtype=prompt_bank.label_dtype)
     train_teacher_probs = None
@@ -162,7 +168,7 @@ def render_train_split(
                 "teacher_probs_fn is required when target_mode='teacher_probs'"
             )
         train_teacher_probs = torch.empty(
-            (subset_size, prompt_bank.cot_len, model.config.vocab_size),
+            (subset_size, target_len, model.config.vocab_size),
             dtype=torch.float16,
         )
 
@@ -173,7 +179,7 @@ def render_train_split(
         batch_target_ids, batch_teacher_probs = generate_teacher_targets(
             model,
             batch_prompt_ids,
-            target_len=prompt_bank.cot_len,
+            target_len=target_len,
             eta=eta,
             rollout_mode=rollout_mode,
             target_mode=target_mode,
@@ -257,7 +263,10 @@ def build_dataset_meta(
         "m": prompt_bank.m,
         "prompt_len": prompt_bank.prompt_len,
         "cot_len": prompt_bank.cot_len,
+        "target_len": prompt_bank.target_len,
         "final_answer_len": prompt_bank.final_answer_len,
+        "answer_len": prompt_bank.answer_len,
+        "target_span": prompt_bank.meta.get("target_span", "cot_with_final_answer_suffix"),
         "subset_size": subset_size,
         "eta": eta,
         "gen_batch_size": gen_batch_size,

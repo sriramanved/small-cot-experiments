@@ -17,6 +17,10 @@ from data.modular_addition.task import (
 from data.s5_cot.task import CORRUPTIBLE_IDS as S5_CORRUPTIBLE_IDS
 from data.s5_cot.task import evaluate_saved_clean_s5_metrics
 from data.synthetic.prompt_bank import load_prompt_bank, select_train_subset
+from data.synthetic.target_spans import (
+    canonical_target_len,
+    print_prompt_bank_target_span_diagnostic,
+)
 from nanogpt.methods.student_prefix import (
     FixedPromptCycle,
     cached_teacher_token_probs,
@@ -30,6 +34,7 @@ from nanogpt.methods.student_prefix import (
     reverse_kl_full_loss,
     reverse_kl_tm_loss,
     rollout_student,
+    sample_student_aux_actions,
     sample_teacher_actions,
 )
 from nanogpt.trainers.configs import StudentPrefixConfig
@@ -117,9 +122,10 @@ def build_reverse_mc_step_metrics(
     loss: torch.Tensor,
     objective_stats: dict[str, torch.Tensor],
     log_q: torch.Tensor,
+    extra_metrics: dict[str, float] | None = None,
 ) -> dict[str, float]:
     importance_weight = objective_stats["importance_weight"]
-    return {
+    metrics = {
         "train/loss": float(loss.item()),
         "train/advantage": float(objective_stats["advantage"].mean().item()),
         "train/log_q": float(log_q.mean().item()),
@@ -129,6 +135,31 @@ def build_reverse_mc_step_metrics(
         "train/importance_weight_std": float(importance_weight.std(unbiased=False).item()),
         "train/importance_weight_max": float(importance_weight.max().item()),
         "train/importance_weight_min": float(importance_weight.min().item()),
+    }
+    if extra_metrics is not None:
+        metrics.update(extra_metrics)
+    return metrics
+
+
+def select_reverse_mc_actions(
+    *,
+    method_family: str,
+    rollout_actions: torch.Tensor,
+    rollout_log_q: torch.Tensor,
+    student_logits: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, float]]:
+    if method_family == "opd":
+        return rollout_actions, rollout_log_q, {}
+    if method_family != "nail":
+        raise ValueError(f"unknown method_family {method_family!r}")
+
+    aux_actions, aux_log_q = sample_student_aux_actions(student_logits)
+    return aux_actions, aux_log_q, {
+        "train/rollout_log_q_mean": float(rollout_log_q.mean().item()),
+        "train/aux_log_q_mean": float(aux_log_q.mean().item()),
+        "train/aux_equals_rollout_rate": float(
+            aux_actions.eq(rollout_actions).to(dtype=torch.float32).mean().item()
+        ),
     }
 
 
@@ -404,6 +435,35 @@ def resolve_task_helpers(task_name: str, *, p: int):
     raise ValueError(f"unknown task {task_name!r}")
 
 
+def resolve_student_prefix_target_len(prompt_bank) -> int:
+    return canonical_target_len(prompt_bank)
+
+
+def validate_target_tensors(
+    *,
+    method_name: str,
+    target_len: int,
+    rollout_actions: torch.Tensor,
+    teacher_probs: torch.Tensor,
+    student_target_logits: torch.Tensor,
+) -> None:
+    if int(rollout_actions.size(1)) != target_len:
+        raise ValueError(
+            f"{method_name} rollout action length {int(rollout_actions.size(1))} "
+            f"does not match target_len {target_len}"
+        )
+    if int(teacher_probs.size(1)) != target_len:
+        raise ValueError(
+            f"{method_name} teacher_probs target length {int(teacher_probs.size(1))} "
+            f"does not match target_len {target_len}"
+        )
+    if int(student_target_logits.size(1)) != target_len:
+        raise ValueError(
+            f"{method_name} student logits target length {int(student_target_logits.size(1))} "
+            f"does not match target_len {target_len}"
+        )
+
+
 def save_eval_summary(out_dir: Path, *, iter_num: int, reason: str, metrics: dict[str, float]) -> None:
     payload = {
         "iter": int(iter_num),
@@ -522,7 +582,10 @@ def build_run_metadata(
         "m": prompt_bank.m,
         "prompt_len": prompt_bank.prompt_len,
         "cot_len": prompt_bank.cot_len,
+        "target_len": prompt_bank.target_len,
         "final_answer_len": prompt_bank.final_answer_len,
+        "answer_len": prompt_bank.answer_len,
+        "target_span": prompt_bank.meta.get("target_span", "cot_with_final_answer_suffix"),
         "teacher_checkpoint": cfg.teacher_checkpoint,
         "prompt_bank_dir": cfg.prompt_bank_dir,
         "subset_size": cfg.subset_size,
@@ -564,6 +627,18 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
             f"Prompt bank task mismatch: prompt bank has task={prompt_bank.task!r} "
             f"but task={cfg.task!r}"
         )
+    target_len = resolve_student_prefix_target_len(prompt_bank)
+    training_seq_len = prompt_bank.prompt_len + target_len - 1
+    print_prompt_bank_target_span_diagnostic(
+        method_name=f"{cfg.method_family}/{cfg.loss}_{cfg.teacher_signal}",
+        prompt_bank=prompt_bank,
+        actual_target_len=target_len,
+        total_sequence_len=training_seq_len,
+        target_description=(
+            "clean reference continuation; online teacher supervision is applied "
+            "over the same target positions"
+        ),
+    )
     corruptible_ids, _ = resolve_task_helpers(cfg.task, p=prompt_bank.p)
 
     random.seed(cfg.seed)
@@ -674,7 +749,10 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
             "resolved_dtype": str(torch_dtype).replace("torch.", ""),
             "prompt_len": prompt_bank.prompt_len,
             "cot_len": prompt_bank.cot_len,
+            "target_len": prompt_bank.target_len,
             "final_answer_len": prompt_bank.final_answer_len,
+            "answer_len": prompt_bank.answer_len,
+            "target_span": prompt_bank.meta.get("target_span", "cot_with_final_answer_suffix"),
             "resolved_rollout_temperature": method_state["resolved_rollout_temperature"],
             "resolved_loss_temperature": method_state["resolved_loss_temperature"],
         }
@@ -770,10 +848,10 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
 
         student.eval()
         with torch.no_grad():
-            full_seq, actions, log_q = rollout_student(
+            full_seq, rollout_actions, rollout_log_q = rollout_student(
                 student,
                 prompt_ids,
-                target_len=prompt_bank.cot_len,
+                target_len=target_len,
                 temperature=rollout_temperature,
                 device=device,
                 autocast_context=autocast_context,
@@ -782,7 +860,7 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
             teacher_probs = cached_teacher_token_probs(
                 teacher,
                 prompt_ids,
-                actions,
+                rollout_actions,
                 eta=cfg.eta,
                 teacher_law=cfg.teacher_law,
                 corruptible_token_ids=corruptible_ids,
@@ -800,20 +878,37 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
             p_answer_logits = extract_answer_logits(
                 p_logits,
                 prompt_len=prompt_bank.prompt_len,
-                target_len=prompt_bank.cot_len,
+                target_len=target_len,
+            )
+            validate_target_tensors(
+                method_name=f"{cfg.method_family}/{cfg.loss}_{cfg.teacher_signal}",
+                target_len=target_len,
+                rollout_actions=rollout_actions,
+                teacher_probs=teacher_probs,
+                student_target_logits=p_answer_logits,
             )
             if cfg.teacher_signal == "mc" and cfg.loss == "reverse":
+                # OPD scores the sampled rollout actions directly. NAIL keeps those
+                # rollout actions only for prefix construction and samples separate
+                # auxiliary student actions on the resulting fixed prefixes.
+                reverse_actions, reverse_log_q, reverse_metrics = select_reverse_mc_actions(
+                    method_family=cfg.method_family,
+                    rollout_actions=rollout_actions,
+                    rollout_log_q=rollout_log_q,
+                    student_logits=p_answer_logits,
+                )
                 loss, objective_stats = reverse_kl_tm_loss(
                     p_answer_logits,
-                    actions,
-                    log_q=log_q,
+                    reverse_actions,
+                    log_q=reverse_log_q,
                     teacher_probs=teacher_probs,
                     eps=cfg.eps,
                 )
                 step_metrics = build_reverse_mc_step_metrics(
                     loss=loss,
                     objective_stats=objective_stats,
-                    log_q=log_q,
+                    log_q=reverse_log_q,
+                    extra_metrics=reverse_metrics,
                 )
             elif cfg.teacher_signal == "full" and cfg.loss == "reverse":
                 loss, objective_stats = reverse_kl_full_loss(
@@ -824,6 +919,7 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                 step_metrics = {
                     "train/loss": float(loss.item()),
                     "train/reverse_kl": float(objective_stats["reverse_kl"].mean().item()),
+                    "train/reverse_kl_full": float(objective_stats["reverse_kl"].mean().item()),
                     "train/student_teacher_ce": float(objective_stats["student_teacher_ce"].mean().item()),
                     "train/student_entropy": float(objective_stats["student_entropy"].mean().item()),
                 }

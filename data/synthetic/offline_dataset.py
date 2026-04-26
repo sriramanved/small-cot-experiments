@@ -3,6 +3,11 @@ import json
 
 import torch
 
+from data.synthetic.target_spans import (
+    print_target_span_diagnostic,
+    target_ids_from_y_row,
+)
+
 _CACHE = {}
 _STATE = {}
 
@@ -28,6 +33,16 @@ def _load_meta(data_dir):
     return _CACHE[key]
 
 
+def _target_len_from_meta(meta):
+    cot_len = int(meta["cot_len"])
+    target_len = int(meta.get("target_len", cot_len))
+    if target_len != cot_len:
+        raise ValueError(
+            f"offline dataset target_len {target_len} does not match cot_len {cot_len}"
+        )
+    return target_len
+
+
 def _validate_teacher_probs(meta, x, y, teacher_probs, data_dir):
     if meta.get("train_target_type") != "teacher_probs":
         raise ValueError(
@@ -49,22 +64,22 @@ def _validate_teacher_probs(meta, x, y, teacher_probs, data_dir):
             f"train_teacher_probs rows {teacher_probs.size(0)} do not match "
             f"train_x rows {x.size(0)}"
         )
-    cot_len = int(meta["cot_len"])
-    if teacher_probs.size(1) != cot_len:
+    target_len = _target_len_from_meta(meta)
+    if teacher_probs.size(1) != target_len:
         raise ValueError(
             f"train_teacher_probs target_len {teacher_probs.size(1)} does not "
-            f"match meta cot_len {cot_len}"
+            f"match meta target_len {target_len}"
         )
     if x.size(1) != y.size(1):
         raise ValueError(
             f"train_x sequence length {x.size(1)} does not match train_y "
             f"sequence length {y.size(1)}"
         )
-    expected_seq_len = int(meta["prompt_len"]) + cot_len - 1
+    expected_seq_len = int(meta["prompt_len"]) + target_len - 1
     if x.size(1) != expected_seq_len:
         raise ValueError(
             f"train_x sequence length {x.size(1)} does not match expected "
-            f"prompt_len+cot_len-1={expected_seq_len}"
+            f"prompt_len+target_len-1={expected_seq_len}"
         )
 
 
@@ -81,6 +96,41 @@ def _load_split(data_dir, split, target_type="tokens"):
             _validate_teacher_probs(meta, x, y, teacher_probs, data_dir)
         _CACHE[key] = (x, y, teacher_probs)
     return _CACHE[key]
+
+
+def print_offline_target_span_diagnostic(data_dir, *, method_name, target_type="tokens"):
+    meta = _load_meta(data_dir)
+    x_all, y_all, teacher_probs_all = _load_split(
+        data_dir,
+        "train",
+        target_type=target_type,
+    )
+    if x_all.size(0) == 0:
+        raise ValueError(f"offline dataset {data_dir} has no train rows")
+
+    target_ids = target_ids_from_y_row(y_all[0])
+    actual_target_len = int(target_ids.numel())
+    if teacher_probs_all is not None:
+        prob_target_len = int(teacher_probs_all.size(1))
+        if prob_target_len != actual_target_len:
+            raise ValueError(
+                f"teacher_probs target_len {prob_target_len} does not match "
+                f"Y continuation length {actual_target_len}"
+            )
+
+    print_target_span_diagnostic(
+        method_name=method_name,
+        task=str(meta.get("task", "s5")),
+        p=int(meta.get("p", 5)),
+        prompt_len=int(meta["prompt_len"]),
+        cot_len=_target_len_from_meta(meta),
+        final_answer_len=int(meta.get("final_answer_len", meta.get("answer_len", 0))),
+        actual_target_len=actual_target_len,
+        total_sequence_len=int(x_all.size(1)),
+        prompt_ids=x_all[0, : int(meta["prompt_len"])],
+        target_ids=target_ids,
+        target_description=f"offline {target_type} continuation from train_y suffix",
+    )
 
 
 def _move(x, y, device, teacher_probs=None):

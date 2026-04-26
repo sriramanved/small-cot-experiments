@@ -73,7 +73,9 @@ class ModularAdditionTests(unittest.TestCase):
             self.assertEqual(prompt_bank.m, 2)
             self.assertEqual(prompt_bank.prompt_len, 3)
             self.assertEqual(prompt_bank.cot_len, 2)
+            self.assertEqual(prompt_bank.target_len, 2)
             self.assertEqual(prompt_bank.final_answer_len, 1)
+            self.assertEqual(prompt_bank.answer_len, 1)
             self.assertEqual(prompt_bank.token_dtype, torch.int32)
             self.assertEqual(prompt_bank.label_dtype, torch.int32)
 

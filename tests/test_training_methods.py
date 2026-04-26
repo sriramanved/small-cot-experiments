@@ -11,11 +11,13 @@ from nanogpt.methods.student_prefix import (
     gather_action_log_probs,
     reverse_kl_full_loss,
     reverse_kl_tm_loss,
+    sample_student_aux_actions,
     teacher_forward_kl,
 )
 from nanogpt.trainers.native_student_prefix import (
     apply_grad_clip_with_diagnostics,
     build_reverse_mc_step_metrics,
+    select_reverse_mc_actions,
 )
 from data.synthetic.offline_losses import offline_teacher_prob_loss_from_logits
 from model import causal_lm_loss
@@ -353,6 +355,73 @@ class TrainingMethodTests(unittest.TestCase):
             step_metrics["train/importance_weight_min"],
             float(objective_stats["importance_weight"].min().item()),
         )
+
+    def test_sample_student_aux_actions_returns_action_samples_and_log_q(self):
+        torch.manual_seed(0)
+        student_logits = torch.tensor(
+            [
+                [[2.5, 0.1, -1.0], [0.2, 1.3, -0.4]],
+                [[-0.5, 0.8, 1.7], [1.0, -0.7, 0.4]],
+            ],
+            dtype=torch.float32,
+            requires_grad=True,
+        )
+
+        actions, log_q = sample_student_aux_actions(student_logits)
+
+        self.assertEqual(actions.shape, (2, 2))
+        self.assertEqual(log_q.shape, (2, 2))
+        self.assertEqual(actions.dtype, torch.long)
+        self.assertEqual(log_q.dtype, torch.float32)
+        self.assertTrue(torch.isfinite(log_q).all().item())
+        expected_log_q = gather_action_log_probs(student_logits.detach(), actions)
+        torch.testing.assert_close(log_q, expected_log_q)
+
+    def test_select_reverse_mc_actions_uses_auxiliary_student_actions_for_nail(self):
+        torch.manual_seed(7)
+        rollout_actions = torch.tensor([[0, 0], [1, 1]], dtype=torch.long)
+        rollout_log_q = torch.tensor([[-0.2, -0.3], [-0.4, -0.5]], dtype=torch.float32)
+        student_logits = torch.tensor(
+            [
+                [[-2.0, 3.0, 0.5], [0.1, -1.0, 2.5]],
+                [[3.0, -2.0, 0.3], [-0.5, 2.8, 0.0]],
+            ],
+            dtype=torch.float32,
+        )
+
+        aux_actions, aux_log_q, extra_metrics = select_reverse_mc_actions(
+            method_family="nail",
+            rollout_actions=rollout_actions,
+            rollout_log_q=rollout_log_q,
+            student_logits=student_logits,
+        )
+
+        self.assertEqual(aux_actions.shape, rollout_actions.shape)
+        self.assertEqual(aux_log_q.shape, rollout_log_q.shape)
+        self.assertIn("train/aux_equals_rollout_rate", extra_metrics)
+        self.assertIn("train/aux_log_q_mean", extra_metrics)
+        self.assertIn("train/rollout_log_q_mean", extra_metrics)
+        self.assertLess(extra_metrics["train/aux_equals_rollout_rate"], 1.0)
+        torch.testing.assert_close(
+            aux_log_q,
+            gather_action_log_probs(student_logits.detach(), aux_actions),
+        )
+
+    def test_select_reverse_mc_actions_keeps_rollout_behavior_for_opd(self):
+        rollout_actions = torch.tensor([[0, 2], [1, 1]], dtype=torch.long)
+        rollout_log_q = torch.tensor([[-0.2, -0.3], [-0.4, -0.5]], dtype=torch.float32)
+        student_logits = torch.randn(2, 2, 3, dtype=torch.float32)
+
+        reverse_actions, reverse_log_q, extra_metrics = select_reverse_mc_actions(
+            method_family="opd",
+            rollout_actions=rollout_actions,
+            rollout_log_q=rollout_log_q,
+            student_logits=student_logits,
+        )
+
+        self.assertEqual(extra_metrics, {})
+        torch.testing.assert_close(reverse_actions, rollout_actions)
+        torch.testing.assert_close(reverse_log_q, rollout_log_q)
 
     def test_apply_grad_clip_with_diagnostics_handles_enabled_clipping(self):
         model = torch.nn.Linear(2, 1, bias=False)

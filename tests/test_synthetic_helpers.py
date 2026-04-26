@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 import tempfile
 import types
 import unittest
@@ -9,13 +10,26 @@ from pathlib import Path
 import torch
 
 from nanogpt.methods.student_prefix import compute_teacher_token_probs
-from data.synthetic.offline_render import build_dataset_meta, generate_teacher_targets
+from data.s5_cot.task import (
+    LPAREN_ID,
+    RPAREN_ID,
+    compose_perm,
+    sample_cot_example_ids_from_rng as sample_s5_cot_example_ids_from_rng,
+)
+from data.synthetic.offline_render import (
+    build_dataset_meta,
+    generate_teacher_targets,
+    render_train_split,
+    resolve_offline_target_len,
+)
 from data.synthetic.prompt_bank import (
     PromptBank,
     build_xy_from_prompt_and_target,
     load_prompt_bank,
     select_train_subset,
 )
+from data.synthetic.target_spans import target_ids_from_y_row
+from nanogpt.trainers.native_student_prefix import resolve_student_prefix_target_len
 
 
 class ConstantTeacherModel:
@@ -40,6 +54,44 @@ class SyntheticHelperTests(unittest.TestCase):
         self.assertEqual(y.dtype, torch.int32)
         torch.testing.assert_close(x, torch.tensor([[0, 1, 7, 2]], dtype=torch.int32))
         torch.testing.assert_close(y, torch.tensor([[-1, -1, 2, 3]], dtype=torch.int32))
+        torch.testing.assert_close(target_ids_from_y_row(y[0]), target_ids[0].long())
+
+    def test_prompt_bank_target_len_aliases_cot_len_and_keeps_answer_suffix(self):
+        prompt_bank = PromptBank(
+            clean_train_prompt_ids=torch.tensor([[1, 2, 7]], dtype=torch.int32),
+            clean_train_cot_ids=torch.tensor([[1, 3]], dtype=torch.int32),
+            clean_val_prompt_ids=torch.tensor([[2, 1, 7]], dtype=torch.int32),
+            clean_val_cot_ids=torch.tensor([[2, 3]], dtype=torch.int32),
+            train_order=torch.arange(1, dtype=torch.long),
+            meta={"task": "modadd", "p": 7, "m": 2, "prompt_len": 3, "cot_len": 2, "final_answer_len": 1},
+        )
+
+        self.assertEqual(prompt_bank.target_len, prompt_bank.cot_len)
+        self.assertEqual(prompt_bank.answer_len, prompt_bank.final_answer_len)
+        self.assertEqual(resolve_offline_target_len(prompt_bank), 2)
+        self.assertEqual(resolve_student_prefix_target_len(prompt_bank), 2)
+
+        _, y = build_xy_from_prompt_and_target(
+            prompt_bank.clean_train_prompt_ids,
+            prompt_bank.clean_train_cot_ids,
+        )
+        decoded_target = target_ids_from_y_row(y[0])
+        torch.testing.assert_close(decoded_target, prompt_bank.clean_train_cot_ids[0].long())
+        torch.testing.assert_close(
+            decoded_target[-prompt_bank.final_answer_len:],
+            torch.tensor([3], dtype=torch.long),
+        )
+
+    def test_s5_cot_len_includes_final_answer_suffix(self):
+        prompt_ids, cot_ids = sample_s5_cot_example_ids_from_rng(random.Random(11), m=3)
+        running = None
+        for start in range(0, len(prompt_ids) - 1, 7):
+            self.assertEqual(prompt_ids[start], LPAREN_ID)
+            self.assertEqual(prompt_ids[start + 6], RPAREN_ID)
+            sigma = tuple(int(token_id) - 2 for token_id in prompt_ids[start + 1:start + 6])
+            running = sigma if running is None else compose_perm(running, sigma)
+        expected_final = [LPAREN_ID, *(digit + 2 for digit in running), RPAREN_ID]
+        self.assertEqual(cot_ids[-7:], expected_final)
 
     def test_select_train_subset_rejects_negative_size(self):
         prompt_bank = PromptBank(
@@ -66,6 +118,7 @@ class SyntheticHelperTests(unittest.TestCase):
             self.assertEqual(prompt_bank.task, "s5")
             self.assertEqual(prompt_bank.prompt_len, 3)
             self.assertEqual(prompt_bank.cot_len, 2)
+            self.assertEqual(prompt_bank.target_len, 2)
             self.assertEqual(prompt_bank.p, 5)
             self.assertEqual(prompt_bank.final_answer_len, 7)
 
@@ -119,7 +172,40 @@ class SyntheticHelperTests(unittest.TestCase):
         self.assertEqual(meta["m"], 4)
         self.assertEqual(meta["prompt_len"], 5)
         self.assertEqual(meta["cot_len"], 4)
+        self.assertEqual(meta["target_len"], 4)
         self.assertEqual(meta["final_answer_len"], 1)
+        self.assertEqual(meta["answer_len"], 1)
+
+    def test_offline_render_uses_canonical_target_len(self):
+        prompt_bank = PromptBank(
+            clean_train_prompt_ids=torch.tensor([[0, 1, 7], [2, 3, 7]], dtype=torch.int32),
+            clean_train_cot_ids=torch.tensor([[0, 1, 1], [2, 5, 5]], dtype=torch.int32),
+            clean_val_prompt_ids=torch.tensor([[1, 1, 7]], dtype=torch.int32),
+            clean_val_cot_ids=torch.tensor([[1, 2, 2]], dtype=torch.int32),
+            train_order=torch.arange(2, dtype=torch.long),
+            meta={"task": "modadd", "p": 7, "m": 3, "prompt_len": 3, "cot_len": 3, "final_answer_len": 1},
+        )
+        model = ConstantTeacherModel(vocab_size=8, preferred_token=4)
+        train_x, train_y, teacher_probs = render_train_split(
+            model,
+            prompt_bank,
+            torch.arange(2, dtype=torch.long),
+            eta=0.0,
+            rollout_mode="greedy_then_corrupt",
+            target_mode="tokens",
+            gen_batch_size=2,
+            device="cpu",
+            corrupt_ids_fn=lambda ids, eta: ids,
+        )
+
+        self.assertIsNone(teacher_probs)
+        self.assertEqual(train_x.shape, (2, prompt_bank.prompt_len + prompt_bank.target_len - 1))
+        self.assertEqual(train_y.shape, train_x.shape)
+        self.assertEqual(int(train_y[0].ne(-1).sum().item()), prompt_bank.target_len)
+        torch.testing.assert_close(
+            target_ids_from_y_row(train_y[0]),
+            torch.full((prompt_bank.target_len,), 4, dtype=torch.long),
+        )
 
     def test_compute_teacher_token_probs_handles_custom_noncontiguous_corruptible_ids(self):
         clean_logits = torch.full((1, 1, 6), -10.0)

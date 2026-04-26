@@ -29,6 +29,7 @@ def _normalize_meta(
     normalized["task"] = task
     normalized.setdefault("prompt_len", prompt_len)
     normalized.setdefault("cot_len", cot_len)
+    normalized.setdefault("target_len", cot_len)
 
     if task == "s5":
         normalized.setdefault("p", 5)
@@ -42,6 +43,18 @@ def _normalize_meta(
         normalized.setdefault("m", cot_len)
         normalized.setdefault("final_answer_len", cot_len)
 
+    normalized.setdefault("answer_len", normalized["final_answer_len"])
+    normalized.setdefault("target_span", "cot_with_final_answer_suffix")
+    if int(normalized["target_len"]) != cot_len:
+        raise ValueError(
+            f"PromptBank target_len={normalized['target_len']} does not match "
+            f"clean_train_cot_ids width={cot_len}"
+        )
+    if int(normalized["answer_len"]) != int(normalized["final_answer_len"]):
+        raise ValueError(
+            f"PromptBank answer_len={normalized['answer_len']} does not match "
+            f"final_answer_len={normalized['final_answer_len']}"
+        )
     return normalized
 
 
@@ -54,6 +67,13 @@ class PromptBank:
     train_order: torch.Tensor
     meta: dict[str, Any]
 
+    def __post_init__(self) -> None:
+        self.meta = _normalize_meta(
+            self.meta,
+            clean_train_prompt_ids=self.clean_train_prompt_ids,
+            clean_train_cot_ids=self.clean_train_cot_ids,
+        )
+
     @property
     def prompt_len(self) -> int:
         return int(self.meta["prompt_len"])
@@ -63,8 +83,12 @@ class PromptBank:
         return int(self.meta["cot_len"])
 
     @property
+    def target_len(self) -> int:
+        return int(self.meta["target_len"])
+
+    @property
     def xy_len(self) -> int:
-        return self.prompt_len + self.cot_len - 1
+        return self.prompt_len + self.target_len - 1
 
     @property
     def m(self) -> int:
@@ -81,6 +105,10 @@ class PromptBank:
     @property
     def final_answer_len(self) -> int:
         return int(self.meta["final_answer_len"])
+
+    @property
+    def answer_len(self) -> int:
+        return int(self.meta["answer_len"])
 
     @property
     def token_dtype(self) -> torch.dtype:

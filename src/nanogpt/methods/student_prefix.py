@@ -387,6 +387,28 @@ def sample_teacher_actions(teacher_probs: torch.Tensor) -> torch.Tensor:
     return flat_samples.reshape(batch_size, target_len)
 
 
+@torch.no_grad()
+def sample_student_aux_actions(
+    student_logits: torch.Tensor,
+    *,
+    temperature: float | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if temperature is not None and temperature <= 0:
+        raise ValueError("sample_student_aux_actions temperature must be > 0 when set.")
+
+    detached_logits = student_logits.detach().float()
+    batch_size, target_len, vocab_size = detached_logits.shape
+    work_logits = detached_logits if temperature is None else detached_logits / temperature
+    probs = F.softmax(work_logits, dim=-1)
+    flat_samples = torch.multinomial(
+        probs.reshape(batch_size * target_len, vocab_size),
+        num_samples=1,
+    )
+    actions = flat_samples.reshape(batch_size, target_len)
+    log_q = gather_action_log_probs(detached_logits, actions, temperature=temperature)
+    return actions, log_q
+
+
 def teacher_cross_entropy(
     teacher_probs: torch.Tensor,
     student_logits: torch.Tensor,

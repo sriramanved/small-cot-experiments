@@ -14,6 +14,7 @@ from nanogpt.methods.student_prefix import (
     reverse_kl_full_loss,
     reverse_kl_tm_loss,
     rollout_student,
+    sample_student_aux_actions,
     sample_teacher_actions,
     teacher_forward_kl,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "reverse_kl_full_loss",
     "reverse_kl_tm_loss",
     "rollout_student",
+    "sample_student_aux_actions",
     "sample_teacher_actions",
     "teacher_forward_kl",
 ]
