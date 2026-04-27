@@ -576,6 +576,13 @@ def build_run_metadata(
     torch_dtype: torch.dtype,
     method_state: dict[str, Any],
 ) -> dict[str, object]:
+    rollout_temperature = float(method_state["resolved_rollout_temperature"])
+    reverse_action_source = None
+    if cfg.loss == "reverse" and cfg.teacher_signal == "mc":
+        reverse_action_source = "student_aux_sample" if cfg.method_family == "nail" else "rollout_action"
+    elif cfg.loss == "reverse" and cfg.teacher_signal == "full":
+        reverse_action_source = "full_distribution"
+
     return {
         "task": cfg.task,
         "p": prompt_bank.p,
@@ -596,8 +603,10 @@ def build_run_metadata(
         "loss": cfg.loss,
         "rollout_temperature_override": cfg.rollout_temperature_override,
         "loss_temperature_override": cfg.loss_temperature_override,
-        "resolved_rollout_temperature": method_state["resolved_rollout_temperature"],
+        "resolved_rollout_temperature": rollout_temperature,
         "resolved_loss_temperature": method_state["resolved_loss_temperature"],
+        "rollout_policy": "greedy" if rollout_temperature == 0.0 else "sampled",
+        "reverse_action_source": reverse_action_source,
         "shuffle_prompts": cfg.shuffle_prompts,
         "single_epoch": cfg.single_epoch,
         "init_from_ckpt": cfg.init_from_ckpt,

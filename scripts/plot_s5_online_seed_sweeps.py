@@ -20,6 +20,8 @@ for path in (ROOT, SRC_ROOT):
 from nanogpt.methods.student_prefix import normalize_student_prefix_method
 
 
+DEFAULT_OVERRIDE_PATH = ROOT / "analysis" / "cache" / "s5_online_seed_sweeps" / "run_overrides.json"
+
 STUDENT_PREFIX_RE = re.compile(
     r"^out-s5-(?P<method_family>opd|nail)-(?P<loss>forward|reverse)-(?P<teacher_signal>mc|full)-"
     r"m(?P<m>\d+)-n(?P<subset_size>\d+)-eta(?P<eta>[^-]+)-"
@@ -82,6 +84,10 @@ class RunRecord:
     last_eval_path: Path | None
     run_meta: dict[str, object] | None
     completed: bool
+    source_order: int
+    reverse_variant: str
+    selection_rank: int
+    selection_reason: str
 
 
 def parse_eta_tag(tag: str) -> float:
@@ -96,6 +102,89 @@ def eta_tag(eta: float) -> str:
 def load_json(path: Path) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def source_priority_for_root(root: Path) -> int:
+    resolved = root.resolve()
+    if resolved == ROOT:
+        return 0
+
+    try:
+        rel_parts = resolved.relative_to(ROOT).parts
+    except ValueError:
+        return 50 + SOURCE_PRIORITY.get(resolved.name, 99)
+
+    if rel_parts[:2] == ("analysis", "cache"):
+        return 10 + SOURCE_PRIORITY.get(resolved.name, 9)
+    if rel_parts[:2] == ("analysis", "imports"):
+        return 20 + SOURCE_PRIORITY.get(resolved.name, 9)
+    return 30 + SOURCE_PRIORITY.get(resolved.name, 99)
+
+
+def _resolve_override_run_path(text: str) -> Path:
+    path = Path(text)
+    if not path.is_absolute():
+        path = ROOT / path
+    return path.resolve()
+
+
+def load_run_selection_overrides(path: Path | None = None) -> tuple[set[Path], set[Path]]:
+    override_path = DEFAULT_OVERRIDE_PATH if path is None else path
+    if not override_path.exists():
+        return set(), set()
+
+    payload = load_json(override_path)
+    preferred = {
+        _resolve_override_run_path(str(value))
+        for value in payload.get("preferred_run_ids", [])
+    }
+    excluded = {
+        _resolve_override_run_path(str(value))
+        for value in payload.get("excluded_run_ids", [])
+    }
+    return preferred, excluded
+
+
+def classify_run_selection(
+    *,
+    method: str,
+    out_dir: Path,
+    run_meta: dict[str, object] | None,
+    preferred_run_ids: set[Path],
+) -> tuple[str, int, str]:
+    resolved_out_dir = out_dir.resolve()
+    manual_rank = -100 if resolved_out_dir in preferred_run_ids else 0
+    manual_reason = "manual_preferred_run_ids" if manual_rank < 0 else ""
+
+    if method != "NAIL-reverse, greedy rollout":
+        if manual_reason:
+            return "manual_preferred", manual_rank, manual_reason
+        return "standard", 0, "standard_method"
+
+    reverse_action_source = None if run_meta is None else run_meta.get("reverse_action_source")
+    if reverse_action_source == "student_aux_sample":
+        if manual_reason:
+            return "manual_preferred", manual_rank, manual_reason
+        return "fixed_aux_actions", 0, "run_meta.reverse_action_source=student_aux_sample"
+    if reverse_action_source == "rollout_action":
+        if manual_reason:
+            return "manual_preferred", manual_rank, manual_reason
+        return "legacy_rollout_actions", 40, "run_meta.reverse_action_source=rollout_action"
+
+    path_text = str(resolved_out_dir)
+    if "nail_reverse_mc_fixed" in path_text:
+        if manual_reason:
+            return "manual_preferred", manual_rank, manual_reason
+        return "fixed_aux_actions", 1, "path_contains_nail_reverse_mc_fixed"
+
+    if run_meta is not None and all(key in run_meta for key in ("target_len", "answer_len", "target_span")):
+        if manual_reason:
+            return "manual_preferred", manual_rank, manual_reason
+        return "likely_fixed_recent_code", 2, "post_patch_run_meta_fields_present"
+
+    if manual_reason:
+        return "manual_preferred", manual_rank, manual_reason
+    return "unknown_or_legacy", 30, "no_fixed_nail_reverse_marker"
 
 
 def is_completed_run(out_dir: Path, last_eval_path: Path | None) -> bool:
@@ -190,17 +279,20 @@ def discover_s5_online_runs(
     etas: list[float],
     subset_size: int | None = None,
     teacher_seed: int | None = None,
+    override_path: Path | None = None,
 ) -> list[RunRecord]:
     seed_set = {int(seed) for seed in seeds}
     eta_set = {float(eta) for eta in etas}
     seen_dirs: set[Path] = set()
     records: list[RunRecord] = []
+    preferred_run_ids, excluded_run_ids = load_run_selection_overrides(override_path)
 
     for root in search_roots:
         if not root.exists():
             continue
         root = root.resolve()
         source_kind = "local" if root == ROOT else root.name
+        source_order = source_priority_for_root(root)
 
         for out_dir in sorted(root.rglob("out-s5-*")):
             if not out_dir.is_dir():
@@ -212,6 +304,8 @@ def discover_s5_online_runs(
                 continue
             resolved = out_dir.resolve()
             if resolved in seen_dirs:
+                continue
+            if resolved in excluded_run_ids:
                 continue
 
             eval_history_path = out_dir / "eval_history.jsonl"
@@ -282,6 +376,13 @@ def discover_s5_online_runs(
                 if teacher_checkpoint and f"teacher{teacher_seed}" not in teacher_checkpoint:
                     continue
 
+            reverse_variant, selection_rank, selection_reason = classify_run_selection(
+                method=method,
+                out_dir=out_dir,
+                run_meta=run_meta,
+                preferred_run_ids=preferred_run_ids,
+            )
+
             records.append(
                 RunRecord(
                     run_id=str(out_dir),
@@ -302,6 +403,10 @@ def discover_s5_online_runs(
                         out_dir,
                         (out_dir / "last_eval.json") if (out_dir / "last_eval.json").exists() else None,
                     ),
+                    source_order=source_order,
+                    reverse_variant=reverse_variant,
+                    selection_rank=selection_rank,
+                    selection_reason=selection_reason,
                 )
             )
             seen_dirs.add(resolved)
@@ -344,6 +449,10 @@ def build_runs_df(records: list[RunRecord]) -> tuple[pd.DataFrame, dict[str, pd.
                 "eta": record.eta,
                 "seed": record.seed,
                 "source_kind": record.source_kind,
+                "source_order": record.source_order,
+                "reverse_variant": record.reverse_variant,
+                "selection_rank": record.selection_rank,
+                "selection_reason": record.selection_reason,
                 "source_root": str(record.source_root),
                 "completed": record.completed,
                 "final_iter": final_iter,
@@ -360,10 +469,9 @@ def build_runs_df(records: list[RunRecord]) -> tuple[pd.DataFrame, dict[str, pd.
 
     method_order = {method: index for index, method in enumerate(METHOD_COLORS)}
     runs_df["method_order"] = runs_df["method"].map(method_order)
-    runs_df["source_order"] = runs_df["source_kind"].map(SOURCE_PRIORITY).fillna(99)
     runs_df = runs_df.sort_values(
-        ["eta", "method_order", "seed", "completed", "source_order", "final_iter"],
-        ascending=[True, True, True, False, True, False],
+        ["eta", "method_order", "seed", "selection_rank", "completed", "source_order", "final_iter"],
+        ascending=[True, True, True, True, False, True, False],
     ).reset_index(drop=True)
     return runs_df, run_data
 
@@ -372,8 +480,8 @@ def dedupe_preferred_runs(runs_df: pd.DataFrame) -> pd.DataFrame:
     if runs_df.empty:
         return runs_df
     ordered = runs_df.sort_values(
-        ["eta", "method", "seed", "completed", "source_order", "final_iter"],
-        ascending=[True, True, True, False, True, False],
+        ["eta", "method", "seed", "selection_rank", "completed", "source_order", "final_iter"],
+        ascending=[True, True, True, True, False, True, False],
     )
     preferred = ordered.drop_duplicates(subset=["eta", "method", "seed"], keep="first").copy()
     return preferred.sort_values(["eta", "method_order", "seed"]).reset_index(drop=True)
@@ -414,6 +522,8 @@ def coverage_table(
         .agg(
             run_id=("run_id", "first"),
             source_kind=("source_kind", "first"),
+            reverse_variant=("reverse_variant", "first"),
+            selection_reason=("selection_reason", "first"),
             completed=("completed", "first"),
             final_iter=("final_iter", "first"),
             final_clean_full_exact=("final_clean_full_exact", "first"),
