@@ -16,6 +16,7 @@ from nanogpt.methods.student_prefix import (
     rollout_student,
     sample_student_aux_actions,
     sample_teacher_actions,
+    semantic_key_noise_probs,
     teacher_forward_kl,
 )
 
@@ -37,5 +38,6 @@ __all__ = [
     "rollout_student",
     "sample_student_aux_actions",
     "sample_teacher_actions",
+    "semantic_key_noise_probs",
     "teacher_forward_kl",
 ]

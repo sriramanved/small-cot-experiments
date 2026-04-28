@@ -201,8 +201,11 @@ def _s5_dataset_prefix(
     rollout_mode: object = "greedy_then_corrupt",
     target_mode: object = "tokens",
     render_seed: object = 1337,
+    teacher_law: object = "distributional_noise",
 ) -> str:
     prefix = "s5_noisy_offline"
+    if str(teacher_law) != "distributional_noise":
+        prefix += f"_{str(teacher_law).replace('-', '_')}"
     if str(target_mode) == "teacher_probs":
         prefix += "_full_dist"
     if str(rollout_mode) != "greedy_then_corrupt":
@@ -250,11 +253,15 @@ def _s5_noisy_bc_run_name(
     rollout_mode: object,
     target_mode: object,
     seed: object,
+    teacher_law: object = "distributional_noise",
 ) -> str:
+    law_suffix = ""
+    if str(teacher_law) != "distributional_noise":
+        law_suffix = f"-{str(teacher_law).replace('_', '-')}"
     return (
         f"s5-noisy-bc-m{int(m)}-n{int(subset_size)}-eta{_float_tag(eta)}"
         f"{_s5_target_suffix(target_mode)}"
-        f"{_rollout_suffix(rollout_mode)}-seed{int(seed)}"
+        f"{_rollout_suffix(rollout_mode)}{law_suffix}-seed{int(seed)}"
     )
 
 

@@ -19,6 +19,10 @@ from data.s5_cot.opd_hf import (
     rollout_student_hf,
 )
 from data.s5_cot.prompt_bank import load_prompt_bank, select_train_subset
+from data.s5_cot.semantic_key_noise import (
+    SEMANTIC_KEY_NOISE_LAW,
+    semantic_key_noise_config_from_obj,
+)
 from data.synthetic.target_spans import (
     canonical_target_len,
     print_prompt_bank_target_span_diagnostic,
@@ -78,6 +82,8 @@ def format_student_rollout_tag(*, rollout_temperature: float, student_temperatur
 
 def validate_config(cfg: OpdHfConfig) -> None:
     student_rollout_temperature = resolve_student_rollout_temperature(cfg)
+    if cfg.teacher_law == SEMANTIC_KEY_NOISE_LAW:
+        semantic_key_noise_config_from_obj(cfg.semantic_key_noise)
     if cfg.objective != "reverse_kl_tm" and cfg.student_temperature <= 0:
         raise ValueError(
             "student_temperature must be > 0 for forward-KL objectives because "
@@ -107,19 +113,24 @@ def validate_resume_metadata(out_dir: Path, metadata: dict[str, object]) -> None
         return
     with open(meta_path, "r", encoding="utf-8") as f:
         saved = json.load(f)
-    for key in (
+    keys = [
         "backend",
         "teacher_checkpoint",
         "prompt_bank_dir",
         "subset_size",
         "eta",
         "teacher_law",
+    ]
+    if metadata.get("teacher_law") == SEMANTIC_KEY_NOISE_LAW:
+        keys.append("semantic_key_noise")
+    keys.extend([
         "objective",
         "student_temperature",
         "student_rollout_temperature",
         "shuffle_prompts",
         "seed",
-    ):
+    ])
+    for key in keys:
         saved_value = saved.get(key)
         current_value = metadata.get(key)
         if key == "student_rollout_temperature":
@@ -383,6 +394,10 @@ def run_opd_hf(cfg: OpdHfConfig, *, launcher_command: list[str]) -> None:
         "dtype": str(torch_dtype).replace("torch.", ""),
         "compile": bool(cfg.compile),
     }
+    if cfg.teacher_law == SEMANTIC_KEY_NOISE_LAW:
+        run_metadata["semantic_key_noise"] = semantic_key_noise_config_from_obj(
+            cfg.semantic_key_noise
+        ).to_dict()
     if cfg.init_from == "resume":
         validate_resume_metadata(out_dir, run_metadata)
     save_run_metadata(out_dir, subset_indices=subset_indices, metadata=run_metadata)
@@ -528,6 +543,9 @@ def run_opd_hf(cfg: OpdHfConfig, *, launcher_command: list[str]) -> None:
                 autocast_context=autocast_context,
             )
             rollout_inputs = full_seq[:, :-1]
+            teacher_prob_kwargs = {}
+            if cfg.teacher_law == SEMANTIC_KEY_NOISE_LAW:
+                teacher_prob_kwargs["semantic_key_noise_config"] = cfg.semantic_key_noise
             teacher_probs = cached_teacher_token_probs_hf(
                 teacher,
                 prompt_ids,
@@ -536,6 +554,7 @@ def run_opd_hf(cfg: OpdHfConfig, *, launcher_command: list[str]) -> None:
                 teacher_law=cfg.teacher_law,
                 device=device,
                 autocast_context=autocast_context,
+                **teacher_prob_kwargs,
             )
             if cfg.objective == "reverse_kl_tm":
                 teacher_action_probs = teacher_probs.gather(2, actions.unsqueeze(-1)).squeeze(-1)

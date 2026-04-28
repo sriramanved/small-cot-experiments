@@ -274,17 +274,23 @@ if offline_target_type == 'teacher_probs':
             f"{offline_dataset_meta.get('train_target_type')!r}, expected "
             "'teacher_probs'"
         )
-    if offline_dataset_meta.get("teacher_law") != "distributional_noise":
+    dataset_teacher_law = offline_dataset_meta.get("teacher_law")
+    if dataset_teacher_law not in ("distributional_noise", "semantic_key_noise"):
         raise ValueError(
             f"Dataset {dataset} has teacher_law="
-            f"{offline_dataset_meta.get('teacher_law')!r}, expected "
-            "'distributional_noise' for offline full-distribution BC"
+            f"{dataset_teacher_law!r}, expected 'distributional_noise' "
+            "or 'semantic_key_noise' for offline full-distribution BC"
         )
-    if offline_dataset_meta.get("train_decode_mode") != "sample_then_corrupt":
+    expected_decode_mode = (
+        "semantic_key_noise_sample"
+        if dataset_teacher_law == "semantic_key_noise"
+        else "sample_then_corrupt"
+    )
+    if offline_dataset_meta.get("train_decode_mode") != expected_decode_mode:
         raise ValueError(
             f"Dataset {dataset} has train_decode_mode="
             f"{offline_dataset_meta.get('train_decode_mode')!r}, expected "
-            "'sample_then_corrupt' for offline full-distribution BC"
+            f"{expected_decode_mode!r} for offline full-distribution BC"
         )
 
 if is_synthetic_offline_dataset(dataset) and master_process:

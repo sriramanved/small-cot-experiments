@@ -16,6 +16,10 @@ from data.modular_addition.task import (
 )
 from data.s5_cot.task import CORRUPTIBLE_IDS as S5_CORRUPTIBLE_IDS
 from data.s5_cot.task import evaluate_saved_clean_s5_metrics
+from data.s5_cot.semantic_key_noise import (
+    SEMANTIC_KEY_NOISE_LAW,
+    semantic_key_noise_config_from_obj,
+)
 from data.synthetic.prompt_bank import load_prompt_bank, select_train_subset
 from data.synthetic.target_spans import (
     canonical_target_len,
@@ -68,9 +72,15 @@ def validate_config(cfg: StudentPrefixConfig) -> None:
     subset_size = getattr(cfg, "subset_size", 0)
     rollout_temperature_override = getattr(cfg, "rollout_temperature_override", None)
     loss_temperature_override = getattr(cfg, "loss_temperature_override", None)
+    teacher_law = getattr(cfg, "teacher_law", "distributional_noise")
+    task_name = getattr(cfg, "task", "s5")
 
     if method_family not in {"opd", "nail"}:
         raise ValueError(f"unknown method_family {method_family!r}")
+    if teacher_law == SEMANTIC_KEY_NOISE_LAW:
+        if task_name != "s5":
+            raise ValueError("semantic_key_noise teacher_law is only supported for S5")
+        semantic_key_noise_config_from_obj(getattr(cfg, "semantic_key_noise", None))
     if teacher_signal not in {"mc", "full"}:
         raise ValueError("teacher_signal must be one of {'mc', 'full'}.")
     if loss not in {"forward", "reverse"}:
@@ -234,6 +244,11 @@ def canonical_student_prefix_metadata(
         "subset_size": metadata.get("subset_size"),
         "eta": metadata.get("eta"),
         "teacher_law": metadata.get("teacher_law"),
+        "semantic_key_noise": (
+            metadata.get("semantic_key_noise")
+            if metadata.get("teacher_law") == SEMANTIC_KEY_NOISE_LAW
+            else None
+        ),
         "method_family": method_state["method_family"],
         "teacher_signal": method_state["teacher_signal"],
         "loss": method_state["loss"],
@@ -583,7 +598,7 @@ def build_run_metadata(
     elif cfg.loss == "reverse" and cfg.teacher_signal == "full":
         reverse_action_source = "full_distribution"
 
-    return {
+    metadata = {
         "task": cfg.task,
         "p": prompt_bank.p,
         "m": prompt_bank.m,
@@ -616,6 +631,11 @@ def build_run_metadata(
         "dtype": str(torch_dtype).replace("torch.", ""),
         "compile": bool(cfg.compile),
     }
+    if cfg.teacher_law == SEMANTIC_KEY_NOISE_LAW:
+        metadata["semantic_key_noise"] = semantic_key_noise_config_from_obj(
+            cfg.semantic_key_noise
+        ).to_dict()
+    return metadata
 
 
 def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str]) -> None:
@@ -866,6 +886,9 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                 autocast_context=autocast_context,
             )
             rollout_inputs = full_seq[:, :-1]
+            teacher_prob_kwargs = {}
+            if cfg.teacher_law == SEMANTIC_KEY_NOISE_LAW:
+                teacher_prob_kwargs["semantic_key_noise_config"] = cfg.semantic_key_noise
             teacher_probs = cached_teacher_token_probs(
                 teacher,
                 prompt_ids,
@@ -875,6 +898,7 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                 corruptible_token_ids=corruptible_ids,
                 device=device,
                 autocast_context=autocast_context,
+                **teacher_prob_kwargs,
             )
             if cfg.teacher_signal == "mc" and cfg.loss == "forward":
                 teacher_targets = sample_teacher_actions(teacher_probs)

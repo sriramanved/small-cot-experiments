@@ -76,6 +76,8 @@ def generate_teacher_targets(
     device: str | torch.device,
     corrupt_ids_fn: Callable[[torch.Tensor, float], torch.Tensor],
     teacher_probs_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    teacher_probs_step_fn: Callable[[torch.Tensor, int, torch.Tensor], torch.Tensor] | None = None,
+    rollout_probs_step_fn: Callable[[torch.Tensor, int, torch.Tensor], torch.Tensor] | None = None,
     saved_teacher_probs_dtype: torch.dtype = torch.float16,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     if rollout_mode not in ROLLOUT_MODE_CHOICES:
@@ -83,14 +85,16 @@ def generate_teacher_targets(
     if target_mode not in TARGET_MODE_CHOICES:
         raise ValueError(f"unknown target_mode={target_mode!r}")
     if target_mode == "teacher_probs":
-        if rollout_mode != "sample_then_corrupt":
+        if rollout_mode != "sample_then_corrupt" and rollout_probs_step_fn is None:
             raise ValueError(
                 "target_mode='teacher_probs' currently only supports "
-                "rollout_mode='sample_then_corrupt'"
+                "rollout_mode='sample_then_corrupt' unless a per-step rollout "
+                "probability callback is provided"
             )
-        if teacher_probs_fn is None:
+        if teacher_probs_fn is None and teacher_probs_step_fn is None:
             raise ValueError(
-                "teacher_probs_fn is required when target_mode='teacher_probs'"
+                "teacher_probs_fn or teacher_probs_step_fn is required when "
+                "target_mode='teacher_probs'"
             )
 
     input_ids = prompt_ids.to(device=device, dtype=torch.long, non_blocking=True)
@@ -127,17 +131,30 @@ def generate_teacher_targets(
             )
         step_logits = step_logits[:, -1:, :]
         if teacher_probs is not None:
-            step_teacher_probs = teacher_probs_fn(step_logits)
+            if teacher_probs_step_fn is not None:
+                step_teacher_probs = teacher_probs_step_fn(step_logits, step, prompt_ids)
+            elif teacher_probs_fn is not None:
+                step_teacher_probs = teacher_probs_fn(step_logits)
+            else:
+                raise ValueError("teacher probability callback unexpectedly missing")
             teacher_probs[:, step, :] = step_teacher_probs.squeeze(1).to(
                 device="cpu",
                 dtype=saved_teacher_probs_dtype,
             )
-        if rollout_mode == "greedy_then_corrupt":
+        if rollout_probs_step_fn is not None:
+            step_rollout_probs = rollout_probs_step_fn(step_logits, step, prompt_ids)
+            next_ids = torch.multinomial(
+                step_rollout_probs.squeeze(1),
+                num_samples=1,
+            ).squeeze(1)
+        elif rollout_mode == "greedy_then_corrupt":
             next_ids = torch.argmax(step_logits[:, -1, :], dim=-1)
         else:
             probs = torch.softmax(step_logits[:, -1, :].float(), dim=-1)
             next_ids = torch.multinomial(probs, num_samples=1).squeeze(1)
-        next_ids = corrupt_ids_fn(next_ids, eta).to(dtype=prompt_ids.dtype)
+        if rollout_probs_step_fn is None:
+            next_ids = corrupt_ids_fn(next_ids, eta)
+        next_ids = next_ids.to(dtype=prompt_ids.dtype)
         generated[:, step] = next_ids
         input_ids = next_ids.unsqueeze(1).to(dtype=torch.long)
 
@@ -156,6 +173,8 @@ def render_train_split(
     device: str | torch.device,
     corrupt_ids_fn: Callable[[torch.Tensor, float], torch.Tensor],
     teacher_probs_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    teacher_probs_step_fn: Callable[[torch.Tensor, int, torch.Tensor], torch.Tensor] | None = None,
+    rollout_probs_step_fn: Callable[[torch.Tensor, int, torch.Tensor], torch.Tensor] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
     subset_size = int(subset_idx.numel())
     target_len = resolve_offline_target_len(prompt_bank)
@@ -163,9 +182,10 @@ def render_train_split(
     train_y = torch.empty((subset_size, prompt_bank.xy_len), dtype=prompt_bank.label_dtype)
     train_teacher_probs = None
     if target_mode == "teacher_probs":
-        if teacher_probs_fn is None:
+        if teacher_probs_fn is None and teacher_probs_step_fn is None:
             raise ValueError(
-                "teacher_probs_fn is required when target_mode='teacher_probs'"
+                "teacher_probs_fn or teacher_probs_step_fn is required when "
+                "target_mode='teacher_probs'"
             )
         train_teacher_probs = torch.empty(
             (subset_size, target_len, model.config.vocab_size),
@@ -186,6 +206,8 @@ def render_train_split(
             device=device,
             corrupt_ids_fn=corrupt_ids_fn,
             teacher_probs_fn=teacher_probs_fn,
+            teacher_probs_step_fn=teacher_probs_step_fn,
+            rollout_probs_step_fn=rollout_probs_step_fn,
         )
         batch_x, batch_y = build_xy_from_prompt_and_target(batch_prompt_ids, batch_target_ids)
         train_x[start:end] = batch_x
@@ -303,6 +325,8 @@ def render_offline_dataset(
     subset_idx: torch.Tensor,
     corrupt_ids_fn: Callable[[torch.Tensor, float], torch.Tensor],
     teacher_probs_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    teacher_probs_step_fn: Callable[[torch.Tensor, int, torch.Tensor], torch.Tensor] | None = None,
+    rollout_probs_step_fn: Callable[[torch.Tensor, int, torch.Tensor], torch.Tensor] | None = None,
     extra_meta: dict[str, Any] | None = None,
 ) -> None:
     model = load_native_teacher(
@@ -322,6 +346,8 @@ def render_offline_dataset(
         device=device,
         corrupt_ids_fn=corrupt_ids_fn,
         teacher_probs_fn=teacher_probs_fn,
+        teacher_probs_step_fn=teacher_probs_step_fn,
+        rollout_probs_step_fn=rollout_probs_step_fn,
     )
     val_x, val_y = build_oracle_val_split(prompt_bank)
 

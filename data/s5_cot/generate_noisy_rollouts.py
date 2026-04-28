@@ -13,6 +13,7 @@ from data.s5_cot.offline_render import (
     DTYPE_LOOKUP,
     ROLLOUT_MODE_CHOICES,
     TARGET_MODE_CHOICES,
+    TEACHER_LAW_CHOICES,
     render_offline_dataset,
 )
 
@@ -37,6 +38,11 @@ def parse_args():
     parser.add_argument("--subset_size", type=int, required=True)
     parser.add_argument("--eta", type=float, default=0.0)
     parser.add_argument(
+        "--teacher_law",
+        choices=TEACHER_LAW_CHOICES,
+        default="distributional_noise",
+    )
+    parser.add_argument(
         "--rollout_mode",
         choices=ROLLOUT_MODE_CHOICES,
         default="greedy_then_corrupt",
@@ -50,6 +56,9 @@ def parse_args():
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--dtype", choices=sorted(DTYPE_LOOKUP), default=None)
     parser.add_argument("--seed", type=int, default=1337)
+    parser.add_argument("--semantic_key_noise_coord_strategy", choices=("fixed", "cyclic", "hash"), default="cyclic")
+    parser.add_argument("--semantic_key_noise_fixed_coord", type=int, default=0)
+    parser.add_argument("--semantic_key_noise_seed", type=int, default=1337)
     return parser.parse_args()
 
 
@@ -70,6 +79,17 @@ def main():
         eta=args.eta,
         rollout_mode=args.rollout_mode,
         target_mode=args.target_mode,
+        teacher_law=args.teacher_law,
+        semantic_key_noise_config={
+            "enabled": True,
+            "coord_strategy": args.semantic_key_noise_coord_strategy,
+            "fixed_coord": args.semantic_key_noise_fixed_coord,
+            "seed": args.semantic_key_noise_seed,
+            "include_clean_value": True,
+            "eligible_values": (1, 2, 3, 4, 5),
+            "apply_to": "partial_perm_image",
+            "one_key_per_block": True,
+        },
         gen_batch_size=args.gen_batch_size,
         device=args.device,
         dtype_name=args.dtype,

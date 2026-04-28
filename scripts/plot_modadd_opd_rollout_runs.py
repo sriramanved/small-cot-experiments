@@ -69,6 +69,8 @@ class RunRecord:
     eval_history_path: Path
     last_eval_path: Path | None
     run_meta: dict[str, object] | None
+    selection_rank: int
+    selection_reason: str
 
 
 def parse_eta_tag(tag: str) -> float:
@@ -91,6 +93,37 @@ def method_label(method_family: str, loss: str) -> str:
     if loss == "forward":
         return "NAIL-forward"
     return "NAIL-reverse"
+
+
+def unique_run_id(root: Path, out_dir: Path) -> str:
+    try:
+        return str(out_dir.resolve().relative_to(root.resolve()))
+    except ValueError:
+        return str(out_dir.resolve())
+
+
+def classify_run_selection(
+    *,
+    method: str,
+    out_dir: Path,
+    run_meta: dict[str, object] | None,
+) -> tuple[int, str]:
+    if method != "NAIL-reverse":
+        return 0, "standard_method"
+
+    reverse_action_source = None if run_meta is None else run_meta.get("reverse_action_source")
+    if reverse_action_source == "student_aux_sample":
+        return 0, "run_meta.reverse_action_source=student_aux_sample"
+    if reverse_action_source == "rollout_action":
+        return 40, "legacy_rollout_actions"
+
+    path_text = str(out_dir.resolve())
+    if "nail_reverse_mc_fixed" in path_text:
+        return 1, "path_contains_nail_reverse_mc_fixed"
+
+    if run_meta is not None and all(key in run_meta for key in ("target_len", "answer_len", "target_span")):
+        return 2, "post_patch_run_meta_fields_present"
+    return 30, "no_fixed_nail_reverse_marker"
 
 
 def legacy_method_label(
@@ -269,10 +302,15 @@ def discover_modadd_opd_runs(
             run_meta=run_meta,
         )
         rollout_variant, rollout_label = rollout_variant_label(rollout_temp)
+        selection_rank, selection_reason = classify_run_selection(
+            method=method,
+            out_dir=out_dir,
+            run_meta=run_meta,
+        )
 
         records.append(
             RunRecord(
-                run_id=out_dir.name,
+                run_id=unique_run_id(root, out_dir),
                 objective=objective,
                 method=method,
                 teacher_law=teacher_law,
@@ -291,6 +329,8 @@ def discover_modadd_opd_runs(
                 eval_history_path=eval_history_path,
                 last_eval_path=(out_dir / "last_eval.json") if (out_dir / "last_eval.json").exists() else None,
                 run_meta=run_meta,
+                selection_rank=selection_rank,
+                selection_reason=selection_reason,
             )
         )
 
@@ -345,6 +385,8 @@ def build_runs_df(records: list[RunRecord]) -> tuple[pd.DataFrame, dict[str, pd.
                 "final_clean_final_exact": final_final,
                 "out_dir": str(record.out_dir),
                 "eval_history_path": str(record.eval_history_path),
+                "selection_rank": record.selection_rank,
+                "selection_reason": record.selection_reason,
             }
         )
 
@@ -352,7 +394,7 @@ def build_runs_df(records: list[RunRecord]) -> tuple[pd.DataFrame, dict[str, pd.
     if runs_df.empty:
         return runs_df, run_data
     runs_df = runs_df.sort_values(
-        ["eta", "method", "student_rollout_temperature", "display_label"]
+        ["eta", "method", "student_rollout_temperature", "selection_rank", "display_label", "run_id"]
     ).reset_index(drop=True)
     return runs_df, run_data
 

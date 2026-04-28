@@ -14,6 +14,7 @@ from unittest import mock
 import torch
 from hydra import compose, initialize_config_dir
 
+from data.modular_addition.task import sample_cot_example_ids_from_rng as sample_modadd_cot_example_ids_from_rng
 from data.s5_cot.task import VOCAB_SIZE, sample_cot_example_ids_from_rng
 from model import GPT, GPTConfig
 from nanogpt.config_schema import materialize_config
@@ -107,6 +108,49 @@ def _write_s5_prompt_bank(root: Path, *, m: int, n_train: int, n_val: int, seed:
         )
 
 
+def _write_modadd_prompt_bank(root: Path, *, p: int, m: int, n_train: int, n_val: int, seed: int) -> None:
+    rng = random.Random(seed)
+    prompt_len = m + 1
+    cot_len = m
+
+    train_prompt = torch.empty((n_train, prompt_len), dtype=torch.int32)
+    train_cot = torch.empty((n_train, cot_len), dtype=torch.int32)
+    val_prompt = torch.empty((n_val, prompt_len), dtype=torch.int32)
+    val_cot = torch.empty((n_val, cot_len), dtype=torch.int32)
+
+    for row in range(n_train):
+        prompt_ids, cot_ids = sample_modadd_cot_example_ids_from_rng(rng, p=p, m=m)
+        train_prompt[row] = torch.tensor(prompt_ids, dtype=torch.int32)
+        train_cot[row] = torch.tensor(cot_ids, dtype=torch.int32)
+    for row in range(n_val):
+        prompt_ids, cot_ids = sample_modadd_cot_example_ids_from_rng(rng, p=p, m=m)
+        val_prompt[row] = torch.tensor(prompt_ids, dtype=torch.int32)
+        val_cot[row] = torch.tensor(cot_ids, dtype=torch.int32)
+
+    root.mkdir(parents=True, exist_ok=True)
+    torch.save(train_prompt, root / "clean_train_prompt_ids.pt")
+    torch.save(train_cot, root / "clean_train_cot_ids.pt")
+    torch.save(val_prompt, root / "clean_val_prompt_ids.pt")
+    torch.save(val_cot, root / "clean_val_cot_ids.pt")
+    torch.save(torch.arange(n_train, dtype=torch.long), root / "train_order.pt")
+    with open(root / "meta.json", "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "task": "modadd",
+                "p": p,
+                "m": m,
+                "n_train": n_train,
+                "n_val": n_val,
+                "prompt_len": prompt_len,
+                "cot_len": cot_len,
+                "final_answer_len": 1,
+                "seed": seed,
+            },
+            f,
+            indent=2,
+        )
+
+
 def _write_teacher_checkpoint(root: Path, *, block_size: int) -> None:
     model_args = {
         "n_layer": 1,
@@ -115,6 +159,30 @@ def _write_teacher_checkpoint(root: Path, *, block_size: int) -> None:
         "block_size": block_size,
         "bias": False,
         "vocab_size": VOCAB_SIZE,
+        "dropout": 0.0,
+    }
+    model = GPT(GPTConfig(**model_args))
+    root.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "model_args": model_args,
+            "model": model.state_dict(),
+            "iter_num": 0,
+            "best_val_loss": 0.0,
+            "config": {},
+        },
+        root / "ckpt.pt",
+    )
+
+
+def _write_modadd_teacher_checkpoint(root: Path, *, p: int, block_size: int) -> None:
+    model_args = {
+        "n_layer": 1,
+        "n_head": 1,
+        "n_embd": 16,
+        "block_size": block_size,
+        "bias": False,
+        "vocab_size": p + 1,
         "dropout": 0.0,
     }
     model = GPT(GPTConfig(**model_args))
@@ -168,6 +236,14 @@ class HydraConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "single-process only"):
             project_nail_config(cfg)
 
+    def test_native_student_prefix_projection_rejects_legacy_objective_override(self):
+        cfg = _compose_app(
+            "experiment=modadd_opd",
+            "+task.objective=forward_kl_simple",
+        )
+        with self.assertRaisesRegex(ValueError, "task.loss and task.teacher_signal"):
+            project_opd_config(cfg)
+
     def test_s5_nail_reverse_mc_fixed_projection_wires_reverse_controls(self):
         cfg = _compose_app(
             "experiment=s5_nail_reverse_mc_fixed",
@@ -189,6 +265,19 @@ class HydraConfigTests(unittest.TestCase):
         self.assertEqual(projected.loss, "reverse")
         self.assertEqual(projected.teacher_signal, "full")
         self.assertEqual(projected.rollout_temperature_override, 0.0)
+        self.assertTrue(projected.shuffle_prompts)
+
+    def test_modadd_nail_reverse_mc_fixed_projection_wires_reverse_controls(self):
+        cfg = _compose_app(
+            "experiment=modadd_nail_reverse_mc_fixed",
+            "task.rollout_temperature_override=0.2",
+            "optim.shuffle_prompts=true",
+        )
+        projected = project_nail_config(cfg)
+        self.assertEqual(projected.task, "modadd")
+        self.assertEqual(projected.loss, "reverse")
+        self.assertEqual(projected.teacher_signal, "mc")
+        self.assertEqual(projected.rollout_temperature_override, 0.2)
         self.assertTrue(projected.shuffle_prompts)
 
     def test_opd_hf_projection_rejects_parallel_torchrun(self):
@@ -227,6 +316,8 @@ class HydraConfigTests(unittest.TestCase):
             "s5_nail_reverse_debug",
             "modadd_opd",
             "modadd_nail",
+            "modadd_nail_reverse_full",
+            "modadd_nail_reverse_mc_fixed",
             "s5_opd_hf",
         ]
 
@@ -547,6 +638,109 @@ class HydraConfigTests(unittest.TestCase):
             torch.testing.assert_close(captured["teacher_actions"], rollout_actions)
             torch.testing.assert_close(captured["reverse_actions"], rollout_actions)
             torch.testing.assert_close(captured["reverse_log_q"], rollout_log_q)
+
+    def test_modadd_nail_reverse_mc_fixed_uses_rollout_prefixes_and_auxiliary_actions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            prompt_bank_dir = root / "prompt_bank"
+            teacher_dir = root / "teacher"
+            out_dir = root / "modadd_nail_reverse_mc_fixed_out"
+
+            _write_modadd_prompt_bank(prompt_bank_dir, p=3, m=2, n_train=2, n_val=1, seed=19)
+            _write_modadd_teacher_checkpoint(teacher_dir, p=3, block_size=4)
+
+            cfg = project_nail_config(
+                _compose_app(
+                    "experiment=modadd_nail_reverse_mc_fixed",
+                    "runtime=cpu",
+                    "logging=disabled",
+                    "task.modadd_p=3",
+                    "task.modadd_m=2",
+                    f"task.teacher_checkpoint={teacher_dir}",
+                    f"task.prompt_bank_dir={prompt_bank_dir}",
+                    "task.subset_size=2",
+                    f"run.out_dir={out_dir}",
+                    "optim.batch_size=2",
+                    "optim.max_iters=1",
+                    "optim.learning_rate=0.001",
+                    "optim.warmup_iters=0",
+                    "optim.eval_interval=1",
+                    "optim.eval_n=1",
+                    "optim.eval_batch_size=1",
+                    "optim.log_interval=1",
+                    "optim.seed=7",
+                )
+            )
+
+            rollout_actions = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
+            rollout_log_q = torch.full((2, 2), -0.7, dtype=torch.float32)
+            aux_actions = torch.tensor([[2, 1], [0, 2]], dtype=torch.long)
+            aux_log_q = torch.full((2, 2), -1.1, dtype=torch.float32)
+            teacher_probs = torch.full((2, 2, 4), 0.25, dtype=torch.float32)
+            captured: dict[str, torch.Tensor] = {}
+
+            def fake_rollout_student(model, prompt_ids, *, target_len, temperature, device, autocast_context):
+                del model, temperature, autocast_context
+                self.assertEqual(target_len, rollout_actions.size(1))
+                prompt = prompt_ids.to(device=device, dtype=torch.long)
+                actions = rollout_actions.to(device=device)
+                full_seq = torch.cat((prompt, actions), dim=1)
+                return full_seq, actions, rollout_log_q.to(device=device)
+
+            def fake_cached_teacher_token_probs(
+                model,
+                prompt_ids,
+                actions,
+                *,
+                eta,
+                teacher_law,
+                corruptible_token_ids,
+                device,
+                autocast_context,
+            ):
+                del model, prompt_ids, eta, teacher_law, corruptible_token_ids, autocast_context
+                captured["teacher_actions"] = actions.detach().cpu().clone()
+                return teacher_probs.to(device=device)
+
+            def wrapped_reverse_kl_tm_loss(student_logits, actions, *, log_q, teacher_probs, eps):
+                captured["reverse_actions"] = actions.detach().cpu().clone()
+                captured["reverse_log_q"] = log_q.detach().cpu().clone()
+                return method_reverse_kl_tm_loss(
+                    student_logits,
+                    actions,
+                    log_q=log_q,
+                    teacher_probs=teacher_probs,
+                    eps=eps,
+                )
+
+            with mock.patch(
+                "nanogpt.trainers.native_student_prefix.run_eval",
+                return_value={
+                    "val/loss": 0.0,
+                    "val/clean_full_exact": 0.0,
+                    "val/clean_final_exact": 0.0,
+                },
+            ), mock.patch(
+                "nanogpt.trainers.native_student_prefix.rollout_student",
+                side_effect=fake_rollout_student,
+            ), mock.patch(
+                "nanogpt.trainers.native_student_prefix.cached_teacher_token_probs",
+                side_effect=fake_cached_teacher_token_probs,
+            ), mock.patch(
+                "nanogpt.trainers.native_student_prefix.sample_student_aux_actions",
+                return_value=(aux_actions, aux_log_q),
+            ), mock.patch(
+                "nanogpt.trainers.native_student_prefix.reverse_kl_tm_loss",
+                side_effect=wrapped_reverse_kl_tm_loss,
+            ):
+                run_nail(
+                    cfg,
+                    launcher_command=[str(PYTHON), "-m", "nanogpt.run", "experiment=modadd_nail_reverse_mc_fixed"],
+                )
+
+            torch.testing.assert_close(captured["teacher_actions"], rollout_actions)
+            torch.testing.assert_close(captured["reverse_actions"], aux_actions)
+            torch.testing.assert_close(captured["reverse_log_q"], aux_log_q)
 
     def test_submitit_aics_config_composes(self):
         result = _run_hydra(

@@ -182,6 +182,119 @@ Offline BC is close but not identical to the native online methods:
 
 </details>
 
+<details>
+<summary>Semantic key noise commands</summary>
+
+The `semantic_key_noise` teacher law corrupts one S5 value coordinate per CoT block. It samples from the mixed law at key positions and rolls sampled key tokens into later teacher prefixes.
+
+Render semantic-key noisy offline data:
+
+```bash
+python -m nanogpt.run experiment=s5_render \
+  task.bank_seed=1337 \
+  task.teacher_seed=20260417 \
+  task.render_seed=20260417 \
+  task.n_train=15000000 \
+  task.n_val=5000 \
+  task.subset_size=1000000 \
+  task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 \
+  task.teacher_law=semantic_key_noise \
+  task.eta=0.5 \
+  task.semantic_key_noise.coord_strategy=cyclic \
+  task.gen_batch_size=8192
+```
+
+Audit rendered semantic-key data:
+
+```bash
+python scripts/audit_s5_offline_dataset_accuracy.py \
+  task.bank_seed=1337 \
+  task.teacher_seed=20260417 \
+  task.render_seed=20260417 \
+  task.n_train=15000000 \
+  task.n_val=5000 \
+  task.subset_size=1000000 \
+  task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 \
+  task.teacher_law=semantic_key_noise \
+  task.eta=0.5
+```
+
+Train offline BC on the rendered data:
+
+```bash
+python -m nanogpt.run experiment=s5_noisy_bc \
+  task.bank_seed=1337 \
+  task.teacher_seed=20260417 \
+  task.render_seed=20260417 \
+  task.n_train=15000000 \
+  task.n_val=5000 \
+  task.subset_size=1000000 \
+  task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 \
+  task.teacher_law=semantic_key_noise \
+  task.eta=0.5 \
+  optim.seed=20260417
+```
+
+Run online NAIL / OPD against the same law:
+
+```bash
+python -m nanogpt.run experiment=s5_nail \
+  task.bank_seed=1337 \
+  task.teacher_seed=20260417 \
+  task.render_seed=20260417 \
+  task.n_train=15000000 \
+  task.n_val=5000 \
+  task.subset_size=1000000 \
+  task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 \
+  task.teacher_law=semantic_key_noise \
+  task.loss=forward \
+  task.teacher_signal=mc \
+  task.eta=0.5 \
+  optim.seed=20260417
+
+python -m nanogpt.run experiment=s5_opd \
+  task.bank_seed=1337 \
+  task.teacher_seed=20260417 \
+  task.render_seed=20260417 \
+  task.n_train=15000000 \
+  task.n_val=5000 \
+  task.subset_size=1000000 \
+  task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 \
+  task.teacher_law=semantic_key_noise \
+  task.loss=reverse \
+  task.teacher_signal=mc \
+  task.eta=0.5 \
+  optim.seed=20260417
+```
+
+Nohup/concurrent launch form. Define `COMMON_TASK` inside each `bash -lc` body so the child shell does not silently lose the overrides:
+
+```bash
+mkdir -p nohup_logs
+
+nohup bash -lc '
+set -euo pipefail
+COMMON_TASK="task.bank_seed=1337 task.teacher_seed=20260417 task.render_seed=20260417 task.n_train=15000000 task.n_val=5000 task.subset_size=1000000 task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 task.teacher_law=semantic_key_noise task.eta=0.5 task.semantic_key_noise.coord_strategy=cyclic"
+python -m nanogpt.run experiment=s5_render $COMMON_TASK task.gen_batch_size=8192
+python scripts/audit_s5_offline_dataset_accuracy.py $COMMON_TASK
+python -m nanogpt.run experiment=s5_noisy_bc $COMMON_TASK optim.seed=20260417
+' > nohup_logs/s5_semantic_eta0p5_render_audit_bc.log 2>&1 &
+
+nohup bash -lc '
+set -euo pipefail
+COMMON_TASK="task.bank_seed=1337 task.teacher_seed=20260417 task.render_seed=20260417 task.n_train=15000000 task.n_val=5000 task.subset_size=1000000 task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 task.teacher_law=semantic_key_noise task.eta=0.5 task.semantic_key_noise.coord_strategy=cyclic"
+python -m nanogpt.run experiment=s5_nail $COMMON_TASK optim.seed=20260417 task.loss=forward task.teacher_signal=mc
+' > nohup_logs/s5_semantic_eta0p5_nail_forward.log 2>&1 &
+
+nohup bash -lc '
+set -euo pipefail
+COMMON_TASK="task.bank_seed=1337 task.teacher_seed=20260417 task.render_seed=20260417 task.n_train=15000000 task.n_val=5000 task.subset_size=1000000 task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 task.teacher_law=semantic_key_noise task.eta=0.5 task.semantic_key_noise.coord_strategy=cyclic"
+python -m nanogpt.run experiment=s5_opd $COMMON_TASK optim.seed=20260417 task.loss=reverse task.teacher_signal=mc
+' > nohup_logs/s5_semantic_eta0p5_opd_reverse.log 2>&1 &
+```
+
+</details>
+
 For all of the below sweeps, we use the same clean expert (we used online CoT training for `100k` iterations) with seed `20260417`. So when running sweeps for other seeds, we change `task.render_seed` (for offline rendering) and `optim.seed` (for training) while keeping `task.teacher_seed = 20260417` the same. 
 
 ## Sweep Matrix With Seed 20260417

@@ -15,6 +15,8 @@ This log records precise Hydra defaults and concrete run commands for the modadd
 - `teacher_seed`: selects the expert checkpoint path
 - `render_seed`: selects rendered offline dataset identity
 - `optim.seed`: training RNG for the current run
+- Native online methods now use `task.loss` plus `task.teacher_signal`; do not use the legacy `task.objective` override except for the `opd_hf` pipeline.
+- Use `experiment=modadd_nail_reverse_mc_fixed` for fresh NAIL-reverse MC reruns. Its output root includes `nail_reverse_mc_fixed`, so fixed auxiliary-action runs do not get mixed with legacy reverse-NAIL artifacts.
 
 ## P=7, M=127 Setup
 
@@ -123,7 +125,9 @@ nohup ./.venv/bin/python -m nanogpt.run --multirun \
   task.teacher_seed=20260417 \
   task.render_seed=1337 \
   task.subset_size=1000000 \
-  task.objective=reverse_kl_tm \
+  task.teacher_signal=mc \
+  task.loss=reverse \
+  task.rollout_temperature_override=1.0 \
   task.eta=0.0,0.1,0.3,0.5,0.7,0.9 \
   optim.seed=20260417 \
   optim.single_epoch=true \
@@ -133,14 +137,14 @@ nohup ./.venv/bin/python -m nanogpt.run --multirun \
 
 </details>
 
-- OPD forward-KL simple sweep
+- NAIL forward-KL MC sweep
 
 <details>
 <summary>Command</summary>
 
 ```bash
 nohup ./.venv/bin/python -m nanogpt.run --multirun \
-  experiment=modadd_opd \
+  experiment=modadd_nail \
   task.modadd_p=7 \
   task.modadd_m=127 \
   task.n_train=4000000 \
@@ -149,12 +153,42 @@ nohup ./.venv/bin/python -m nanogpt.run --multirun \
   task.teacher_seed=20260417 \
   task.render_seed=1337 \
   task.subset_size=1000000 \
-  task.objective=forward_kl_simple \
+  task.teacher_signal=mc \
+  task.loss=forward \
+  task.rollout_temperature_override=0.0 \
   task.eta=0.0,0.1,0.3,0.5,0.7,0.9 \
   optim.seed=20260417 \
   optim.single_epoch=true \
   optim.eval_interval=500 \
-  > logs/nohup/modadd_opd_forward_kl_simple_p7_m127_seed20260417.log 2>&1 &
+  > logs/nohup/modadd_nail_forward_mc_p7_m127_seed20260417.log 2>&1 &
+```
+
+</details>
+
+- Fixed NAIL reverse-KL MC sweep
+
+<details>
+<summary>Command</summary>
+
+```bash
+nohup ./.venv/bin/python -m nanogpt.run --multirun \
+  experiment=modadd_nail_reverse_mc_fixed \
+  task.modadd_p=7 \
+  task.modadd_m=127 \
+  task.n_train=4000000 \
+  task.n_val=5000 \
+  task.bank_seed=1337 \
+  task.teacher_seed=20260417 \
+  task.render_seed=1337 \
+  task.subset_size=1000000 \
+  task.teacher_signal=mc \
+  task.loss=reverse \
+  task.rollout_temperature_override=0.0 \
+  task.eta=0.0,0.1,0.3,0.5,0.7,0.9 \
+  optim.seed=20260417 \
+  optim.single_epoch=true \
+  optim.eval_interval=500 \
+  > logs/nohup/modadd_nail_reverse_mc_fixed_p7_m127_seed20260417.log 2>&1 &
 ```
 
 </details>

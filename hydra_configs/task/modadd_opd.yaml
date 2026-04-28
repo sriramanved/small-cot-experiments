@@ -8,7 +8,7 @@ task:
   render_seed: 1337
   teacher_depth: 1
   modadd_p: 7
-  modadd_m: 21
+  modadd_m: 31
   n_train: 15000000
   n_val: 5000
   teacher_checkpoint: ${path_join:${task.teacher_output_root},${out_name:${modadd_expert_run_name:${task.modadd_p},${task.modadd_m},${task.teacher_depth},${task.teacher_seed},cot}}}

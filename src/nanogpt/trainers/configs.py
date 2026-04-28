@@ -88,6 +88,7 @@ class StudentPrefixConfig:
     subset_size: int
     eta: float
     teacher_law: str
+    semantic_key_noise: dict[str, object]
     teacher_signal: str
     loss: str
     out_dir: str
@@ -146,6 +147,7 @@ class OpdHfConfig:
     subset_size: int
     eta: float
     teacher_law: str
+    semantic_key_noise: dict[str, object]
     objective: str
     out_dir: str
     init_from: str
@@ -287,6 +289,11 @@ def _project_student_prefix_config(
             f"{expected_pipeline.upper()} pipelines are single-process only; leave "
             "runtime.torchrun at 1"
         )
+    if cfg.task.objective not in (None, ""):
+        raise ValueError(
+            "Native OPD/NAIL pipelines use task.loss and task.teacher_signal; "
+            "task.objective is only supported by the opd_hf pipeline."
+        )
     return config_cls(
         method_family=expected_pipeline,
         task=cfg.task.task,
@@ -295,6 +302,7 @@ def _project_student_prefix_config(
         subset_size=cfg.task.subset_size,
         eta=cfg.task.eta,
         teacher_law=cfg.task.teacher_law,
+        semantic_key_noise=asdict(cfg.task.semantic_key_noise),
         teacher_signal=cfg.task.teacher_signal,
         loss=cfg.task.loss,
         out_dir=cfg.run.out_dir,
@@ -361,6 +369,7 @@ def project_opd_hf_config(cfg: AppConfig) -> OpdHfConfig:
         subset_size=cfg.task.subset_size,
         eta=cfg.task.eta,
         teacher_law=cfg.task.teacher_law,
+        semantic_key_noise=asdict(cfg.task.semantic_key_noise),
         objective=cfg.task.objective,
         out_dir=cfg.run.out_dir,
         init_from=cfg.optim.init_from,

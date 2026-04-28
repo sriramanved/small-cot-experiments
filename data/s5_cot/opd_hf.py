@@ -6,6 +6,12 @@ import torch
 import torch.nn.functional as F
 
 from data.s5_cot.prompt_bank import PromptBank, build_xy_from_prompt_and_target
+from data.s5_cot.semantic_key_noise import (
+    SEMANTIC_KEY_NOISE_LAW,
+    eligible_token_ids_from_values,
+    semantic_key_mask_for_step,
+    semantic_key_noise_config_from_obj,
+)
 from nanogpt.methods.student_prefix import compute_teacher_token_probs, gather_action_log_probs
 
 try:
@@ -90,6 +96,7 @@ def cached_teacher_token_probs_hf(
     *,
     eta: float,
     teacher_law: str,
+    semantic_key_noise_config: dict[str, object] | object | None = None,
     device: str | torch.device,
     autocast_context=nullcontext(),
 ) -> torch.Tensor:
@@ -105,6 +112,11 @@ def cached_teacher_token_probs_hf(
         model,
         max_cache_len=prompt.size(1) + actions.size(1),
     )
+    semantic_config = None
+    eligible_token_ids = None
+    if teacher_law == SEMANTIC_KEY_NOISE_LAW:
+        semantic_config = semantic_key_noise_config_from_obj(semantic_key_noise_config)
+        eligible_token_ids = eligible_token_ids_from_values(semantic_config.eligible_values)
 
     for step in range(actions.size(1)):
         with autocast_context:
@@ -115,10 +127,15 @@ def cached_teacher_token_probs_hf(
                 logits_to_keep=1,
             )
         cache = outputs.past_key_values
+        key_mask = None
+        if semantic_config is not None:
+            key_mask = semantic_key_mask_for_step(prompt, step, semantic_config)
         teacher_probs[:, step, :] = compute_teacher_token_probs(
             outputs.logits[:, -1:, :],
             eta=eta,
             teacher_law=teacher_law,
+            key_mask=key_mask,
+            eligible_token_ids=eligible_token_ids,
         ).squeeze(1)
         input_ids = actions[:, step:step + 1]
 

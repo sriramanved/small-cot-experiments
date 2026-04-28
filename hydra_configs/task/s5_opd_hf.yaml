@@ -15,6 +15,15 @@ task:
   subset_size: 1000000
   eta: 0.05
   teacher_law: distributional_noise
+  semantic_key_noise:
+    enabled: true
+    coord_strategy: cyclic
+    fixed_coord: 0
+    seed: ${optim.seed}
+    include_clean_value: true
+    eligible_values: [1, 2, 3, 4, 5]
+    apply_to: partial_perm_image
+    one_key_per_block: true
   objective: reverse_kl_tm
   student_temperature: 1.0
   student_rollout_temperature: 1.0

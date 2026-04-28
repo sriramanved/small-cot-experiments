@@ -9,6 +9,13 @@ import torch.nn.functional as F
 
 from data.s5_cot.prompt_bank import PromptBank, build_xy_from_prompt_and_target
 from data.s5_cot.task import CORRUPTIBLE_IDS
+from data.s5_cot.semantic_key_noise import (
+    SEMANTIC_KEY_NOISE_LAW,
+    default_eligible_token_ids,
+    eligible_token_ids_from_values,
+    semantic_key_mask_for_step,
+    semantic_key_noise_config_from_obj,
+)
 
 
 DEFAULT_ROLLOUT_TEMPERATURE = {
@@ -337,12 +344,59 @@ def corrupted_greedy_teacher_probs(
     return probs
 
 
+def _normalize_teacher_key_mask(
+    key_mask: torch.Tensor,
+    *,
+    teacher_probs: torch.Tensor,
+) -> torch.Tensor:
+    mask = key_mask.to(device=teacher_probs.device, dtype=torch.bool)
+    expected_shape = teacher_probs.shape[:-1]
+    if tuple(mask.shape) == tuple(expected_shape):
+        return mask
+    if teacher_probs.ndim >= 3 and tuple(mask.shape) == tuple(expected_shape[:-1]):
+        return mask.unsqueeze(-1).expand(expected_shape)
+    if mask.ndim == 0 and len(expected_shape) == 0:
+        return mask
+    raise ValueError(
+        f"semantic_key_noise key_mask shape {tuple(mask.shape)} is incompatible "
+        f"with teacher_probs shape {tuple(teacher_probs.shape)}"
+    )
+
+
+def semantic_key_noise_probs(
+    teacher_probs: torch.Tensor,
+    *,
+    eta: float,
+    key_mask: torch.Tensor,
+    eligible_token_ids: tuple[int, ...] | list[int] = default_eligible_token_ids(),
+) -> torch.Tensor:
+    clean_probs = teacher_probs.float()
+    if eta <= 0:
+        return clean_probs
+
+    key_mask = _normalize_teacher_key_mask(key_mask, teacher_probs=clean_probs)
+    if not torch.any(key_mask):
+        return clean_probs
+
+    eligible_ids = torch.as_tensor(eligible_token_ids, dtype=torch.long, device=clean_probs.device)
+    num_eligible = int(eligible_ids.numel())
+    if num_eligible == 0:
+        raise ValueError("semantic_key_noise requires at least one eligible token id")
+
+    uniform_noise = torch.zeros_like(clean_probs)
+    uniform_noise.index_fill_(dim=-1, index=eligible_ids, value=1.0 / num_eligible)
+    mixed = (1.0 - float(eta)) * clean_probs + float(eta) * uniform_noise
+    return torch.where(key_mask.unsqueeze(-1), mixed, clean_probs)
+
+
 def compute_teacher_token_probs(
     clean_logits: torch.Tensor,
     *,
     eta: float,
     teacher_law: str,
     corruptible_token_ids: tuple[int, ...] | list[int] = CORRUPTIBLE_IDS,
+    key_mask: torch.Tensor | None = None,
+    eligible_token_ids: tuple[int, ...] | list[int] | None = None,
 ) -> torch.Tensor:
     if teacher_law == "distributional_noise":
         return distributional_noisy_teacher_probs(
@@ -356,6 +410,20 @@ def compute_teacher_token_probs(
             eta=eta,
             corruptible_token_ids=corruptible_token_ids,
         )
+    if teacher_law == "semantic_key_noise":
+        if key_mask is None:
+            raise ValueError("semantic_key_noise requires key_mask")
+        clean_probs = F.softmax(clean_logits.float(), dim=-1)
+        return semantic_key_noise_probs(
+            clean_probs,
+            eta=eta,
+            key_mask=key_mask,
+            eligible_token_ids=(
+                default_eligible_token_ids()
+                if eligible_token_ids is None
+                else eligible_token_ids
+            ),
+        )
     raise ValueError(f"Unknown teacher_law: {teacher_law}")
 
 
@@ -366,6 +434,8 @@ def compute_teacher_log_probs(
     eta: float,
     teacher_law: str,
     corruptible_token_ids: tuple[int, ...] | list[int] = CORRUPTIBLE_IDS,
+    key_mask: torch.Tensor | None = None,
+    eligible_token_ids: tuple[int, ...] | list[int] | None = None,
     eps: float = 1e-10,
 ) -> torch.Tensor:
     teacher_probs = compute_teacher_token_probs(
@@ -373,6 +443,8 @@ def compute_teacher_log_probs(
         eta=eta,
         teacher_law=teacher_law,
         corruptible_token_ids=corruptible_token_ids,
+        key_mask=key_mask,
+        eligible_token_ids=eligible_token_ids,
     )
     teacher_action_probs = teacher_probs.gather(2, actions.unsqueeze(-1)).squeeze(-1)
     return torch.log(teacher_action_probs.clamp_min(eps))
@@ -530,6 +602,7 @@ def cached_teacher_token_probs(
     eta: float,
     teacher_law: str,
     corruptible_token_ids: tuple[int, ...] | list[int] = CORRUPTIBLE_IDS,
+    semantic_key_noise_config: dict[str, object] | object | None = None,
     device: str | torch.device,
     autocast_context=nullcontext(),
 ) -> torch.Tensor:
@@ -542,6 +615,11 @@ def cached_teacher_token_probs(
     )
     input_ids = prompt
     past_key_values = None
+    semantic_config = None
+    eligible_token_ids = None
+    if teacher_law == SEMANTIC_KEY_NOISE_LAW:
+        semantic_config = semantic_key_noise_config_from_obj(semantic_key_noise_config)
+        eligible_token_ids = eligible_token_ids_from_values(semantic_config.eligible_values)
 
     for step in range(actions.size(1)):
         with autocast_context:
@@ -550,11 +628,16 @@ def cached_teacher_token_probs(
                 past_key_values=past_key_values,
                 use_cache=True,
             )
+        key_mask = None
+        if semantic_config is not None:
+            key_mask = semantic_key_mask_for_step(prompt, step, semantic_config)
         teacher_probs[:, step, :] = compute_teacher_token_probs(
             logits[:, -1:, :],
             eta=eta,
             teacher_law=teacher_law,
             corruptible_token_ids=corruptible_token_ids,
+            key_mask=key_mask,
+            eligible_token_ids=eligible_token_ids,
         ).squeeze(1)
         input_ids = actions[:, step:step + 1]
 
@@ -570,6 +653,7 @@ def cached_teacher_log_probs(
     eta: float,
     teacher_law: str,
     corruptible_token_ids: tuple[int, ...] | list[int] = CORRUPTIBLE_IDS,
+    semantic_key_noise_config: dict[str, object] | object | None = None,
     eps: float,
     device: str | torch.device,
     autocast_context=nullcontext(),
@@ -581,6 +665,7 @@ def cached_teacher_log_probs(
         eta=eta,
         teacher_law=teacher_law,
         corruptible_token_ids=corruptible_token_ids,
+        semantic_key_noise_config=semantic_key_noise_config,
         device=device,
         autocast_context=autocast_context,
     )

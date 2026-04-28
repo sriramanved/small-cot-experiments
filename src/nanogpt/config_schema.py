@@ -67,6 +67,18 @@ class SweepConfig:
 
 
 @dataclass
+class SemanticKeyNoiseConfig:
+    enabled: bool = True
+    coord_strategy: str = "cyclic"
+    fixed_coord: int = 0
+    seed: int = 1337
+    include_clean_value: bool = True
+    eligible_values: list[int] = field(default_factory=lambda: [1, 2, 3, 4, 5])
+    apply_to: str = "partial_perm_image"
+    one_key_per_block: bool = True
+
+
+@dataclass
 class TaskConfig:
     dataset: str = "openwebtext"
     dataset_prefix: str = ""
@@ -100,6 +112,7 @@ class TaskConfig:
     student_rollout_temperature: Optional[float] = None
     rollout_mode: str = "greedy_then_corrupt"
     target_mode: str = "tokens"
+    semantic_key_noise: SemanticKeyNoiseConfig = field(default_factory=SemanticKeyNoiseConfig)
 
 
 @dataclass
