@@ -21,14 +21,18 @@ from nanogpt.methods.student_prefix import normalize_student_prefix_method
 
 try:
     from scripts.plot_style import (
+        apply_iteration_axis,
         get_method_style,
+        metric_display_label,
         polish_axes,
         save_publication_figure,
         set_publication_style,
     )
 except ModuleNotFoundError:
     from plot_style import (
+        apply_iteration_axis,
         get_method_style,
+        metric_display_label,
         polish_axes,
         save_publication_figure,
         set_publication_style,
@@ -77,6 +81,14 @@ PLOT_METHODS = (
 )
 
 METHOD_COLORS = {method: get_method_style(method).color for method in PLOT_METHODS}
+
+PLOT_LEGEND_LABELS = {
+    "Offline BC": "Offline BC",
+    "TM OPD": "TM OPD",
+    "NAIL-forward, greedy rollout": "NAIL-forward greedy",
+    "NAIL-forward, sampled rollout": "NAIL-forward sampled",
+    "NAIL-reverse, greedy rollout": "NAIL-reverse greedy",
+}
 
 SEED_LINESTYLES = {
     20260417: "-",
@@ -391,6 +403,25 @@ def classify_run_selection(
     resolved_out_dir = out_dir.resolve()
     manual_rank = -100 if run_matches_override(resolved_out_dir, preferred_run_ids) else 0
     manual_reason = "manual_preferred_run_ids" if manual_rank < 0 else ""
+
+    if method == "Offline BC":
+        if manual_reason:
+            return "manual_preferred", manual_rank, manual_reason
+
+        offline_match = OFFLINE_BC_RE.match(out_dir.name)
+        suffixes = set()
+        if offline_match is not None:
+            suffixes = set(filter(None, offline_match.group("suffixes").split("-")))
+        is_sampled_offline = "sample" in suffixes
+        path_text = str(resolved_out_dir)
+
+        if is_sampled_offline and "dev_node" in path_text:
+            return "offline_bc_sample_dev_node", -20, "offline_bc_sample_on_dev_node"
+        if is_sampled_offline:
+            return "offline_bc_sample", -10, "offline_bc_sample_run"
+        if "dev_node" in path_text:
+            return "offline_bc_dev_node", 5, "offline_bc_on_dev_node"
+        return "offline_bc_other", 10, "offline_bc_non_sample_run"
 
     if method != "NAIL-reverse, greedy rollout":
         if manual_reason:
@@ -1340,7 +1371,6 @@ def plot_per_eta(
 ) -> None:
     set_publication_style()
     import matplotlib.pyplot as plt
-    from matplotlib.ticker import MultipleLocator
 
     if runs_df.empty:
         return
@@ -1350,7 +1380,10 @@ def plot_per_eta(
 
     for eta in sorted(preferred["eta"].unique()):
         eta_rows = preferred[preferred["eta"] == eta]
-        fig, ax = plt.subplots(figsize=(10, 6), constrained_layout=True)
+        fig, ax = plt.subplots(figsize=(14.5, 6.0), constrained_layout=False)
+        fig.subplots_adjust(left=0.075, right=0.79, bottom=0.14, top=0.88)
+
+        plotted_methods: list[tuple[str, pd.DataFrame, object, int]] = []
 
         for method in METHOD_COLORS:
             method_rows = eta_rows[eta_rows["method"] == method].copy()
@@ -1372,7 +1405,16 @@ def plot_per_eta(
                 continue
 
             style = get_method_style(method)
-            label = f"{style.label} (n={int(summary['n_seeds'].max())})"
+            seed_count = int(summary["n_seeds"].max())
+            plotted_methods.append((method, summary, style, seed_count))
+
+        seed_counts = {seed_count for _, _, _, seed_count in plotted_methods}
+        show_seed_counts = len(seed_counts) > 1
+
+        for method, summary, style, seed_count in plotted_methods:
+            label = PLOT_LEGEND_LABELS.get(method, style.label)
+            if show_seed_counts:
+                label = f"{label} (n={seed_count})"
             ax.plot(
                 summary["iter"],
                 summary["mean"],
@@ -1392,12 +1434,22 @@ def plot_per_eta(
 
         ax.set_title(f"S5 m={int(preferred['m'].iloc[0])}, eta={eta:.2f}")
         ax.set_xlabel("Iteration")
-        ax.set_ylabel(metric.replace("val/", "").replace("_", " "))
+        ax.set_ylabel(metric_display_label(metric))
         ax.set_ylim(0.0, 1.01)
-        ax.xaxis.set_major_locator(MultipleLocator(10000))
-        ax.xaxis.set_minor_locator(MultipleLocator(5000))
+        ax.set_xlim(left=0)
+        apply_iteration_axis(ax, nbins=6)
         polish_axes(ax)
-        ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
+        if plotted_methods:
+            ax.legend(
+                loc="upper left",
+                bbox_to_anchor=(1.01, 1.0),
+                borderaxespad=0.0,
+                fontsize=12,
+                handlelength=2.2,
+                handletextpad=0.55,
+                labelspacing=0.45,
+                borderpad=0.45,
+            )
 
         if out_dir is not None:
             out_dir.mkdir(parents=True, exist_ok=True)

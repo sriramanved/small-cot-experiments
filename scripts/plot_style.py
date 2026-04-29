@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 
 @dataclass(frozen=True)
@@ -233,6 +234,46 @@ def polish_axes(ax: object, *, remove_top_right: bool = True) -> None:
     if remove_top_right:
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
+
+
+def format_iteration_k(value: float, _position: object | None = None) -> str:
+    if not math.isfinite(value):
+        return ""
+    rounded = int(round(value))
+    if abs(rounded) < 1000:
+        return str(rounded)
+    thousands = rounded / 1000
+    if float(thousands).is_integer():
+        return f"{int(thousands)}K"
+    return f"{thousands:.1f}".rstrip("0").rstrip(".") + "K"
+
+
+def apply_iteration_axis(ax: object, *, nbins: int = 6) -> None:
+    from matplotlib.ticker import AutoMinorLocator, FuncFormatter, MaxNLocator
+
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=nbins, integer=True, min_n_ticks=4))
+    ax.xaxis.set_major_formatter(FuncFormatter(format_iteration_k))
+    ax.xaxis.set_minor_locator(AutoMinorLocator(2))
+    ax.tick_params(axis="x", labelrotation=0)
+
+
+def metric_display_label(metric: str) -> str:
+    labels = {
+        "val/clean_full_exact": "Full exact",
+        "val_clean_full_exact": "Full exact",
+        "clean_full_exact": "Full exact",
+        "final_clean_full_exact": "Full exact",
+        "val/clean_final_exact": "Final exact",
+        "val_clean_final_exact": "Final exact",
+        "clean_final_exact": "Final exact",
+        "final_clean_final_exact": "Final exact",
+        "val/loss": "Loss",
+        "val_loss": "Loss",
+    }
+    if metric in labels:
+        return labels[metric]
+    short = metric.replace("val/", "").replace("val_", "")
+    return short.replace("_", " ").strip().capitalize()
 
 
 def save_publication_figure(fig: object, out_path: str | object, *, formats: tuple[str, ...] = ("png", "pdf")) -> None:

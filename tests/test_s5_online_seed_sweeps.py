@@ -908,6 +908,53 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
             self.assertEqual(int(runs_df.iloc[0]["history_selected_segment"]), 1)
             self.assertEqual(run_data[runs_df.iloc[0]["run_id"]]["iter"].tolist(), [0, 150])
 
+    def test_offline_bc_prefers_sampled_dev_node_runs_for_eta_0p1_and_0p5(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            dev_root = root / "analysis" / "cache" / "s5_online_seed_sweeps" / "dev_node"
+            aics_root = root / "analysis" / "cache" / "s5_online_seed_sweeps" / "aics"
+
+            for eta_tag in ("0p1", "0p5"):
+                desired = (
+                    dev_root
+                    / "offline_bc"
+                    / f"out-s5-noisy-bc-m21-n8000000-eta{eta_tag}-sample-seed20260417"
+                )
+                duplicate = (
+                    aics_root
+                    / "offline_bc"
+                    / f"out-s5-noisy-bc-m21-n8000000-eta{eta_tag}-seed20260417"
+                )
+                _write_run(desired, teacher_seed=20260417)
+                _write_run(duplicate, teacher_seed=20260417)
+
+                old_ts = 1777075200
+                new_ts = 1777248000
+                for path in (desired / "eval_history.jsonl", desired / "last_eval.json", desired / "completed.txt"):
+                    os.utime(path, (old_ts, old_ts))
+                for path in (duplicate / "eval_history.jsonl", duplicate / "last_eval.json", duplicate / "completed.txt"):
+                    os.utime(path, (new_ts, new_ts))
+
+            records = discover_s5_online_runs(
+                [dev_root, aics_root],
+                m=21,
+                seeds=[20260417],
+                etas=[0.1, 0.5],
+                teacher_seed=20260417,
+                override_path=root / "missing_overrides.json",
+            )
+            runs_df, _ = build_runs_df(records)
+            preferred = dedupe_preferred_runs(runs_df)
+
+            offline_rows = preferred[preferred["method"] == "Offline BC"].sort_values("eta")
+            self.assertEqual(offline_rows["eta"].tolist(), [0.1, 0.5])
+            self.assertTrue(all("-sample-" in run_id for run_id in offline_rows["run_id"]))
+            self.assertTrue(all("dev_node" in run_id for run_id in offline_rows["run_id"]))
+            self.assertEqual(
+                offline_rows["selection_reason"].tolist(),
+                ["offline_bc_sample_on_dev_node", "offline_bc_sample_on_dev_node"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
