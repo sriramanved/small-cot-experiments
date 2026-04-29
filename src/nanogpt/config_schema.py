@@ -79,6 +79,21 @@ class SemanticKeyNoiseConfig:
 
 
 @dataclass
+class RandomSuffixNoiseConfig:
+    enabled: bool = True
+    key_positions: str = "semantic_key"
+    trigger_eta: Optional[float] = None
+    random_suffix_mode: str = "valid_tokens"
+    keep_format_tokens: bool = True
+    seed: int = 1337
+    apply_to: str = "both"
+    coord_strategy: str = "cyclic"
+    fixed_coord: int = 0
+    eligible_values: list[int] = field(default_factory=lambda: [1, 2, 3, 4, 5])
+    one_key_per_block: bool = True
+
+
+@dataclass
 class TaskConfig:
     dataset: str = "openwebtext"
     dataset_prefix: str = ""
@@ -113,6 +128,7 @@ class TaskConfig:
     rollout_mode: str = "greedy_then_corrupt"
     target_mode: str = "tokens"
     semantic_key_noise: SemanticKeyNoiseConfig = field(default_factory=SemanticKeyNoiseConfig)
+    random_suffix_noise: RandomSuffixNoiseConfig = field(default_factory=RandomSuffixNoiseConfig)
 
 
 @dataclass
@@ -160,6 +176,8 @@ class OptimConfig:
     offline_train_subset_size: int = 0
     offline_train_shuffle: bool = False
     offline_target_type: str = "tokens"
+    offline_eval_diagnostics: bool = False
+    offline_eval_diagnostics_loss_threshold: float = 1.0
     final_eval_on_exit: bool = False
     s5_eval_metrics: bool = False
     s5_eval_clean_train_loss: bool = False

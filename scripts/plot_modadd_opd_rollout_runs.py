@@ -9,6 +9,21 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.ticker import MultipleLocator
 
+try:
+    from scripts.plot_style import (
+        get_method_style,
+        polish_axes,
+        save_publication_figure,
+        set_publication_style,
+    )
+except ModuleNotFoundError:
+    from plot_style import (
+        get_method_style,
+        polish_axes,
+        save_publication_figure,
+        set_publication_style,
+    )
+
 
 LEGACY_OPD_RE = re.compile(
     r"^out-modadd-opd-(?P<objective>.+?)-"
@@ -29,17 +44,17 @@ METHOD_ORDER = {
 }
 
 CURVE_COLORS = {
-    ("NAIL-forward", "greedy"): "#D1495B",
-    ("NAIL-forward", "sampled"): "#EDA43B",
-    ("NAIL-reverse", "greedy"): "#F4A261",
-    ("NAIL-reverse", "sampled"): "#E9C46A",
-    ("OPD", "greedy"): "#00798C",
-    ("OPD", "sampled"): "#5B8E7D",
+    ("NAIL-forward", "greedy"): get_method_style("NAIL-forward, greedy rollout").color,
+    ("NAIL-forward", "sampled"): get_method_style("NAIL-forward, sampled rollout").color,
+    ("NAIL-reverse", "greedy"): get_method_style("NAIL-reverse, greedy rollout").color,
+    ("NAIL-reverse", "sampled"): get_method_style("NAIL-reverse, greedy rollout").color,
+    ("OPD", "greedy"): get_method_style("TM OPD").color,
+    ("OPD", "sampled"): get_method_style("TM OPD").color,
 }
 
 ROLLOUT_LINESTYLES = {
-    "greedy": "--",
-    "sampled": "-",
+    "greedy": "-",
+    "sampled": "--",
 }
 
 ROLLOUT_MARKERS = {
@@ -411,6 +426,7 @@ def plot_per_eta(
     out_dir: Path | None = None,
     show: bool = True,
 ) -> None:
+    set_publication_style()
     etas = sorted(runs_df["eta"].unique())
     metric_name = metric.split("/")[-1]
 
@@ -424,7 +440,7 @@ def plot_per_eta(
     ]
 
     for eta in etas:
-        fig, ax = plt.subplots(figsize=(14.5, 5.6), constrained_layout=True)
+        fig, ax = plt.subplots(figsize=(10, 5.8), constrained_layout=True)
         eta_rows = runs_df[runs_df["eta"] == eta]
         missing_labels: list[str] = []
 
@@ -439,35 +455,33 @@ def plot_per_eta(
 
             row = row_df.iloc[0]
             df = run_data[row["run_id"]].sort_values("iter")
+            style_name = f"{objective}, {rollout_variant} rollout"
+            style = get_method_style(style_name)
             ax.plot(
                 df["iter"],
                 df[metric],
-                color=CURVE_COLORS[(objective, rollout_variant)],
+                color=style.color,
                 linestyle=ROLLOUT_LINESTYLES[rollout_variant],
                 marker=ROLLOUT_MARKERS[rollout_variant],
-                linewidth=2.4,
-                markersize=4,
-                label=row["display_label"],
+                linewidth=style.linewidth,
+                markersize=style.markersize,
+                label=style.label,
             )
 
-        ax.set_title(
-            f"ModAdd p={int(runs_df['p'].iloc[0])}, m={int(runs_df['m'].iloc[0])}, eta={eta:.2f}: "
-            f"NAIL-forward vs NAIL-reverse vs OPD rollouts ({metric_name})"
-        )
-        ax.set_xlabel("iter")
-        ax.set_ylabel(metric)
+        ax.set_title(f"ModAdd p={int(runs_df['p'].iloc[0])}, m={int(runs_df['m'].iloc[0])}, eta={eta:.2f}")
+        ax.set_xlabel("Iteration")
+        ax.set_ylabel(metric.replace("val/", "").replace("_", " "))
         ax.set_ylim(0.0, 1.01)
         ax.xaxis.set_major_locator(MultipleLocator(10000))
         ax.xaxis.set_minor_locator(MultipleLocator(5000))
-        ax.grid(which="minor", linestyle=":", alpha=0.25)
-        ax.grid(which="major", alpha=0.35)
+        polish_axes(ax)
         ax.legend(loc="best")
 
         if out_dir is not None:
             out_dir.mkdir(parents=True, exist_ok=True)
             out_path = out_dir / f"eta{eta_tag(eta)}_{metric_name}_opd_rollouts.png"
-            fig.savefig(out_path, dpi=220, bbox_inches="tight")
-            print(f"Saved {out_path}")
+            save_publication_figure(fig, out_path)
+            print(f"Saved {out_path} and {out_path.with_suffix('.pdf')}")
 
         if missing_labels:
             print(f"Missing curves for eta={eta:.2f}: {', '.join(missing_labels)}")

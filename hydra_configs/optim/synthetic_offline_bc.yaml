@@ -26,6 +26,8 @@ optim:
   offline_train_subset_size: 0
   offline_train_shuffle: false
   offline_target_type: tokens
+  offline_eval_diagnostics: false
+  offline_eval_diagnostics_loss_threshold: 1.0
   final_eval_on_exit: true
   s5_eval_n: 5000
   s5_eval_batch_size: 512

@@ -107,6 +107,8 @@ offline_eval_full = True
 offline_train_subset_size = 0
 offline_train_shuffle = False
 offline_target_type = 'tokens'
+offline_eval_diagnostics = False
+offline_eval_diagnostics_loss_threshold = 1.0
 final_eval_on_exit = False
 # -----------------------------------------------------------------------------
 config_keys = [k for k, v in globals().items() if not k.startswith(
@@ -227,6 +229,9 @@ if synthetic_task == 's5':
         estimate_saved_clean_train_loss as s5_estimate_saved_clean_train_loss,
         evaluate_saved_clean_s5_metrics,
     )
+    from data.s5_cot.validation_diagnostics import (
+        evaluate_s5_offline_validation_diagnostics,
+    )
     if dataset == 's5_cot':
         from data.s5_cot.task import evaluate_clean_s5_metrics
         from data.s5_cot.task import get_batch as s5_get_batch
@@ -275,15 +280,18 @@ if offline_target_type == 'teacher_probs':
             "'teacher_probs'"
         )
     dataset_teacher_law = offline_dataset_meta.get("teacher_law")
-    if dataset_teacher_law not in ("distributional_noise", "semantic_key_noise"):
+    if dataset_teacher_law not in ("distributional_noise", "semantic_key_noise", "random_suffix_after_error"):
         raise ValueError(
             f"Dataset {dataset} has teacher_law="
             f"{dataset_teacher_law!r}, expected 'distributional_noise' "
-            "or 'semantic_key_noise' for offline full-distribution BC"
+            "'semantic_key_noise', or 'random_suffix_after_error' for "
+            "offline full-distribution BC"
         )
     expected_decode_mode = (
         "semantic_key_noise_sample"
         if dataset_teacher_law == "semantic_key_noise"
+        else "random_suffix_after_error_sample"
+        if dataset_teacher_law == "random_suffix_after_error"
         else "sample_then_corrupt"
     )
     if offline_dataset_meta.get("train_decode_mode") != expected_decode_mode:
@@ -721,6 +729,22 @@ def estimate_loss():
                     subset_size=offline_train_subset_size,
                 )
 
+        if offline_eval_diagnostics and synthetic_task == 's5':
+            eval_model = raw_model if 'raw_model' in globals() else model
+            diagnostic_metrics, _ = evaluate_s5_offline_validation_diagnostics(
+                eval_model,
+                device=device,
+                data_dir=data_dir,
+                n_eval=s5_eval_n,
+                batch_size=s5_eval_batch_size,
+                loss_threshold=offline_eval_diagnostics_loss_threshold,
+                autocast_context=ctx,
+            )
+            out.update({
+                f"val/{key}": value
+                for key, value in diagnostic_metrics.items()
+            })
+
     else:
         for split in ['train', 'val']:
             losses = torch.zeros(eval_iters)
@@ -867,6 +891,9 @@ def run_eval_and_checkpoint(reason="periodic", force_save=False):
                 eval_log["val/clean_full_exact"] = losses["val_clean_full_exact"]
             if "val_clean_final_exact" in losses:
                 eval_log["val/clean_final_exact"] = losses["val_clean_final_exact"]
+        for key, value in losses.items():
+            if "/" in key:
+                eval_log[key] = float(value)
         wandb.log(eval_log)
 
     if losses['val'] < best_val_loss or always_save_checkpoint or force_save:

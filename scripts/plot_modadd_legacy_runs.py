@@ -10,6 +10,21 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.ticker import MultipleLocator
 
+try:
+    from scripts.plot_style import (
+        get_method_style,
+        polish_axes,
+        save_publication_figure,
+        set_publication_style,
+    )
+except ModuleNotFoundError:
+    from plot_style import (
+        get_method_style,
+        polish_axes,
+        save_publication_figure,
+        set_publication_style,
+    )
+
 
 OFFLINE_SAMPLE_RE = re.compile(
     r"^out-modadd-noisy-bc-sample-then-corrupt-"
@@ -30,26 +45,10 @@ OBJECTIVE_TO_METHOD = {
     "reverse_kl_tm": "OPD",
 }
 
-METHOD_COLORS = {
-    "LogLossBC": "#355070",
-    "NAIL-forward": "#E76F51",
-    "NAIL-reverse": "#F4A261",
-    "OPD": "#2A9D8F",
-}
-
-METHOD_LINESTYLES = {
-    "LogLossBC": "--",
-    "NAIL-forward": "-",
-    "NAIL-reverse": "-.",
-    "OPD": ":",
-}
-
-METHOD_MARKERS = {
-    "LogLossBC": "o",
-    "NAIL-forward": "s",
-    "NAIL-reverse": "D",
-    "OPD": "^",
-}
+METHODS = ("LogLossBC", "OPD", "NAIL-forward", "NAIL-reverse")
+METHOD_COLORS = {method: get_method_style(method).color for method in METHODS}
+METHOD_LINESTYLES = {method: get_method_style(method).linestyle for method in METHODS}
+METHOD_MARKERS = {method: get_method_style(method).marker for method in METHODS}
 
 
 @dataclass
@@ -266,67 +265,64 @@ def build_runs_df(records: list[RunRecord]) -> tuple[pd.DataFrame, dict[str, pd.
 
 
 def plot_summary_vs_eta(runs_df: pd.DataFrame, *, metric: str, out_path: Path, show: bool) -> None:
-    fig, ax = plt.subplots(figsize=(9.5, 5.5), constrained_layout=True)
-    for method in ("LogLossBC", "NAIL-forward", "NAIL-reverse", "OPD"):
+    set_publication_style()
+    fig, ax = plt.subplots(figsize=(8, 5.5), constrained_layout=True)
+    for method in METHODS:
         method_df = runs_df[runs_df["method"] == method].sort_values("eta")
         if method_df.empty:
             continue
+        style = get_method_style(method)
         ax.plot(
             method_df["eta"],
             method_df[metric],
-            color=METHOD_COLORS[method],
-            linestyle=METHOD_LINESTYLES[method],
-            marker=METHOD_MARKERS[method],
-            linewidth=2.3,
-            markersize=6,
-            label=method,
+            label=style.label,
+            **style.plot_kwargs,
         )
     metric_name = metric.replace("final_", "")
     ax.set_title(f"ModAdd p={int(runs_df['p'].iloc[0])}, m={int(runs_df['m'].iloc[0])}: {metric_name} vs eta")
-    ax.set_xlabel("eta")
-    ax.set_ylabel(metric_name)
+    ax.set_xlabel("Eta")
+    ax.set_ylabel(metric_name.replace("_", " "))
     ax.set_ylim(0.0, 1.01)
-    ax.grid(alpha=0.35)
+    polish_axes(ax)
     ax.legend(loc="best")
-    fig.savefig(out_path, dpi=220, bbox_inches="tight")
-    print(f"Saved {out_path}")
+    save_publication_figure(fig, out_path)
+    print(f"Saved {out_path} and {out_path.with_suffix('.pdf')}")
     if show:
         plt.show()
     plt.close(fig)
 
 
 def plot_per_eta(run_data: dict[str, pd.DataFrame], runs_df: pd.DataFrame, *, metric: str, out_dir: Path, show: bool) -> None:
+    set_publication_style()
     etas = sorted(runs_df["eta"].unique())
     for eta in etas:
-        fig, ax = plt.subplots(figsize=(12.5, 5.0), constrained_layout=True)
-        method_rows = runs_df[runs_df["eta"] == eta].sort_values("method")
+        fig, ax = plt.subplots(figsize=(9, 5.5), constrained_layout=True)
+        method_rows = runs_df[runs_df["eta"] == eta].copy()
+        method_rows["method_order"] = method_rows["method"].map({method: index for index, method in enumerate(METHODS)})
+        method_rows = method_rows.sort_values(["method_order", "method"])
         for _, row in method_rows.iterrows():
             df = run_data[row["run_id"]].sort_values("iter")
+            style = get_method_style(row["method"])
             ax.plot(
                 df["iter"],
                 df[metric],
-                color=METHOD_COLORS[row["method"]],
-                linestyle=METHOD_LINESTYLES[row["method"]],
-                marker=METHOD_MARKERS[row["method"]],
-                linewidth=2.2,
-                markersize=4,
-                label=row["method"],
+                label=style.label,
+                **style.plot_kwargs,
             )
         metric_name = metric.replace("val/", "")
         ax.set_title(
             f"ModAdd p={int(runs_df['p'].iloc[0])}, m={int(runs_df['m'].iloc[0])}, eta={eta:.2f}: {metric_name}"
         )
-        ax.set_xlabel("iter")
-        ax.set_ylabel(metric_name)
+        ax.set_xlabel("Iteration")
+        ax.set_ylabel(metric_name.replace("_", " "))
         ax.set_ylim(0.0, 1.01)
         ax.xaxis.set_major_locator(MultipleLocator(10000))
         ax.xaxis.set_minor_locator(MultipleLocator(5000))
-        ax.grid(which="minor", linestyle=":", alpha=0.25)
-        ax.grid(which="major", alpha=0.35)
+        polish_axes(ax)
         ax.legend(loc="best")
         out_path = out_dir / f"eta{eta_tag(eta)}_{metric_name}.png"
-        fig.savefig(out_path, dpi=220, bbox_inches="tight")
-        print(f"Saved {out_path}")
+        save_publication_figure(fig, out_path)
+        print(f"Saved {out_path} and {out_path.with_suffix('.pdf')}")
         if show:
             plt.show()
         plt.close(fig)

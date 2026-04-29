@@ -122,6 +122,7 @@ def run_s5_render(cfg: AppConfig, *, launcher_command: list[str]) -> None:
         target_mode=cfg.task.target_mode,
         teacher_law=cfg.task.teacher_law,
         semantic_key_noise_config=asdict(cfg.task.semantic_key_noise),
+        random_suffix_noise_config=asdict(cfg.task.random_suffix_noise),
         gen_batch_size=cfg.task.gen_batch_size,
         device=cfg.runtime.device,
         dtype_name=cfg.runtime.dtype,

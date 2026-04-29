@@ -274,24 +274,118 @@ mkdir -p nohup_logs
 
 nohup bash -lc '
 set -euo pipefail
-COMMON_TASK="task.bank_seed=1337 task.teacher_seed=20260417 task.render_seed=20260417 task.n_train=15000000 task.n_val=5000 task.subset_size=1000000 task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 task.teacher_law=semantic_key_noise task.eta=0.5 task.semantic_key_noise.coord_strategy=cyclic"
-python -m nanogpt.run experiment=s5_render $COMMON_TASK task.gen_batch_size=8192
+COMMON_TASK="task.bank_seed=1337 task.teacher_seed=20260417 task.render_seed=20260417 task.n_train=15000000 task.n_val=5000 task.subset_size=1000000 task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 task.teacher_law=semantic_key_noise task.eta=0.5 task.semantic_key_noise.coord_strategy=cyclic"
+TEACHER_CKPT="task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417"
+python -m nanogpt.run experiment=s5_render $COMMON_TASK $TEACHER_CKPT task.gen_batch_size=8192
 python scripts/audit_s5_offline_dataset_accuracy.py $COMMON_TASK
-python -m nanogpt.run experiment=s5_noisy_bc $COMMON_TASK optim.seed=20260417
+python -m nanogpt.run experiment=s5_noisy_bc $COMMON_TASK $TEACHER_CKPT optim.seed=20260417
 ' > nohup_logs/s5_semantic_eta0p5_render_audit_bc.log 2>&1 &
 
 nohup bash -lc '
 set -euo pipefail
-COMMON_TASK="task.bank_seed=1337 task.teacher_seed=20260417 task.render_seed=20260417 task.n_train=15000000 task.n_val=5000 task.subset_size=1000000 task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 task.teacher_law=semantic_key_noise task.eta=0.5 task.semantic_key_noise.coord_strategy=cyclic"
-python -m nanogpt.run experiment=s5_nail $COMMON_TASK optim.seed=20260417 task.loss=forward task.teacher_signal=mc
+COMMON_TASK="task.bank_seed=1337 task.teacher_seed=20260417 task.render_seed=20260417 task.n_train=15000000 task.n_val=5000 task.subset_size=1000000 task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 task.teacher_law=semantic_key_noise task.eta=0.5 task.semantic_key_noise.coord_strategy=cyclic"
+TEACHER_CKPT="task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417"
+python -m nanogpt.run experiment=s5_nail $COMMON_TASK $TEACHER_CKPT optim.seed=20260417 task.loss=forward task.teacher_signal=mc
 ' > nohup_logs/s5_semantic_eta0p5_nail_forward.log 2>&1 &
 
 nohup bash -lc '
 set -euo pipefail
-COMMON_TASK="task.bank_seed=1337 task.teacher_seed=20260417 task.render_seed=20260417 task.n_train=15000000 task.n_val=5000 task.subset_size=1000000 task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 task.teacher_law=semantic_key_noise task.eta=0.5 task.semantic_key_noise.coord_strategy=cyclic"
-python -m nanogpt.run experiment=s5_opd $COMMON_TASK optim.seed=20260417 task.loss=reverse task.teacher_signal=mc
+COMMON_TASK="task.bank_seed=1337 task.teacher_seed=20260417 task.render_seed=20260417 task.n_train=15000000 task.n_val=5000 task.subset_size=1000000 task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 task.teacher_law=semantic_key_noise task.eta=0.5 task.semantic_key_noise.coord_strategy=cyclic"
+TEACHER_CKPT="task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417"
+python -m nanogpt.run experiment=s5_opd $COMMON_TASK $TEACHER_CKPT optim.seed=20260417 task.loss=reverse task.teacher_signal=mc
 ' > nohup_logs/s5_semantic_eta0p5_opd_reverse.log 2>&1 &
 ```
+
+8M semantic-key-noise launch. This is the same seed family as above, but uses `task.subset_size=8000000` and separate `n8m` log files:
+
+```bash
+mkdir -p nohup_logs
+
+nohup bash -lc '
+set -euo pipefail
+COMMON_TASK="task.bank_seed=1337 task.teacher_seed=20260417 task.render_seed=20260417 task.n_train=15000000 task.n_val=5000 task.subset_size=8000000 task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 task.teacher_law=semantic_key_noise task.eta=0.5 task.semantic_key_noise.coord_strategy=cyclic"
+TEACHER_CKPT="task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417"
+python -m nanogpt.run experiment=s5_render $COMMON_TASK $TEACHER_CKPT task.gen_batch_size=8192
+python scripts/audit_s5_offline_dataset_accuracy.py $COMMON_TASK
+python -m nanogpt.run experiment=s5_noisy_bc $COMMON_TASK $TEACHER_CKPT optim.seed=20260417
+' > nohup_logs/s5_semantic_eta0p5_n8m_render_audit_bc.log 2>&1 &
+echo "n8m render/audit/bc pid: $!"
+
+nohup bash -lc '
+set -euo pipefail
+COMMON_TASK="task.bank_seed=1337 task.teacher_seed=20260417 task.render_seed=20260417 task.n_train=15000000 task.n_val=5000 task.subset_size=8000000 task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 task.teacher_law=semantic_key_noise task.eta=0.5 task.semantic_key_noise.coord_strategy=cyclic"
+TEACHER_CKPT="task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417"
+python -m nanogpt.run experiment=s5_nail $COMMON_TASK $TEACHER_CKPT optim.seed=20260417 task.loss=forward task.teacher_signal=mc
+' > nohup_logs/s5_semantic_eta0p5_n8m_nail_forward.log 2>&1 &
+echo "n8m nail pid: $!"
+
+nohup bash -lc '
+set -euo pipefail
+COMMON_TASK="task.bank_seed=1337 task.teacher_seed=20260417 task.render_seed=20260417 task.n_train=15000000 task.n_val=5000 task.subset_size=8000000 task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 task.teacher_law=semantic_key_noise task.eta=0.5 task.semantic_key_noise.coord_strategy=cyclic"
+TEACHER_CKPT="task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417"
+python -m nanogpt.run experiment=s5_opd $COMMON_TASK $TEACHER_CKPT optim.seed=20260417 task.loss=reverse task.teacher_signal=mc
+' > nohup_logs/s5_semantic_eta0p5_n8m_opd_reverse.log 2>&1 &
+echo "n8m opd pid: $!"
+```
+
+</details>
+
+<details>
+<summary>Random-suffix-after-error commands</summary>
+
+The `random_suffix_after_error` teacher law is the absorbing poisoned-suffix law. It uses the mixed clean/random law at one key S5 value coordinate per CoT block. If the sampled key token differs from the clean teacher argmax, the rest of that rendered trajectory enters poisoned mode: later S5 value slots are random valid S5 values, while scaffold tokens remain valid parentheses.
+
+For this implementation, the poisoning and random-suffix sampling RNG is `task.random_suffix_noise.seed`. In the S5 render config this defaults to `${task.render_seed}`. The commands below set both `task.render_seed=20260417` and `task.random_suffix_noise.seed=20260417` explicitly so the intent is visible in the launch record.
+
+Common 8M eta-0.1 task overrides:
+
+```bash
+COMMON_TASK="task.s5_m=21 task.bank_seed=1337 task.teacher_seed=20260417 task.render_seed=20260417 task.random_suffix_noise.seed=20260417 task.n_train=15000000 task.n_val=5000 task.subset_size=8000000 task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 task.teacher_law=random_suffix_after_error task.eta=0.1 task.target_mode=tokens task.random_suffix_noise.key_positions=semantic_key task.random_suffix_noise.random_suffix_mode=valid_tokens task.random_suffix_noise.keep_format_tokens=true task.random_suffix_noise.apply_to=s5 task.random_suffix_noise.coord_strategy=cyclic"
+```
+
+Render S5 noisy offline data:
+
+```bash
+python -m nanogpt.run experiment=s5_noisy_render \
+  $COMMON_TASK \
+  task.gen_batch_size=8192
+```
+
+Audit rendered S5 data:
+
+```bash
+python -m scripts.audit_s5_offline_dataset_accuracy \
+  $COMMON_TASK
+```
+
+Train offline BC on the rendered data:
+
+```bash
+python -m nanogpt.run experiment=s5_noisy_bc \
+  $COMMON_TASK \
+  optim.seed=20260417
+```
+
+Nohup render/audit/BC chain:
+
+```bash
+mkdir -p nohup_logs
+
+nohup bash -lc '
+set -euo pipefail
+COMMON_TASK="task.s5_m=21 task.bank_seed=1337 task.teacher_seed=20260417 task.render_seed=20260417 task.random_suffix_noise.seed=20260417 task.n_train=15000000 task.n_val=5000 task.subset_size=8000000 task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 task.teacher_law=random_suffix_after_error task.eta=0.1 task.target_mode=tokens task.random_suffix_noise.key_positions=semantic_key task.random_suffix_noise.random_suffix_mode=valid_tokens task.random_suffix_noise.keep_format_tokens=true task.random_suffix_noise.apply_to=s5 task.random_suffix_noise.coord_strategy=cyclic"
+python -m nanogpt.run experiment=s5_noisy_render $COMMON_TASK task.gen_batch_size=8192
+python -m scripts.audit_s5_offline_dataset_accuracy $COMMON_TASK
+python -m nanogpt.run experiment=s5_noisy_bc $COMMON_TASK optim.seed=20260417
+' > nohup_logs/s5_random_suffix_eta0p1_n8m_render_audit_bc.log 2>&1 &
+echo "random-suffix eta0p1 n8m render/audit/bc pid: $!"
+```
+
+Online NAIL / OPD note:
+
+- Do not launch `experiment=s5_nail` or `experiment=s5_opd` with `task.teacher_law=random_suffix_after_error` yet.
+- The online teacher-query path intentionally raises `NotImplementedError` for this law because it does not yet carry explicit poisoned-prefix state.
+- For now, compare this run as an offline-BC stress test against the existing online `distributional_noise` / `semantic_key_noise` baselines, rather than as a matched online law.
 
 </details>
 

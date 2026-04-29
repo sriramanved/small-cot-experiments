@@ -24,6 +24,18 @@ task:
     eligible_values: [1, 2, 3, 4, 5]
     apply_to: partial_perm_image
     one_key_per_block: true
+  random_suffix_noise:
+    enabled: true
+    key_positions: semantic_key
+    trigger_eta: null
+    random_suffix_mode: valid_tokens
+    keep_format_tokens: true
+    seed: ${optim.seed}
+    apply_to: both
+    coord_strategy: cyclic
+    fixed_coord: 0
+    eligible_values: [1, 2, 3, 4, 5]
+    one_key_per_block: true
   objective: reverse_kl_tm
   student_temperature: 1.0
   student_rollout_temperature: 1.0

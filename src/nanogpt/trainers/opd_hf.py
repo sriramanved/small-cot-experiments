@@ -23,6 +23,11 @@ from data.s5_cot.semantic_key_noise import (
     SEMANTIC_KEY_NOISE_LAW,
     semantic_key_noise_config_from_obj,
 )
+from data.synthetic.random_suffix_noise import (
+    RANDOM_SUFFIX_AFTER_ERROR_LAW,
+    random_suffix_noise_config_from_obj,
+    validate_random_suffix_applies_to_task,
+)
 from data.synthetic.target_spans import (
     canonical_target_len,
     print_prompt_bank_target_span_diagnostic,
@@ -82,8 +87,14 @@ def format_student_rollout_tag(*, rollout_temperature: float, student_temperatur
 
 def validate_config(cfg: OpdHfConfig) -> None:
     student_rollout_temperature = resolve_student_rollout_temperature(cfg)
-    if cfg.teacher_law == SEMANTIC_KEY_NOISE_LAW:
-        semantic_key_noise_config_from_obj(cfg.semantic_key_noise)
+    teacher_law = getattr(cfg, "teacher_law", "distributional_noise")
+    if teacher_law == SEMANTIC_KEY_NOISE_LAW:
+        semantic_key_noise_config_from_obj(getattr(cfg, "semantic_key_noise", None))
+    if teacher_law == RANDOM_SUFFIX_AFTER_ERROR_LAW:
+        random_suffix_config = random_suffix_noise_config_from_obj(
+            getattr(cfg, "random_suffix_noise", None)
+        )
+        validate_random_suffix_applies_to_task(random_suffix_config, task_name="s5")
     if cfg.objective != "reverse_kl_tm" and cfg.student_temperature <= 0:
         raise ValueError(
             "student_temperature must be > 0 for forward-KL objectives because "
@@ -123,6 +134,8 @@ def validate_resume_metadata(out_dir: Path, metadata: dict[str, object]) -> None
     ]
     if metadata.get("teacher_law") == SEMANTIC_KEY_NOISE_LAW:
         keys.append("semantic_key_noise")
+    if metadata.get("teacher_law") == RANDOM_SUFFIX_AFTER_ERROR_LAW:
+        keys.append("random_suffix_noise")
     keys.extend([
         "objective",
         "student_temperature",
@@ -398,6 +411,10 @@ def run_opd_hf(cfg: OpdHfConfig, *, launcher_command: list[str]) -> None:
         run_metadata["semantic_key_noise"] = semantic_key_noise_config_from_obj(
             cfg.semantic_key_noise
         ).to_dict()
+    if cfg.teacher_law == RANDOM_SUFFIX_AFTER_ERROR_LAW:
+        run_metadata["random_suffix_noise"] = random_suffix_noise_config_from_obj(
+            cfg.random_suffix_noise
+        ).to_dict()
     if cfg.init_from == "resume":
         validate_resume_metadata(out_dir, run_metadata)
     save_run_metadata(out_dir, subset_indices=subset_indices, metadata=run_metadata)
@@ -530,7 +547,12 @@ def run_opd_hf(cfg: OpdHfConfig, *, launcher_command: list[str]) -> None:
             if wandb is not None:
                 wandb.log({"iter": iter_num, **eval_stats})
 
-        prompt_ids = prompt_cycle.next_batch()
+        prompt_indices = prompt_cycle.next_batch_indices()
+        prompt_ids = prompt_bank.clean_train_prompt_ids.index_select(0, prompt_indices)
+        clean_target_ids = prompt_bank.clean_train_cot_ids.index_select(
+            0,
+            prompt_indices,
+        )[:, :target_len]
 
         set_mode(student, train_student, train=False)
         with torch.no_grad():
@@ -546,6 +568,9 @@ def run_opd_hf(cfg: OpdHfConfig, *, launcher_command: list[str]) -> None:
             teacher_prob_kwargs = {}
             if cfg.teacher_law == SEMANTIC_KEY_NOISE_LAW:
                 teacher_prob_kwargs["semantic_key_noise_config"] = cfg.semantic_key_noise
+            if cfg.teacher_law == RANDOM_SUFFIX_AFTER_ERROR_LAW:
+                teacher_prob_kwargs["clean_target_ids"] = clean_target_ids
+                teacher_prob_kwargs["random_suffix_noise_config"] = cfg.random_suffix_noise
             teacher_probs = cached_teacher_token_probs_hf(
                 teacher,
                 prompt_ids,

@@ -65,6 +65,8 @@ class PretrainConfig:
     offline_train_subset_size: int
     offline_train_shuffle: bool
     offline_target_type: str
+    offline_eval_diagnostics: bool
+    offline_eval_diagnostics_loss_threshold: float
     final_eval_on_exit: bool
     torchrun: TorchrunConfig
     python_bin: str
@@ -89,6 +91,7 @@ class StudentPrefixConfig:
     eta: float
     teacher_law: str
     semantic_key_noise: dict[str, object]
+    random_suffix_noise: dict[str, object]
     teacher_signal: str
     loss: str
     out_dir: str
@@ -148,6 +151,7 @@ class OpdHfConfig:
     eta: float
     teacher_law: str
     semantic_key_noise: dict[str, object]
+    random_suffix_noise: dict[str, object]
     objective: str
     out_dir: str
     init_from: str
@@ -270,6 +274,10 @@ def project_pretrain_config(cfg: AppConfig) -> PretrainConfig:
         offline_train_subset_size=cfg.optim.offline_train_subset_size,
         offline_train_shuffle=cfg.optim.offline_train_shuffle,
         offline_target_type=cfg.optim.offline_target_type,
+        offline_eval_diagnostics=cfg.optim.offline_eval_diagnostics,
+        offline_eval_diagnostics_loss_threshold=(
+            cfg.optim.offline_eval_diagnostics_loss_threshold
+        ),
         final_eval_on_exit=cfg.optim.final_eval_on_exit,
         torchrun=cfg.runtime.torchrun,
         python_bin=python_bin,
@@ -303,6 +311,7 @@ def _project_student_prefix_config(
         eta=cfg.task.eta,
         teacher_law=cfg.task.teacher_law,
         semantic_key_noise=asdict(cfg.task.semantic_key_noise),
+        random_suffix_noise=asdict(cfg.task.random_suffix_noise),
         teacher_signal=cfg.task.teacher_signal,
         loss=cfg.task.loss,
         out_dir=cfg.run.out_dir,
@@ -370,6 +379,7 @@ def project_opd_hf_config(cfg: AppConfig) -> OpdHfConfig:
         eta=cfg.task.eta,
         teacher_law=cfg.task.teacher_law,
         semantic_key_noise=asdict(cfg.task.semantic_key_noise),
+        random_suffix_noise=asdict(cfg.task.random_suffix_noise),
         objective=cfg.task.objective,
         out_dir=cfg.run.out_dir,
         init_from=cfg.optim.init_from,

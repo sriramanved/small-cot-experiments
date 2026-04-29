@@ -20,10 +20,16 @@ from data.s5_cot.prompt_bank import load_prompt_bank, select_train_subset
 from data.s5_cot.semantic_key_noise import (
     SEMANTIC_KEY_NOISE_LAW,
     default_eligible_token_ids,
+    eligible_token_ids_from_values,
     semantic_key_mask,
     semantic_key_noise_config_from_obj,
 )
 from data.s5_cot.task import CORRUPTIBLE_IDS, VOCAB_SIZE, decode
+from data.synthetic.random_suffix_noise import (
+    RANDOM_SUFFIX_AFTER_ERROR_LAW,
+    generate_random_suffix_after_error_targets,
+    random_suffix_noise_config_from_obj,
+)
 from data.synthetic.offline_render import generate_teacher_targets
 
 
@@ -428,6 +434,192 @@ def compute_semantic_key_noise_audit_metrics(
     }
 
 
+def _semantic_config_from_random_suffix_config(value: dict[str, Any] | object | None) -> dict[str, Any]:
+    config = random_suffix_noise_config_from_obj(value)
+    return {
+        "enabled": True,
+        "coord_strategy": config.coord_strategy,
+        "fixed_coord": config.fixed_coord,
+        "seed": config.seed,
+        "include_clean_value": True,
+        "eligible_values": list(config.eligible_values),
+        "apply_to": "partial_perm_image",
+        "one_key_per_block": config.one_key_per_block,
+    }
+
+
+def _s5_semantic_position_mask(target_len: int) -> torch.Tensor:
+    positions = torch.arange(int(target_len), dtype=torch.long)
+    offset = positions % 7
+    return (offset >= 1) & (offset <= 5)
+
+
+def _first_true_positions(mask: torch.Tensor) -> torch.Tensor:
+    row_has = mask.any(dim=1)
+    first = torch.argmax(mask.to(dtype=torch.int64), dim=1)
+    return torch.where(
+        row_has,
+        first,
+        torch.full_like(first, mask.size(1)),
+    )
+
+
+def infer_random_suffix_first_poison_positions(
+    noisy_targets: torch.Tensor,
+    clean_targets: torch.Tensor,
+    clean_train_prompt_ids: torch.Tensor,
+    *,
+    random_suffix_noise_config: dict[str, Any] | object | None,
+) -> torch.Tensor:
+    target_len = int(noisy_targets.size(1))
+    semantic_config = semantic_key_noise_config_from_obj(
+        _semantic_config_from_random_suffix_config(random_suffix_noise_config)
+    )
+    keys = semantic_key_mask(clean_train_prompt_ids, target_len, semantic_config)
+    key_diffs = noisy_targets.ne(clean_targets) & keys
+    first = _first_true_positions(key_diffs)
+    return torch.where(first.eq(target_len), torch.full_like(first, -1), first)
+
+
+def compute_random_suffix_after_error_audit_metrics(
+    noisy_targets: torch.Tensor,
+    clean_targets: torch.Tensor,
+    clean_train_prompt_ids: torch.Tensor,
+    *,
+    eta: float | None,
+    random_suffix_noise_config: dict[str, Any] | object | None,
+    final_answer_len: int = 7,
+    chunk_size: int = 8192,
+) -> dict[str, Any]:
+    if noisy_targets.shape != clean_targets.shape:
+        raise ValueError(
+            f"noisy_targets shape {tuple(noisy_targets.shape)} does not match "
+            f"clean_targets shape {tuple(clean_targets.shape)}"
+        )
+    config = random_suffix_noise_config_from_obj(random_suffix_noise_config)
+    semantic_config = semantic_key_noise_config_from_obj(
+        _semantic_config_from_random_suffix_config(config)
+    )
+    eligible_token_ids = eligible_token_ids_from_values(config.eligible_values)
+    k = len(eligible_token_ids)
+    n_rows = int(noisy_targets.size(0))
+    target_len = int(noisy_targets.size(1))
+    positions = torch.arange(target_len, dtype=torch.long)
+    semantic_positions = _s5_semantic_position_mask(target_len)
+
+    first_poison_counts: Counter[int] = Counter()
+    key_positions_per_row: list[int] = []
+    poisoned_count = 0
+    no_poison_count = 0
+    baseline_sum = 0.0
+    full_exact_count = 0
+    final_exact_count = 0
+    before_match = 0
+    before_total = 0
+    after_match = 0
+    after_total = 0
+    after_semantic_match = 0
+    after_semantic_total = 0
+    after_format_match = 0
+    after_format_total = 0
+
+    for start in range(0, n_rows, int(chunk_size)):
+        end = min(start + int(chunk_size), n_rows)
+        noisy = noisy_targets[start:end]
+        clean = clean_targets[start:end]
+        prompts = clean_train_prompt_ids[start:end]
+        matches = noisy.eq(clean)
+        keys = semantic_key_mask(prompts, target_len, semantic_config)
+        key_diffs = (~matches) & keys
+        first = _first_true_positions(key_diffs)
+        row_poisoned = first.ne(target_len)
+        poisoned_count += int(row_poisoned.sum().item())
+        no_poison_count += int((~row_poisoned).sum().item())
+
+        row_key_counts = keys.sum(dim=1)
+        key_positions_per_row.extend(int(x) for x in row_key_counts.tolist())
+        if eta is not None and k > 0:
+            clean_key_prob = 1.0 - float(eta) + float(eta) / float(k)
+            baseline_sum += float(torch.pow(
+                torch.full_like(row_key_counts, clean_key_prob, dtype=torch.float64),
+                row_key_counts.to(dtype=torch.float64),
+            ).sum().item())
+
+        if torch.any(row_poisoned):
+            poisoned_first = first[row_poisoned]
+            counts = torch.bincount(poisoned_first, minlength=target_len)
+            for pos, count in enumerate(counts.tolist()):
+                if count:
+                    first_poison_counts[pos] += int(count)
+
+        full_exact_count += int(matches.all(dim=1).sum().item())
+        final_exact_count += int(matches[:, -final_answer_len:].all(dim=1).sum().item())
+
+        before_mask = positions.view(1, -1).lt(first.view(-1, 1))
+        after_mask = positions.view(1, -1).gt(first.view(-1, 1)) & row_poisoned.view(-1, 1)
+        semantic_after_mask = after_mask & semantic_positions.view(1, -1)
+        format_after_mask = after_mask & ~semantic_positions.view(1, -1)
+
+        before_total += int(before_mask.sum().item())
+        before_match += int(matches[before_mask].sum().item()) if torch.any(before_mask) else 0
+        after_total += int(after_mask.sum().item())
+        after_match += int(matches[after_mask].sum().item()) if torch.any(after_mask) else 0
+        after_semantic_total += int(semantic_after_mask.sum().item())
+        after_semantic_match += (
+            int(matches[semantic_after_mask].sum().item()) if torch.any(semantic_after_mask) else 0
+        )
+        after_format_total += int(format_after_mask.sum().item())
+        after_format_match += (
+            int(matches[format_after_mask].sum().item()) if torch.any(format_after_mask) else 0
+        )
+
+    key_count_counter = Counter(key_positions_per_row)
+    return {
+        "enabled": True,
+        "law": RANDOM_SUFFIX_AFTER_ERROR_LAW,
+        "key_positions": config.key_positions,
+        "random_suffix_mode": config.random_suffix_mode,
+        "keep_format_tokens": config.keep_format_tokens,
+        "eligible_token_ids": list(eligible_token_ids),
+        "eligible_value_count": k,
+        "num_examples": n_rows,
+        "poisoned_trajectory_count": poisoned_count,
+        "no_poison_trajectory_count": no_poison_count,
+        "fraction_poisoned": _safe_fraction(poisoned_count, n_rows),
+        "fraction_no_poison": _safe_fraction(no_poison_count, n_rows),
+        "expected_no_poison_rate_uniform_including_clean": (
+            None if eta is None or k <= 0 else _safe_fraction(baseline_sum, n_rows)
+        ),
+        "first_poison_position_counts": _counter_to_sorted_dict(first_poison_counts),
+        "key_positions_per_trajectory": {
+            "min": min(key_positions_per_row) if key_positions_per_row else 0,
+            "max": max(key_positions_per_row) if key_positions_per_row else 0,
+            "mean": _safe_fraction(sum(key_positions_per_row), len(key_positions_per_row)),
+            "counts": _counter_to_sorted_dict(key_count_counter),
+        },
+        "noisy_final_exact": _safe_fraction(final_exact_count, n_rows),
+        "noisy_full_cot_exact": _safe_fraction(full_exact_count, n_rows),
+        "token_match_rate_before_first_poison": _safe_fraction(before_match, before_total),
+        "token_match_rate_after_first_poison": _safe_fraction(after_match, after_total),
+        "semantic_token_match_rate_after_first_poison": _safe_fraction(
+            after_semantic_match,
+            after_semantic_total,
+        ),
+        "format_token_match_rate_after_first_poison": _safe_fraction(
+            after_format_match,
+            after_format_total,
+        ),
+        "notes": {
+            "poison_inference": (
+                "first poison is inferred as the first semantic-key position whose "
+                "rendered token differs from the clean target"
+            ),
+            "baseline": "(1 - eta + eta / K) ** H, averaged over rows",
+            "after_first_poison": "positions strictly after the triggering key token",
+        },
+    }
+
+
 def example_record(
     *,
     row: int,
@@ -436,6 +628,7 @@ def example_record(
     noisy_target_ids: torch.Tensor,
     final_answer_len: int,
     key_mask: torch.Tensor | None = None,
+    first_poison_position: int | None = None,
 ) -> dict[str, Any]:
     clean = clean_target_ids.detach().cpu().to(dtype=torch.long)
     noisy = noisy_target_ids.detach().cpu().to(dtype=torch.long)
@@ -468,6 +661,20 @@ def example_record(
         )
 
     first_diff = int(diff_positions[0]) if diff_positions else None
+    normalized_first_poison = (
+        None
+        if first_poison_position is None or int(first_poison_position) < 0
+        else int(first_poison_position)
+    )
+    random_suffix_region = None
+    if normalized_first_poison is not None:
+        suffix_start = min(target_len, normalized_first_poison + 1)
+        random_suffix_region = {
+            "first_poison_position": normalized_first_poison,
+            "random_suffix_start": suffix_start,
+            "clean_random_suffix_region": decode_s5_ids(clean[suffix_start:]),
+            "noisy_random_suffix_region": decode_s5_ids(noisy[suffix_start:]),
+        }
     suffix = None
     if first_diff is not None:
         suffix = {
@@ -491,6 +698,8 @@ def example_record(
         "first_semantic_key_corruption_position": (
             int(key_differences[0]) if key_differences else None
         ),
+        "first_poison_position": normalized_first_poison,
+        "random_suffix_region": random_suffix_region,
         "rollout_suffix_after_first_difference": suffix,
     }
 
@@ -504,6 +713,7 @@ def build_examples(
     num_examples: int,
     start_row: int = 0,
     key_masks: torch.Tensor | None = None,
+    first_poison_positions: torch.Tensor | None = None,
 ) -> list[dict[str, Any]]:
     examples = []
     start_row = max(0, int(start_row))
@@ -517,6 +727,11 @@ def build_examples(
                 noisy_target_ids=noisy_targets[row],
                 final_answer_len=final_answer_len,
                 key_mask=None if key_masks is None else key_masks[row],
+                first_poison_position=(
+                    None
+                    if first_poison_positions is None
+                    else int(first_poison_positions[row].item())
+                ),
             )
         )
     return examples
@@ -524,21 +739,36 @@ def build_examples(
 
 def renderer_rollin_static_check() -> dict[str, Any]:
     source = inspect.getsource(generate_teacher_targets)
+    random_suffix_source = inspect.getsource(generate_random_suffix_after_error_targets)
     corrupt_pos = source.find("next_ids = corrupt_ids_fn")
     prob_rollout_pos = source.find("rollout_probs_step_fn")
     feed_pos = source.find("input_ids = next_ids.unsqueeze(1)")
+    random_suffix_sample_pos = random_suffix_source.find("next_ids = torch.multinomial")
+    random_suffix_feed_pos = random_suffix_source.find("input_ids = next_ids.unsqueeze(1)")
+    poison_update_pos = random_suffix_source.find("poisoned = poisoned | new_poison")
     return {
         "renderer_function": "data.synthetic.offline_render.generate_teacher_targets",
+        "random_suffix_renderer_function": (
+            "data.synthetic.random_suffix_noise.generate_random_suffix_after_error_targets"
+        ),
         "corrupts_before_saving_token": corrupt_pos >= 0,
         "supports_per_step_probability_rollout": prob_rollout_pos >= 0,
         "feeds_next_query_from_post_corruption_token": feed_pos >= 0 and (corrupt_pos < 0 or feed_pos > corrupt_pos),
         "feeds_next_query_from_sampled_probability_rollout_token": (
             feed_pos >= 0 and prob_rollout_pos >= 0 and feed_pos > prob_rollout_pos
         ),
+        "random_suffix_tracks_poison_state": poison_update_pos >= 0,
+        "random_suffix_feeds_next_query_from_sampled_token": (
+            random_suffix_feed_pos >= 0
+            and random_suffix_sample_pos >= 0
+            and random_suffix_feed_pos > random_suffix_sample_pos
+        ),
         "evidence": (
             "The renderer either applies corrupt_ids_fn to next_ids or samples next_ids "
             "from rollout_probs_step_fn, stores that token in generated[:, step], then "
-            "sets input_ids = next_ids.unsqueeze(1) before the next model call."
+            "sets input_ids = next_ids.unsqueeze(1) before the next model call. The "
+            "random-suffix renderer also updates poisoned from the sampled key token "
+            "before feeding that sampled token into the next query."
         ),
     }
 
@@ -627,6 +857,11 @@ def flatten_metrics_for_csv(report: dict[str, Any]) -> dict[str, Any]:
         for key, value in semantic.items():
             if isinstance(value, (str, int, float, bool)) or value is None:
                 row[f"semantic_{key}"] = value
+    random_suffix = report.get("random_suffix_after_error_metrics")
+    if random_suffix is not None:
+        for key, value in random_suffix.items():
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                row[f"random_suffix_{key}"] = value
     seeds = report.get("seeds", {})
     for key, value in seeds.items():
         row[f"seed_{key}"] = value
@@ -717,6 +952,7 @@ def resolved_config(args: argparse.Namespace) -> dict[str, Any]:
         "rollout_mode": DEFAULT_ROLLOUT_MODE,
         "target_mode": DEFAULT_TARGET_MODE,
         "teacher_law": DEFAULT_TEACHER_LAW,
+        "teacher_checkpoint": None,
         "semantic_key_noise": {
             "enabled": True,
             "coord_strategy": "cyclic",
@@ -725,6 +961,19 @@ def resolved_config(args: argparse.Namespace) -> dict[str, Any]:
             "include_clean_value": True,
             "eligible_values": [1, 2, 3, 4, 5],
             "apply_to": "partial_perm_image",
+            "one_key_per_block": True,
+        },
+        "random_suffix_noise": {
+            "enabled": True,
+            "key_positions": "semantic_key",
+            "trigger_eta": None,
+            "random_suffix_mode": "valid_tokens",
+            "keep_format_tokens": True,
+            "seed": DEFAULT_RENDER_SEED,
+            "apply_to": "both",
+            "coord_strategy": "cyclic",
+            "fixed_coord": 0,
+            "eligible_values": [1, 2, 3, 4, 5],
             "one_key_per_block": True,
         },
         "dataset": None,
@@ -755,6 +1004,7 @@ def resolved_config(args: argparse.Namespace) -> dict[str, Any]:
         "task.rollout_mode": "rollout_mode",
         "task.target_mode": "target_mode",
         "task.teacher_law": "teacher_law",
+        "task.teacher_checkpoint": "teacher_checkpoint",
         "task.dataset": "dataset",
         "task.prompt_bank_dir": "prompt_bank_dir",
         "task.semantic_key_noise.enabled": "semantic_key_noise.enabled",
@@ -765,6 +1015,17 @@ def resolved_config(args: argparse.Namespace) -> dict[str, Any]:
         "task.semantic_key_noise.eligible_values": "semantic_key_noise.eligible_values",
         "task.semantic_key_noise.apply_to": "semantic_key_noise.apply_to",
         "task.semantic_key_noise.one_key_per_block": "semantic_key_noise.one_key_per_block",
+        "task.random_suffix_noise.enabled": "random_suffix_noise.enabled",
+        "task.random_suffix_noise.key_positions": "random_suffix_noise.key_positions",
+        "task.random_suffix_noise.trigger_eta": "random_suffix_noise.trigger_eta",
+        "task.random_suffix_noise.random_suffix_mode": "random_suffix_noise.random_suffix_mode",
+        "task.random_suffix_noise.keep_format_tokens": "random_suffix_noise.keep_format_tokens",
+        "task.random_suffix_noise.seed": "random_suffix_noise.seed",
+        "task.random_suffix_noise.apply_to": "random_suffix_noise.apply_to",
+        "task.random_suffix_noise.coord_strategy": "random_suffix_noise.coord_strategy",
+        "task.random_suffix_noise.fixed_coord": "random_suffix_noise.fixed_coord",
+        "task.random_suffix_noise.eligible_values": "random_suffix_noise.eligible_values",
+        "task.random_suffix_noise.one_key_per_block": "random_suffix_noise.one_key_per_block",
         "audit.data_dir": "data_dir",
         "audit.dataset_dir": "data_dir",
         "audit.prompt_bank_dir": "prompt_bank_dir",
@@ -785,6 +1046,9 @@ def resolved_config(args: argparse.Namespace) -> dict[str, Any]:
         if target_key.startswith("semantic_key_noise."):
             nested_key = target_key.split(".", 1)[1]
             cfg["semantic_key_noise"][nested_key] = value
+        elif target_key.startswith("random_suffix_noise."):
+            nested_key = target_key.split(".", 1)[1]
+            cfg["random_suffix_noise"][nested_key] = value
         else:
             cfg[target_key] = value
         if target_key == "data_dir":
@@ -862,7 +1126,9 @@ def audit_dataset(cfg: dict[str, Any]) -> dict[str, Any]:
     )
     teacher_law = str(meta.get("teacher_law", cfg.get("teacher_law", DEFAULT_TEACHER_LAW)))
     semantic_metrics = None
+    random_suffix_metrics = None
     key_masks = None
+    first_poison_positions = None
     if teacher_law == SEMANTIC_KEY_NOISE_LAW:
         semantic_config = meta.get("semantic_key_noise", cfg.get("semantic_key_noise"))
         semantic_metrics = compute_semantic_key_noise_audit_metrics(
@@ -878,6 +1144,31 @@ def audit_dataset(cfg: dict[str, Any]) -> dict[str, Any]:
             target_len,
             semantic_key_noise_config_from_obj(semantic_config),
         )
+    elif teacher_law == RANDOM_SUFFIX_AFTER_ERROR_LAW:
+        random_suffix_config = meta.get("random_suffix_noise", cfg.get("random_suffix_noise"))
+        random_suffix_metrics = compute_random_suffix_after_error_audit_metrics(
+            noisy_targets,
+            clean_targets,
+            clean_train_prompt_ids,
+            eta=eta,
+            random_suffix_noise_config=random_suffix_config,
+            final_answer_len=final_answer_len,
+            chunk_size=int(cfg["chunk_size"]),
+        )
+        semantic_config = semantic_key_noise_config_from_obj(
+            _semantic_config_from_random_suffix_config(random_suffix_config)
+        )
+        key_masks = semantic_key_mask(
+            clean_train_prompt_ids,
+            target_len,
+            semantic_config,
+        )
+        first_poison_positions = infer_random_suffix_first_poison_positions(
+            noisy_targets,
+            clean_targets,
+            clean_train_prompt_ids,
+            random_suffix_noise_config=random_suffix_config,
+        )
     examples: list[dict[str, Any]] = []
     if not cfg.get("no_examples"):
         examples = build_examples(
@@ -888,6 +1179,7 @@ def audit_dataset(cfg: dict[str, Any]) -> dict[str, Any]:
             num_examples=int(cfg["num_examples"]),
             start_row=int(cfg["examples_start"]),
             key_masks=key_masks,
+            first_poison_positions=first_poison_positions,
         )
 
     validation_consistency = clean_validation_consistency_report(
@@ -919,6 +1211,7 @@ def audit_dataset(cfg: dict[str, Any]) -> dict[str, Any]:
         "s5_num_possible_final_answers": 120,
         "metrics": metrics,
         "semantic_key_noise_metrics": semantic_metrics,
+        "random_suffix_after_error_metrics": random_suffix_metrics,
         "rollout_corruption_check": renderer_rollin_static_check(),
         "validation_consistency": validation_consistency,
         "examples": examples,
@@ -988,12 +1281,43 @@ def print_summary(report: dict[str, Any]) -> None:
         baseline = semantic["expected_all_key_clean_rate_uniform_including_clean"]
         if baseline is not None:
             print(f"  expected_all_key_clean_rate_uniform_including_clean: {baseline:.8f}")
+    random_suffix = report.get("random_suffix_after_error_metrics")
+    if random_suffix is not None:
+        print()
+        print("Random suffix after error")
+        key_counts = random_suffix["key_positions_per_trajectory"]
+        print(
+            "  key_positions_per_trajectory: "
+            f"mean={key_counts['mean']:.4f}, min={key_counts['min']}, max={key_counts['max']}"
+        )
+        print(f"  fraction_poisoned: {random_suffix['fraction_poisoned']:.8f}")
+        print(f"  fraction_no_poison: {random_suffix['fraction_no_poison']:.8f}")
+        baseline = random_suffix["expected_no_poison_rate_uniform_including_clean"]
+        if baseline is not None:
+            print(f"  expected_no_poison_rate_uniform_including_clean: {baseline:.8f}")
+        print(
+            "  token_match_rate_before_first_poison: "
+            f"{random_suffix['token_match_rate_before_first_poison']:.8f}"
+        )
+        print(
+            "  token_match_rate_after_first_poison: "
+            f"{random_suffix['token_match_rate_after_first_poison']:.8f}"
+        )
+        print(
+            "  semantic_token_match_rate_after_first_poison: "
+            f"{random_suffix['semantic_token_match_rate_after_first_poison']:.8f}"
+        )
     print()
     print("Roll-in check")
     print(f"  feeds_next_query_from_post_corruption_token: {rollin['feeds_next_query_from_post_corruption_token']}")
     print(
         "  feeds_next_query_from_sampled_probability_rollout_token: "
         f"{rollin['feeds_next_query_from_sampled_probability_rollout_token']}"
+    )
+    print(f"  random_suffix_tracks_poison_state: {rollin['random_suffix_tracks_poison_state']}")
+    print(
+        "  random_suffix_feeds_next_query_from_sampled_token: "
+        f"{rollin['random_suffix_feeds_next_query_from_sampled_token']}"
     )
     print(f"  evidence: {rollin['evidence']}")
     print()
@@ -1027,6 +1351,13 @@ def print_examples(examples: list[dict[str, Any]]) -> None:
                 "  first_semantic_key_corruption_position: "
                 f"{ex['first_semantic_key_corruption_position']}"
             )
+        if ex.get("first_poison_position") is not None:
+            print(f"  first_poison_position: {ex['first_poison_position']}")
+        if ex.get("random_suffix_region") is not None:
+            region = ex["random_suffix_region"]
+            print(f"  random_suffix_start: {region['random_suffix_start']}")
+            print(f"    clean_random_suffix_region: {region['clean_random_suffix_region']}")
+            print(f"    noisy_random_suffix_region: {region['noisy_random_suffix_region']}")
         if ex["differences"]:
             print("  differences:")
             for diff in ex["differences"]:

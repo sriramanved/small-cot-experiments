@@ -16,6 +16,18 @@ task:
   subset_size: 1000000
   eta: 0.05
   teacher_law: distributional_noise
+  random_suffix_noise:
+    enabled: true
+    key_positions: semantic_key
+    trigger_eta: null
+    random_suffix_mode: valid_tokens
+    keep_format_tokens: true
+    seed: ${optim.seed}
+    apply_to: both
+    coord_strategy: cyclic
+    fixed_coord: 0
+    eligible_values: [1, 2, 3, 4, 5]
+    one_key_per_block: true
   teacher_signal: mc
   loss: reverse
   rollout_temperature_override: null

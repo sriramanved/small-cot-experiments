@@ -19,6 +19,21 @@ for path in (ROOT, SRC_ROOT):
 
 from nanogpt.methods.student_prefix import normalize_student_prefix_method
 
+try:
+    from scripts.plot_style import (
+        get_method_style,
+        polish_axes,
+        save_publication_figure,
+        set_publication_style,
+    )
+except ModuleNotFoundError:
+    from plot_style import (
+        get_method_style,
+        polish_axes,
+        save_publication_figure,
+        set_publication_style,
+    )
+
 
 DEFAULT_OVERRIDE_PATH = ROOT / "analysis" / "cache" / "s5_online_seed_sweeps" / "run_overrides.json"
 DEFAULT_WANDB_CACHE_DIR = ROOT / "analysis" / "cache" / "s5_online_seed_sweeps" / "wandb"
@@ -53,13 +68,15 @@ LEGACY_OPD_RE = re.compile(
     r"(?P<teacher_law>[^-]+)-(?P<temp_tag>[^-]+)-seed(?P<seed>\d+)$"
 )
 
-METHOD_COLORS = {
-    "Offline BC": "#4A4E69",
-    "NAIL-forward, greedy rollout": "#D1495B",
-    "NAIL-reverse, greedy rollout": "#EDA43B",
-    "NAIL-forward, sampled rollout": "#00798C",
-    "TM OPD": "#5B8E7D",
-}
+PLOT_METHODS = (
+    "Offline BC",
+    "TM OPD",
+    "NAIL-forward, greedy rollout",
+    "NAIL-forward, sampled rollout",
+    "NAIL-reverse, greedy rollout",
+)
+
+METHOD_COLORS = {method: get_method_style(method).color for method in PLOT_METHODS}
 
 SEED_LINESTYLES = {
     20260417: "-",
@@ -1321,6 +1338,7 @@ def plot_per_eta(
     out_dir: Path | None = None,
     show: bool = True,
 ) -> None:
+    set_publication_style()
     import matplotlib.pyplot as plt
     from matplotlib.ticker import MultipleLocator
 
@@ -1332,7 +1350,7 @@ def plot_per_eta(
 
     for eta in sorted(preferred["eta"].unique()):
         eta_rows = preferred[preferred["eta"] == eta]
-        fig, ax = plt.subplots(figsize=(15, 6), constrained_layout=True)
+        fig, ax = plt.subplots(figsize=(10, 6), constrained_layout=True)
 
         for method in METHOD_COLORS:
             method_rows = eta_rows[eta_rows["method"] == method].copy()
@@ -1353,41 +1371,39 @@ def plot_per_eta(
             if summary.empty:
                 continue
 
-            color = METHOD_COLORS[method]
-            label = f"{method} (n={int(summary['n_seeds'].max())})"
+            style = get_method_style(method)
+            label = f"{style.label} (n={int(summary['n_seeds'].max())})"
             ax.plot(
                 summary["iter"],
                 summary["mean"],
-                color=color,
-                linewidth=2.6,
+                color=style.color,
+                linestyle=style.linestyle,
+                linewidth=style.linewidth,
                 label=label,
             )
             ax.fill_between(
                 summary["iter"],
                 summary["mean"] - summary["std"],
                 summary["mean"] + summary["std"],
-                color=color,
+                color=style.color,
                 alpha=0.18,
                 linewidth=0,
             )
 
-        ax.set_title(
-            f"S5 m={int(preferred['m'].iloc[0])}, eta={eta:.2f}: methods with mean +/- 1 std bands ({metric_name})"
-        )
-        ax.set_xlabel("iter")
-        ax.set_ylabel(metric)
+        ax.set_title(f"S5 m={int(preferred['m'].iloc[0])}, eta={eta:.2f}")
+        ax.set_xlabel("Iteration")
+        ax.set_ylabel(metric.replace("val/", "").replace("_", " "))
         ax.set_ylim(0.0, 1.01)
         ax.xaxis.set_major_locator(MultipleLocator(10000))
         ax.xaxis.set_minor_locator(MultipleLocator(5000))
-        ax.grid(which="minor", linestyle=":", alpha=0.25)
-        ax.grid(which="major", alpha=0.35)
+        polish_axes(ax)
         ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
 
         if out_dir is not None:
             out_dir.mkdir(parents=True, exist_ok=True)
             out_path = out_dir / f"eta{eta_tag(float(eta))}_{metric_name}_online_seed_sweeps.png"
-            fig.savefig(out_path, dpi=220, bbox_inches="tight")
-            print(f"Saved {out_path}")
+            save_publication_figure(fig, out_path)
+            print(f"Saved {out_path} and {out_path.with_suffix('.pdf')}")
 
         if show:
             plt.show()

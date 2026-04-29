@@ -9,6 +9,21 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.ticker import MultipleLocator
 
+try:
+    from scripts.plot_style import (
+        get_method_style,
+        polish_axes,
+        save_publication_figure,
+        set_publication_style,
+    )
+except ModuleNotFoundError:
+    from plot_style import (
+        get_method_style,
+        polish_axes,
+        save_publication_figure,
+        set_publication_style,
+    )
+
 
 NOISY_BC_RE = re.compile(
     r"^out-modadd-noisy-bc-"
@@ -28,26 +43,10 @@ STUDENT_PREFIX_RE = re.compile(
     r"(?P<teacher_law>[^-]+)(?P<temp_suffix>(?:-.*)?)\-seed(?P<seed>\d+)$"
 )
 
-METHOD_COLORS = {
-    "LogLossBC": "#355070",
-    "NAIL-forward": "#E76F51",
-    "NAIL-reverse": "#F4A261",
-    "OPD": "#2A9D8F",
-}
-
-METHOD_LINESTYLES = {
-    "LogLossBC": "--",
-    "NAIL-forward": "-",
-    "NAIL-reverse": "-.",
-    "OPD": ":",
-}
-
-METHOD_MARKERS = {
-    "LogLossBC": "o",
-    "NAIL-forward": "s",
-    "NAIL-reverse": "D",
-    "OPD": "^",
-}
+METHODS = ("LogLossBC", "OPD", "NAIL-forward", "NAIL-reverse")
+METHOD_COLORS = {method: get_method_style(method).color for method in METHODS}
+METHOD_LINESTYLES = {method: get_method_style(method).linestyle for method in METHODS}
+METHOD_MARKERS = {method: get_method_style(method).marker for method in METHODS}
 
 
 @dataclass
@@ -380,50 +379,44 @@ def plot_per_eta(
     out_dir: Path | None = None,
     show: bool = True,
 ) -> None:
+    set_publication_style()
     etas = sorted(runs_df["eta"].unique())
     metric_name = metric.split("/")[-1]
 
     for eta in etas:
-        fig, ax = plt.subplots(figsize=(14, 5.25), constrained_layout=True)
+        fig, ax = plt.subplots(figsize=(10, 5.8), constrained_layout=True)
         method_rows = runs_df[runs_df["eta"] == eta].sort_values("method")
         missing_methods: list[str] = []
 
-        for method in ("LogLossBC", "NAIL-forward", "NAIL-reverse", "OPD"):
+        for method in METHODS:
             row_df = method_rows[method_rows["method"] == method]
             if row_df.empty:
                 missing_methods.append(method)
                 continue
             row = row_df.iloc[0]
             df = run_data[row["run_id"]].sort_values("iter")
+            style = get_method_style(method)
             ax.plot(
                 df["iter"],
                 df[metric],
-                color=METHOD_COLORS[method],
-                linestyle=METHOD_LINESTYLES[method],
-                marker=METHOD_MARKERS[method],
-                linewidth=2.4,
-                markersize=4,
-                label=method,
+                label=style.label,
+                **style.plot_kwargs,
             )
 
-        ax.set_title(
-            f"ModAdd p={int(runs_df['p'].iloc[0])}, m={int(runs_df['m'].iloc[0])}, eta={eta:.2f}: "
-            f"LogLossBC vs NAIL-forward vs NAIL-reverse vs OPD ({metric_name})"
-        )
-        ax.set_xlabel("iter")
-        ax.set_ylabel(metric)
+        ax.set_title(f"ModAdd p={int(runs_df['p'].iloc[0])}, m={int(runs_df['m'].iloc[0])}, eta={eta:.2f}")
+        ax.set_xlabel("Iteration")
+        ax.set_ylabel(metric.replace("val/", "").replace("_", " "))
         ax.set_ylim(0.0, 1.01)
         ax.xaxis.set_major_locator(MultipleLocator(10000))
         ax.xaxis.set_minor_locator(MultipleLocator(5000))
-        ax.grid(which="minor", linestyle=":", alpha=0.25)
-        ax.grid(which="major", alpha=0.35)
+        polish_axes(ax)
         ax.legend(loc="best")
 
         if out_dir is not None:
             out_dir.mkdir(parents=True, exist_ok=True)
             out_path = out_dir / f"eta{eta_tag(eta)}_{metric_name}_methods.png"
-            fig.savefig(out_path, dpi=220, bbox_inches="tight")
-            print(f"Saved {out_path}")
+            save_publication_figure(fig, out_path)
+            print(f"Saved {out_path} and {out_path.with_suffix('.pdf')}")
 
         if missing_methods:
             print(f"Missing methods for eta={eta:.2f}: {', '.join(missing_methods)}")

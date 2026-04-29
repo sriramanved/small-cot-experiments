@@ -20,6 +20,11 @@ from data.s5_cot.semantic_key_noise import (
     SEMANTIC_KEY_NOISE_LAW,
     semantic_key_noise_config_from_obj,
 )
+from data.synthetic.random_suffix_noise import (
+    RANDOM_SUFFIX_AFTER_ERROR_LAW,
+    random_suffix_noise_config_from_obj,
+    validate_random_suffix_applies_to_task,
+)
 from data.synthetic.prompt_bank import load_prompt_bank, select_train_subset
 from data.synthetic.target_spans import (
     canonical_target_len,
@@ -81,6 +86,11 @@ def validate_config(cfg: StudentPrefixConfig) -> None:
         if task_name != "s5":
             raise ValueError("semantic_key_noise teacher_law is only supported for S5")
         semantic_key_noise_config_from_obj(getattr(cfg, "semantic_key_noise", None))
+    if teacher_law == RANDOM_SUFFIX_AFTER_ERROR_LAW:
+        random_suffix_config = random_suffix_noise_config_from_obj(
+            getattr(cfg, "random_suffix_noise", None)
+        )
+        validate_random_suffix_applies_to_task(random_suffix_config, task_name=task_name)
     if teacher_signal not in {"mc", "full"}:
         raise ValueError("teacher_signal must be one of {'mc', 'full'}.")
     if loss not in {"forward", "reverse"}:
@@ -247,6 +257,11 @@ def canonical_student_prefix_metadata(
         "semantic_key_noise": (
             metadata.get("semantic_key_noise")
             if metadata.get("teacher_law") == SEMANTIC_KEY_NOISE_LAW
+            else None
+        ),
+        "random_suffix_noise": (
+            metadata.get("random_suffix_noise")
+            if metadata.get("teacher_law") == RANDOM_SUFFIX_AFTER_ERROR_LAW
             else None
         ),
         "method_family": method_state["method_family"],
@@ -635,6 +650,10 @@ def build_run_metadata(
         metadata["semantic_key_noise"] = semantic_key_noise_config_from_obj(
             cfg.semantic_key_noise
         ).to_dict()
+    if cfg.teacher_law == RANDOM_SUFFIX_AFTER_ERROR_LAW:
+        metadata["random_suffix_noise"] = random_suffix_noise_config_from_obj(
+            cfg.random_suffix_noise
+        ).to_dict()
     return metadata
 
 
@@ -865,11 +884,16 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
             if wandb is not None:
                 wandb.log({"iter": iter_num, **eval_stats})
 
-        prompt_ids = (
-            prompt_cycle.next_batch_no_wrap()
+        prompt_indices = (
+            prompt_cycle.next_batch_indices_no_wrap()
             if cfg.single_epoch
-            else prompt_cycle.next_batch()
+            else prompt_cycle.next_batch_indices()
         )
+        prompt_ids = prompt_bank.clean_train_prompt_ids.index_select(0, prompt_indices)
+        clean_target_ids = prompt_bank.clean_train_cot_ids.index_select(
+            0,
+            prompt_indices,
+        )[:, :target_len]
 
         teacher_targets = None
         teacher_target_probs = None
@@ -889,6 +913,10 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
             teacher_prob_kwargs = {}
             if cfg.teacher_law == SEMANTIC_KEY_NOISE_LAW:
                 teacher_prob_kwargs["semantic_key_noise_config"] = cfg.semantic_key_noise
+            if cfg.teacher_law == RANDOM_SUFFIX_AFTER_ERROR_LAW:
+                teacher_prob_kwargs["clean_target_ids"] = clean_target_ids
+                teacher_prob_kwargs["random_suffix_noise_config"] = cfg.random_suffix_noise
+                teacher_prob_kwargs["task_name"] = cfg.task
             teacher_probs = cached_teacher_token_probs(
                 teacher,
                 prompt_ids,

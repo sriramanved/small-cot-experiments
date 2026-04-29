@@ -307,8 +307,14 @@ def _s5_student_prefix_run_name(
 def _modadd_noisy_dataset_prefix(
     rollout_mode: object,
     render_seed: object = 1337,
+    teacher_law: object = "distributional_noise",
 ) -> str:
-    return f"modadd_noisy_offline_{rollout_mode}{_seed_suffix(render_seed)}"
+    prefix = "modadd_noisy_offline"
+    if str(teacher_law) != "distributional_noise":
+        prefix += f"_{str(teacher_law).replace('-', '_')}"
+    prefix += f"_{rollout_mode}"
+    prefix += _seed_suffix(render_seed)
+    return prefix
 
 
 def _modadd_noisy_dataset_name(
@@ -345,10 +351,14 @@ def _modadd_noisy_bc_run_name(
     eta: object,
     rollout_mode: object,
     seed: object,
+    teacher_law: object = "distributional_noise",
 ) -> str:
+    law_suffix = ""
+    if str(teacher_law) != "distributional_noise":
+        law_suffix = f"-{str(teacher_law).replace('_', '-')}"
     return (
         f"modadd-noisy-bc-p{int(p)}-m{int(m)}-n{int(subset_size)}-eta{_float_tag(eta)}"
-        f"{_rollout_suffix(rollout_mode)}-seed{int(seed)}"
+        f"{_rollout_suffix(rollout_mode)}{law_suffix}-seed{int(seed)}"
     )
 
 

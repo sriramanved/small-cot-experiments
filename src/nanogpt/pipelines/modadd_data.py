@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import random
+from dataclasses import asdict
 from pathlib import Path
 
 import torch
@@ -122,6 +123,8 @@ def run_modadd_render(cfg: AppConfig, *, launcher_command: list[str]) -> None:
         subset_size=cfg.task.subset_size,
         eta=cfg.task.eta,
         rollout_mode=cfg.task.rollout_mode,
+        teacher_law=cfg.task.teacher_law,
+        random_suffix_noise_config=asdict(cfg.task.random_suffix_noise),
         gen_batch_size=cfg.task.gen_batch_size,
         device=cfg.runtime.device,
         dtype_name=cfg.runtime.dtype,

@@ -38,6 +38,7 @@ from nanogpt.methods.student_prefix import (  # noqa: E402
 )
 from data.synthetic.eval import teacher_forced_exact_batch  # noqa: E402
 from data.synthetic.prompt_bank import load_prompt_bank, select_train_subset  # noqa: E402
+from data.synthetic.random_suffix_noise import RANDOM_SUFFIX_AFTER_ERROR_LAW  # noqa: E402
 from nanogpt_checkpoint import load_nanogpt_model  # noqa: E402
 
 
@@ -683,6 +684,7 @@ def objective_diagnostics_for_run(
     *,
     run: RunRecord,
     prompt_batch: torch.Tensor,
+    clean_target_batch: torch.Tensor,
     prompt_bank,
     teacher,
     student,
@@ -718,6 +720,13 @@ def objective_diagnostics_for_run(
         device=device,
         autocast_context=nullcontext(),
     )
+    teacher_prob_kwargs: dict[str, Any] = {}
+    if run.teacher_law == RANDOM_SUFFIX_AFTER_ERROR_LAW:
+        teacher_prob_kwargs = {
+            "clean_target_ids": clean_target_batch,
+            "random_suffix_noise_config": (run.run_meta or {}).get("random_suffix_noise"),
+            "task_name": "modadd",
+        }
     teacher_probs = cached_teacher_token_probs(
         teacher,
         prompt_batch,
@@ -727,6 +736,7 @@ def objective_diagnostics_for_run(
         corruptible_token_ids=tuple(modadd_corruptible_token_ids(p)),
         device=device,
         autocast_context=nullcontext(),
+        **teacher_prob_kwargs,
     )
     rollout_inputs = full_seq[:, :-1]
     logits, _ = student(rollout_inputs.to(device=device, dtype=torch.long), return_full_logits=True)
@@ -1067,9 +1077,13 @@ def main() -> None:
         if prompt_bank_dir is None:
             continue
         prompt_bank = load_prompt_bank(prompt_bank_dir)
-        prompt_batch = prompt_bank.clean_train_prompt_ids.index_select(
+        diagnostic_indices = select_train_subset(prompt_bank, args.subset_size)[
+            : args.diagnostic_batch_size
+        ]
+        prompt_batch = prompt_bank.clean_train_prompt_ids.index_select(0, diagnostic_indices)
+        clean_target_batch = prompt_bank.clean_train_cot_ids.index_select(
             0,
-            select_train_subset(prompt_bank, args.subset_size)[: args.diagnostic_batch_size],
+            diagnostic_indices,
         )
         student = load_model_cached(run.out_dir, device=device, cache=model_cache)
         teacher_checkpoint = teacher_checkpoint_for_run(run, root)
@@ -1092,6 +1106,7 @@ def main() -> None:
             objective_checks[run.run_id] = objective_diagnostics_for_run(
                 run=run,
                 prompt_batch=prompt_batch,
+                clean_target_batch=clean_target_batch,
                 prompt_bank=prompt_bank,
                 teacher=teacher,
                 student=student,
