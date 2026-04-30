@@ -42,6 +42,7 @@ except ModuleNotFoundError:
 DEFAULT_OVERRIDE_PATH = ROOT / "analysis" / "cache" / "s5_online_seed_sweeps" / "run_overrides.json"
 DEFAULT_WANDB_CACHE_DIR = ROOT / "analysis" / "cache" / "s5_online_seed_sweeps" / "wandb"
 DEFAULT_NAIL_REVERSE_MIN_ARTIFACT_UTC = pd.Timestamp("2026-04-26T00:00:00+00:00")
+DEFAULT_EFFECTIVE_BATCH_SIZE = 64
 TRUSTED_NAIL_REVERSE_VARIANTS = {
     "manual_preferred",
     "fixed_aux_actions",
@@ -84,10 +85,10 @@ METHOD_COLORS = {method: get_method_style(method).color for method in PLOT_METHO
 
 PLOT_LEGEND_LABELS = {
     "Offline BC": "Offline BC",
-    "TM OPD": "TM OPD",
-    "NAIL-forward, greedy rollout": "NAIL-forward greedy",
-    "NAIL-forward, sampled rollout": "NAIL-forward sampled",
-    "NAIL-reverse, greedy rollout": "NAIL-reverse greedy",
+    "TM OPD": "OPD-R",
+    "NAIL-forward, greedy rollout": "NAIL-F",
+    "NAIL-forward, sampled rollout": "OPD-F",
+    "NAIL-reverse, greedy rollout": "NAIL-R",
 }
 
 SEED_LINESTYLES = {
@@ -870,6 +871,38 @@ def _first_not_none(*values: object | None) -> object | None:
     return None
 
 
+def effective_batch_size_from_meta(run_meta: dict[str, object] | None) -> int:
+    if run_meta is None:
+        return DEFAULT_EFFECTIVE_BATCH_SIZE
+
+    explicit_effective = _optional_int(
+        _config_value(
+            run_meta,
+            "effective_batch_size",
+            "optim.effective_batch_size",
+            "train.effective_batch_size",
+        )
+    )
+    if explicit_effective is not None:
+        return explicit_effective
+
+    batch_size = _optional_int(
+        _config_value(run_meta, "batch_size", "optim.batch_size", "train.batch_size")
+    )
+    grad_accum = _optional_int(
+        _config_value(
+            run_meta,
+            "gradient_accumulation_steps",
+            "optim.gradient_accumulation_steps",
+            "train.gradient_accumulation_steps",
+        )
+    )
+    world_size = _optional_int(
+        _config_value(run_meta, "world_size", "ddp_world_size", "runtime.world_size", "trainer.world_size")
+    )
+    return int(batch_size or DEFAULT_EFFECTIVE_BATCH_SIZE) * int(grad_accum or 1) * int(world_size or 1)
+
+
 def _iter_explicit_wandb_specs(
     run_paths_by_eta: dict[float, object],
     *,
@@ -1088,6 +1121,9 @@ def build_runs_df(records: list[RunRecord]) -> tuple[pd.DataFrame, dict[str, pd.
         history_df["eta"] = record.eta
         history_df["seed"] = record.seed
         history_df["source_kind"] = record.source_kind
+        effective_batch_size = effective_batch_size_from_meta(record.run_meta)
+        history_df["effective_batch_size"] = effective_batch_size
+        history_df["expert_trajectories"] = history_df["iter"] * effective_batch_size
         run_data[record.run_id] = history_df
 
         if last_eval is not None:
@@ -1119,7 +1155,9 @@ def build_runs_df(records: list[RunRecord]) -> tuple[pd.DataFrame, dict[str, pd.
                 "artifact_datetime_utc": record.artifact_datetime_utc,
                 "source_root": str(record.source_root),
                 "completed": record.completed,
+                "effective_batch_size": effective_batch_size,
                 "final_iter": final_iter,
+                "final_expert_trajectories": int(final_iter) * effective_batch_size,
                 "final_clean_full_exact": final_full,
                 "final_clean_final_exact": final_final,
                 **history_meta,
@@ -1393,7 +1431,12 @@ def plot_per_eta(
             method_curves: list[pd.DataFrame] = []
             for _, row in method_rows.iterrows():
                 df = run_data[row["run_id"]].sort_values("iter").copy()
-                df = df[["iter", metric]].rename(columns={metric: "metric"})
+                if "expert_trajectories" not in df.columns:
+                    effective_batch_size = int(row.get("effective_batch_size", DEFAULT_EFFECTIVE_BATCH_SIZE))
+                    df["expert_trajectories"] = df["iter"] * effective_batch_size
+                df = df[["expert_trajectories", metric]].rename(
+                    columns={"expert_trajectories": "iter", metric: "metric"}
+                )
                 df["seed"] = int(row["seed"])
                 method_curves.append(df)
 
@@ -1433,7 +1476,7 @@ def plot_per_eta(
             )
 
         ax.set_title(f"S5 m={int(preferred['m'].iloc[0])}, eta={eta:.2f}")
-        ax.set_xlabel("Iteration")
+        ax.set_xlabel("# Expert Trajectories")
         ax.set_ylabel(metric_display_label(metric))
         ax.set_ylim(0.0, 1.01)
         ax.set_xlim(left=0)
@@ -1442,7 +1485,7 @@ def plot_per_eta(
         if plotted_methods:
             ax.legend(
                 loc="upper left",
-                bbox_to_anchor=(1.01, 1.0),
+                # bbox_to_anchor=(1.01, 1.0), add these to RC params
                 borderaxespad=0.0,
                 fontsize=12,
                 handlelength=2.2,

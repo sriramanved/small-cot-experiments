@@ -28,13 +28,13 @@ class MethodStyle:
         return kwargs
 
 
-# Okabe-Ito-inspired colorblind-friendly method palette.
-OFFLINE_BC_COLOR = "#0072B2"
-TM_OPD_COLOR = "#009E73"
-NAIL_FORWARD_COLOR = "#D55E00"
-NAIL_FORWARD_SAMPLED_COLOR = "#E69F00"
-NAIL_REVERSE_COLOR = "#CC79A7"
-NAIL_REVERSE_FULL_COLOR = "#8E5EA2"
+# Dark, colorblind-conscious method palette for paper figures.
+OFFLINE_BC_COLOR = "#000000"
+OPD_R_COLOR = "#006D4F"
+OPD_F_COLOR = "#9A3412"
+NAIL_FORWARD_COLOR = "#B91C1C"
+NAIL_REVERSE_COLOR = "#6B21A8"
+NAIL_REVERSE_FULL_COLOR = "#4C1D95"
 EXPERT_COLOR = "#000000"
 RANDOM_COLOR = "#7F7F7F"
 FALLBACK_COLOR = "#4D4D4D"
@@ -58,38 +58,38 @@ METHOD_ORDER = (
 
 _CANONICAL_METHOD_STYLES: dict[str, MethodStyle] = {
     "Expert": MethodStyle("Expert", EXPERT_COLOR, linestyle="-.", linewidth=3.2),
-    "Offline BC": MethodStyle("Offline BC", OFFLINE_BC_COLOR, linestyle="-", marker="o"),
-    "TM OPD": MethodStyle("TM OPD", TM_OPD_COLOR, linestyle="-", marker="^"),
-    "TM OPD, greedy rollout": MethodStyle("TM OPD, greedy rollout", TM_OPD_COLOR, linestyle="-", marker="^"),
-    "TM OPD, sampled rollout": MethodStyle("TM OPD, sampled rollout", TM_OPD_COLOR, linestyle="--", marker="^"),
-    "NAIL-forward": MethodStyle("NAIL-forward", NAIL_FORWARD_COLOR, linestyle="-", marker="s"),
+    "Offline BC": MethodStyle("Offline BC", OFFLINE_BC_COLOR, linestyle=":", linewidth=3.4),
+    "TM OPD": MethodStyle("OPD-R", OPD_R_COLOR, linestyle="--", linewidth=3.4),
+    "TM OPD, greedy rollout": MethodStyle("OPD-R", OPD_R_COLOR, linestyle="--", linewidth=3.4),
+    "TM OPD, sampled rollout": MethodStyle("OPD-R", OPD_R_COLOR, linestyle="--", linewidth=3.4),
+    "NAIL-forward": MethodStyle("NAIL-F", NAIL_FORWARD_COLOR, linestyle="-", linewidth=3.4),
     "NAIL-forward, greedy rollout": MethodStyle(
-        "NAIL-forward, greedy rollout",
+        "NAIL-F",
         NAIL_FORWARD_COLOR,
         linestyle="-",
-        marker="s",
+        linewidth=3.4,
     ),
     "NAIL-forward, sampled rollout": MethodStyle(
-        "NAIL-forward, sampled rollout",
-        NAIL_FORWARD_SAMPLED_COLOR,
+        "OPD-F",
+        OPD_F_COLOR,
         linestyle="--",
-        marker="s",
+        linewidth=3.4,
     ),
-    "NAIL-reverse": MethodStyle("NAIL-reverse", NAIL_REVERSE_COLOR, linestyle="-", marker="D"),
+    "NAIL-reverse": MethodStyle("NAIL-R", NAIL_REVERSE_COLOR, linestyle="-", linewidth=3.4),
     "NAIL-reverse, greedy rollout": MethodStyle(
-        "NAIL-reverse, greedy rollout",
+        "NAIL-R",
         NAIL_REVERSE_COLOR,
         linestyle="-",
-        marker="D",
+        linewidth=3.4,
     ),
     "NAIL-reverse, sampled rollout": MethodStyle(
-        "NAIL-reverse, sampled rollout",
+        "NAIL-R sampled",
         NAIL_REVERSE_COLOR,
         linestyle="--",
-        marker="D",
+        linewidth=3.4,
     ),
-    "NAIL-reverse MC": MethodStyle("NAIL-reverse MC", NAIL_REVERSE_COLOR, linestyle="-", marker="D"),
-    "NAIL-reverse full": MethodStyle("NAIL-reverse full", NAIL_REVERSE_FULL_COLOR, linestyle="-.", marker="D"),
+    "NAIL-reverse MC": MethodStyle("NAIL-R", NAIL_REVERSE_COLOR, linestyle="-", linewidth=3.4),
+    "NAIL-reverse full": MethodStyle("NAIL-R full", NAIL_REVERSE_FULL_COLOR, linestyle="-.", linewidth=3.4),
     "Random": MethodStyle("Random", RANDOM_COLOR, linestyle=":", marker=None),
 }
 
@@ -214,7 +214,7 @@ def set_publication_style() -> None:
             "xtick.labelsize": 16,
             "ytick.labelsize": 16,
             "legend.fontsize": 16,
-            "lines.linewidth": 3.0,
+            "lines.linewidth": 3.4,
             "lines.markersize": 7,
             "axes.linewidth": 1.5,
             "grid.linewidth": 0.8,
@@ -242,6 +242,11 @@ def format_iteration_k(value: float, _position: object | None = None) -> str:
     rounded = int(round(value))
     if abs(rounded) < 1000:
         return str(rounded)
+    if abs(rounded) >= 1_000_000:
+        millions = rounded / 1_000_000
+        if float(millions).is_integer():
+            return f"{int(millions)}M"
+        return f"{millions:.1f}".rstrip("0").rstrip(".") + "M"
     thousands = rounded / 1000
     if float(thousands).is_integer():
         return f"{int(thousands)}K"
@@ -259,10 +264,10 @@ def apply_iteration_axis(ax: object, *, nbins: int = 6) -> None:
 
 def metric_display_label(metric: str) -> str:
     labels = {
-        "val/clean_full_exact": "Full exact",
-        "val_clean_full_exact": "Full exact",
-        "clean_full_exact": "Full exact",
-        "final_clean_full_exact": "Full exact",
+        "val/clean_full_exact": "Reward",
+        "val_clean_full_exact": "Reward",
+        "clean_full_exact": "Reward",
+        "final_clean_full_exact": "Reward",
         "val/clean_final_exact": "Final exact",
         "val_clean_final_exact": "Final exact",
         "clean_final_exact": "Final exact",

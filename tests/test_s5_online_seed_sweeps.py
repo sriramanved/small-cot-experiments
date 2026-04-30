@@ -15,6 +15,7 @@ from scripts.plot_s5_online_seed_sweeps import (
     dedupe_preferred_runs,
     discover_s5_online_runs,
     discover_wandb_s5_online_runs,
+    effective_batch_size_from_meta,
     expected_seeds_by_eta_for_wandb_overrides,
     keep_only_explicit_wandb_for_configured_nail_reverse_etas,
     iter_run_dirs,
@@ -954,6 +955,22 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
                 offline_rows["selection_reason"].tolist(),
                 ["offline_bc_sample_on_dev_node", "offline_bc_sample_on_dev_node"],
             )
+
+    def test_effective_batch_size_uses_config_when_available_and_defaults_to_64(self):
+        self.assertEqual(effective_batch_size_from_meta(None), 64)
+        self.assertEqual(
+            effective_batch_size_from_meta(
+                {
+                    "optim": {
+                        "batch_size": 32,
+                        "gradient_accumulation_steps": 2,
+                    },
+                    "runtime": {"world_size": 4},
+                }
+            ),
+            256,
+        )
+        self.assertEqual(effective_batch_size_from_meta({"effective_batch_size": 128}), 128)
 
 
 if __name__ == "__main__":
