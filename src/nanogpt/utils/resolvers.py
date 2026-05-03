@@ -45,6 +45,17 @@ def _student_prefix_temp_suffix(
     return "-" + "-".join(tags)
 
 
+def _student_prefix_beta_suffix(loss: object, kl_beta: object = None) -> str:
+    if kl_beta is None:
+        return ""
+    text = str(kl_beta)
+    if text in {"", "None", "none", "null"}:
+        return ""
+    if str(loss) == "jsd":
+        return f"-jsd_beta{_float_tag(kl_beta)}"
+    return f"-beta{_float_tag(kl_beta)}"
+
+
 def _rollout_tag(value: object) -> str:
     text = str(value)
     if text == "greedy_then_corrupt":
@@ -295,11 +306,14 @@ def _s5_student_prefix_run_name(
     rollout_temperature_override: object,
     loss_temperature_override: object,
     seed: object,
+    kl_beta: object = None,
 ) -> str:
+    beta_suffix = _student_prefix_beta_suffix(loss, kl_beta)
     return (
         f"s5-{method_family}-{loss}-{teacher_signal}-m{int(m)}-n{int(subset_size)}-"
         f"eta{_float_tag(eta)}-{teacher_law}"
         f"{_student_prefix_temp_suffix(method_family, rollout_temperature_override, loss_temperature_override)}-"
+        f"{beta_suffix.lstrip('-') + '-' if beta_suffix else ''}"
         f"seed{int(seed)}"
     )
 
@@ -392,11 +406,14 @@ def _modadd_student_prefix_run_name(
     rollout_temperature_override: object,
     loss_temperature_override: object,
     seed: object,
+    kl_beta: object = None,
 ) -> str:
+    beta_suffix = _student_prefix_beta_suffix(loss, kl_beta)
     return (
         f"modadd-{method_family}-{loss}-{teacher_signal}-p{int(p)}-m{int(m)}-n{int(subset_size)}-"
         f"eta{_float_tag(eta)}-{teacher_law}"
         f"{_student_prefix_temp_suffix(method_family, rollout_temperature_override, loss_temperature_override)}-"
+        f"{beta_suffix.lstrip('-') + '-' if beta_suffix else ''}"
         f"seed{int(seed)}"
     )
 

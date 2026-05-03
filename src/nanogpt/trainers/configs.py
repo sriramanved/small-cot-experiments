@@ -94,6 +94,7 @@ class StudentPrefixConfig:
     random_suffix_noise: dict[str, object]
     teacher_signal: str
     loss: str
+    kl_beta: float | None
     out_dir: str
     init_from: str
     init_from_ckpt: str | None
@@ -314,6 +315,7 @@ def _project_student_prefix_config(
         random_suffix_noise=asdict(cfg.task.random_suffix_noise),
         teacher_signal=cfg.task.teacher_signal,
         loss=cfg.task.loss,
+        kl_beta=cfg.task.kl_beta,
         out_dir=cfg.run.out_dir,
         init_from=cfg.optim.init_from,
         init_from_ckpt=cfg.optim.init_from_ckpt or None,

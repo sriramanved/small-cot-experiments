@@ -18,6 +18,7 @@ from data.modular_addition.task import sample_cot_example_ids_from_rng as sample
 from data.s5_cot.task import VOCAB_SIZE, sample_cot_example_ids_from_rng
 from model import GPT, GPTConfig
 from nanogpt.config_schema import materialize_config
+from nanogpt.methods.student_prefix import jsd_mc_loss as method_jsd_mc_loss
 from nanogpt.methods.student_prefix import reverse_kl_tm_loss as method_reverse_kl_tm_loss
 from nanogpt.trainers.nail import run_nail
 from nanogpt.trainers.configs import (
@@ -279,6 +280,39 @@ class HydraConfigTests(unittest.TestCase):
         self.assertEqual(projected.teacher_signal, "mc")
         self.assertEqual(projected.rollout_temperature_override, 0.2)
         self.assertTrue(projected.shuffle_prompts)
+
+    def test_modadd_nail_mixed_projection_wires_beta_and_run_name(self):
+        cfg = _compose_app(
+            "experiment=modadd_nail",
+            "task.loss=mixed",
+            "task.teacher_signal=mc",
+            "task.kl_beta=0.5",
+        )
+        projected = project_nail_config(cfg)
+        self.assertEqual(projected.task, "modadd")
+        self.assertEqual(projected.loss, "mixed")
+        self.assertEqual(projected.teacher_signal, "mc")
+        self.assertEqual(projected.kl_beta, 0.5)
+        self.assertIn("beta0p5", cfg.run.name)
+
+    def test_modadd_nail_jsd_projection_wires_beta_and_run_name(self):
+        cfg = _compose_app(
+            "experiment=modadd_nail",
+            "task.loss=jsd",
+            "task.teacher_signal=mc",
+            "task.kl_beta=0.5",
+        )
+        projected = project_nail_config(cfg)
+        self.assertEqual(projected.task, "modadd")
+        self.assertEqual(projected.loss, "jsd")
+        self.assertEqual(projected.teacher_signal, "mc")
+        self.assertEqual(projected.kl_beta, 0.5)
+        self.assertIn("jsd_beta0p5", cfg.run.name)
+
+    def test_modadd_nail_forward_run_name_unchanged_without_beta(self):
+        cfg = _compose_app("experiment=modadd_nail")
+        self.assertNotIn("beta", cfg.run.name)
+        self.assertEqual(project_nail_config(cfg).kl_beta, None)
 
     def test_opd_hf_projection_rejects_parallel_torchrun(self):
         cfg = _compose_app(
@@ -741,6 +775,214 @@ class HydraConfigTests(unittest.TestCase):
             torch.testing.assert_close(captured["teacher_actions"], rollout_actions)
             torch.testing.assert_close(captured["reverse_actions"], aux_actions)
             torch.testing.assert_close(captured["reverse_log_q"], aux_log_q)
+
+    def test_modadd_nail_beta_endpoint_losses_skip_unused_sampling_paths(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            prompt_bank_dir = root / "prompt_bank"
+            teacher_dir = root / "teacher"
+            _write_modadd_prompt_bank(prompt_bank_dir, p=3, m=2, n_train=2, n_val=1, seed=19)
+            _write_modadd_teacher_checkpoint(teacher_dir, p=3, block_size=4)
+
+            rollout_actions = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
+            rollout_log_q = torch.full((2, 2), -0.7, dtype=torch.float32)
+            aux_actions = torch.tensor([[2, 1], [0, 2]], dtype=torch.long)
+            aux_log_q = torch.full((2, 2), -1.1, dtype=torch.float32)
+            teacher_probs = torch.full((2, 2, 4), 0.25, dtype=torch.float32)
+
+            def fake_rollout_student(model, prompt_ids, *, target_len, temperature, device, autocast_context):
+                del model, temperature, autocast_context
+                self.assertEqual(target_len, rollout_actions.size(1))
+                prompt = prompt_ids.to(device=device, dtype=torch.long)
+                actions = rollout_actions.to(device=device)
+                full_seq = torch.cat((prompt, actions), dim=1)
+                return full_seq, actions, rollout_log_q.to(device=device)
+
+            def fake_cached_teacher_token_probs(
+                model,
+                prompt_ids,
+                actions,
+                *,
+                eta,
+                teacher_law,
+                corruptible_token_ids,
+                device,
+                autocast_context,
+            ):
+                del model, prompt_ids, actions, eta, teacher_law, corruptible_token_ids, autocast_context
+                return teacher_probs.to(device=device)
+
+            for loss_name in ("mixed", "jsd"):
+                for beta in (0.0, 1.0):
+                    with self.subTest(loss=loss_name, beta=beta):
+                        out_dir = root / f"{loss_name}_beta_{str(beta).replace('.', 'p')}"
+                        cfg = project_nail_config(
+                            _compose_app(
+                                "experiment=modadd_nail",
+                                "runtime=cpu",
+                                "logging=disabled",
+                                "task.modadd_p=3",
+                                "task.modadd_m=2",
+                                f"task.loss={loss_name}",
+                                "task.teacher_signal=mc",
+                                f"task.kl_beta={beta}",
+                                f"task.teacher_checkpoint={teacher_dir}",
+                                f"task.prompt_bank_dir={prompt_bank_dir}",
+                                "task.subset_size=2",
+                                f"run.out_dir={out_dir}",
+                                "optim.batch_size=2",
+                                "optim.max_iters=1",
+                                "optim.learning_rate=0.001",
+                                "optim.warmup_iters=0",
+                                "optim.eval_interval=1",
+                                "optim.eval_n=1",
+                                "optim.eval_batch_size=1",
+                                "optim.log_interval=1",
+                                "optim.seed=7",
+                            )
+                        )
+
+                        teacher_patch = (
+                            mock.patch(
+                                "nanogpt.trainers.native_student_prefix.sample_teacher_actions",
+                                return_value=rollout_actions,
+                            )
+                            if beta == 0.0
+                            else mock.patch(
+                                "nanogpt.trainers.native_student_prefix.sample_teacher_actions",
+                                side_effect=AssertionError("beta=1 should skip teacher-target sampling"),
+                            )
+                        )
+                        aux_patch = (
+                            mock.patch(
+                                "nanogpt.trainers.native_student_prefix.sample_student_aux_actions",
+                                side_effect=AssertionError("beta=0 should skip reverse auxiliary sampling"),
+                            )
+                            if beta == 0.0
+                            else mock.patch(
+                                "nanogpt.trainers.native_student_prefix.sample_student_aux_actions",
+                                return_value=(aux_actions, aux_log_q),
+                            )
+                        )
+
+                        with mock.patch(
+                            "nanogpt.trainers.native_student_prefix.run_eval",
+                            return_value={
+                                "val/loss": 0.0,
+                                "val/clean_full_exact": 0.0,
+                                "val/clean_final_exact": 0.0,
+                            },
+                        ), mock.patch(
+                            "nanogpt.trainers.native_student_prefix.rollout_student",
+                            side_effect=fake_rollout_student,
+                        ), mock.patch(
+                            "nanogpt.trainers.native_student_prefix.cached_teacher_token_probs",
+                            side_effect=fake_cached_teacher_token_probs,
+                        ), teacher_patch, aux_patch:
+                            run_nail(
+                                cfg,
+                                launcher_command=[
+                                    str(PYTHON),
+                                    "-m",
+                                    "nanogpt.run",
+                                    "experiment=modadd_nail",
+                                    f"task.loss={loss_name}",
+                                ],
+                            )
+
+                        with open(out_dir / "run_meta.json", "r", encoding="utf-8") as f:
+                            run_meta = json.load(f)
+                        self.assertEqual(run_meta["loss"], loss_name)
+                        self.assertEqual(run_meta["kl_beta"], beta)
+
+            out_dir = root / "jsd_beta_0p5"
+            cfg = project_nail_config(
+                _compose_app(
+                    "experiment=modadd_nail",
+                    "runtime=cpu",
+                    "logging=disabled",
+                    "task.modadd_p=3",
+                    "task.modadd_m=2",
+                    "task.loss=jsd",
+                    "task.teacher_signal=mc",
+                    "task.kl_beta=0.5",
+                    f"task.teacher_checkpoint={teacher_dir}",
+                    f"task.prompt_bank_dir={prompt_bank_dir}",
+                    "task.subset_size=2",
+                    f"run.out_dir={out_dir}",
+                    "optim.batch_size=2",
+                    "optim.max_iters=1",
+                    "optim.learning_rate=0.001",
+                    "optim.warmup_iters=0",
+                    "optim.eval_interval=1",
+                    "optim.eval_n=1",
+                    "optim.eval_batch_size=1",
+                    "optim.log_interval=1",
+                    "optim.seed=7",
+                )
+            )
+            captured: dict[str, bool] = {}
+
+            def wrapped_jsd_mc_loss(
+                student_logits,
+                teacher_targets,
+                student_actions,
+                *,
+                teacher_probs,
+                beta,
+                temperature,
+                eps,
+            ):
+                captured["jsd_called"] = True
+                return method_jsd_mc_loss(
+                    student_logits,
+                    teacher_targets,
+                    student_actions,
+                    teacher_probs=teacher_probs,
+                    beta=beta,
+                    temperature=temperature,
+                    eps=eps,
+                )
+
+            with mock.patch(
+                "nanogpt.trainers.native_student_prefix.run_eval",
+                return_value={
+                    "val/loss": 0.0,
+                    "val/clean_full_exact": 0.0,
+                    "val/clean_final_exact": 0.0,
+                },
+            ), mock.patch(
+                "nanogpt.trainers.native_student_prefix.rollout_student",
+                side_effect=fake_rollout_student,
+            ), mock.patch(
+                "nanogpt.trainers.native_student_prefix.cached_teacher_token_probs",
+                side_effect=fake_cached_teacher_token_probs,
+            ), mock.patch(
+                "nanogpt.trainers.native_student_prefix.sample_teacher_actions",
+                return_value=rollout_actions,
+            ), mock.patch(
+                "nanogpt.trainers.native_student_prefix.sample_student_aux_actions",
+                return_value=(aux_actions, aux_log_q),
+            ), mock.patch(
+                "nanogpt.trainers.native_student_prefix.jsd_mc_loss",
+                side_effect=wrapped_jsd_mc_loss,
+            ):
+                run_nail(
+                    cfg,
+                    launcher_command=[
+                        str(PYTHON),
+                        "-m",
+                        "nanogpt.run",
+                        "experiment=modadd_nail",
+                        "task.loss=jsd",
+                    ],
+                )
+
+            self.assertTrue(captured["jsd_called"])
+            with open(out_dir / "run_meta.json", "r", encoding="utf-8") as f:
+                run_meta = json.load(f)
+            self.assertEqual(run_meta["loss"], "jsd")
+            self.assertEqual(run_meta["kl_beta"], 0.5)
 
     def test_submitit_aics_config_composes(self):
         result = _run_hydra(

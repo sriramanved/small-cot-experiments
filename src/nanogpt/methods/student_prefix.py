@@ -76,7 +76,7 @@ def resolve_method_family_for_reverse_loss(
     rollout_temperature: float | None,
     default_method_family: str | None,
 ) -> str:
-    if loss == "forward":
+    if loss in {"forward", "mixed", "jsd"}:
         return "nail"
     if default_method_family is not None:
         return default_method_family
@@ -93,6 +93,7 @@ def normalize_student_prefix_method(
     method_family = _lookup(value, "method_family") or default_method_family
     teacher_signal = _lookup(value, "teacher_signal")
     loss = _lookup(value, "loss")
+    kl_beta = _optional_float(_lookup(value, "kl_beta"))
     rollout_override = _optional_float(_lookup(value, "rollout_temperature_override"))
     loss_override = _optional_float(_lookup(value, "loss_temperature_override"))
 
@@ -131,6 +132,7 @@ def normalize_student_prefix_method(
         "method_family": str(method_family),
         "teacher_signal": str(teacher_signal),
         "loss": str(loss),
+        "kl_beta": kl_beta,
         "rollout_temperature_override": rollout_override,
         "loss_temperature_override": loss_override,
         "resolved_rollout_temperature": float(resolved_rollout),
@@ -669,6 +671,70 @@ def forward_kl_simple_loss(
     return loss, {
         "log_student_target": log_student_target,
         "log_teacher_target": log_teacher_target,
+    }
+
+
+def mixed_kl_loss_from_components(
+    forward_loss: torch.Tensor,
+    reverse_loss: torch.Tensor,
+    *,
+    beta: float,
+) -> torch.Tensor:
+    return (1.0 - float(beta)) * forward_loss + float(beta) * reverse_loss
+
+
+def jsd_mc_loss(
+    student_logits: torch.Tensor,
+    teacher_targets: torch.Tensor,
+    student_actions: torch.Tensor,
+    *,
+    teacher_probs: torch.Tensor,
+    beta: float,
+    temperature: float | None = None,
+    eps: float = 1e-10,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    beta = float(beta)
+    student_log_probs = log_probs_from_logits(
+        student_logits,
+        temperature=temperature,
+    )
+    student_probs = student_log_probs.exp()
+    mixture_probs = (1.0 - beta) * teacher_probs + beta * student_probs
+    log_mixture = torch.log(mixture_probs.clamp_min(eps))
+
+    log_mixture_teacher_target = log_mixture.gather(
+        2,
+        teacher_targets.unsqueeze(-1),
+    ).squeeze(-1)
+    teacher_target_probs = teacher_probs.gather(
+        2,
+        teacher_targets.unsqueeze(-1),
+    ).squeeze(-1)
+    log_teacher_target = torch.log(teacher_target_probs.clamp_min(eps))
+    teacher_to_mix = -log_mixture_teacher_target
+
+    log_student_action = student_log_probs.gather(
+        2,
+        student_actions.unsqueeze(-1),
+    ).squeeze(-1)
+    log_mixture_student_action = log_mixture.gather(
+        2,
+        student_actions.unsqueeze(-1),
+    ).squeeze(-1)
+    student_to_mix = log_student_action - log_mixture_student_action
+
+    teacher_to_mix_loss = teacher_to_mix.mean()
+    student_to_mix_loss = student_to_mix.mean()
+    loss = (1.0 - beta) * teacher_to_mix_loss + beta * student_to_mix_loss
+    return loss, {
+        "teacher_to_mix": teacher_to_mix,
+        "student_to_mix": student_to_mix,
+        "teacher_to_mix_loss": teacher_to_mix_loss,
+        "student_to_mix_loss": student_to_mix_loss,
+        "log_teacher_target": log_teacher_target,
+        "log_mixture_teacher_target": log_mixture_teacher_target,
+        "log_student_action": log_student_action,
+        "log_mixture_student_action": log_mixture_student_action,
     }
 
 

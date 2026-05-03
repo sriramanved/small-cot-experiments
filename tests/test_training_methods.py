@@ -9,6 +9,8 @@ from nanogpt.methods.student_prefix import (
     forward_kl_full_loss,
     forward_kl_simple_loss,
     gather_action_log_probs,
+    jsd_mc_loss,
+    mixed_kl_loss_from_components,
     reverse_kl_full_loss,
     reverse_kl_tm_loss,
     sample_student_aux_actions,
@@ -422,6 +424,76 @@ class TrainingMethodTests(unittest.TestCase):
         self.assertEqual(extra_metrics, {})
         torch.testing.assert_close(reverse_actions, rollout_actions)
         torch.testing.assert_close(reverse_log_q, rollout_log_q)
+
+    def test_mixed_kl_loss_from_components_uses_beta_as_reverse_weight(self):
+        forward_loss = torch.tensor(2.0)
+        reverse_loss = torch.tensor(6.0)
+
+        torch.testing.assert_close(
+            mixed_kl_loss_from_components(forward_loss, reverse_loss, beta=0.0),
+            forward_loss,
+        )
+        torch.testing.assert_close(
+            mixed_kl_loss_from_components(forward_loss, reverse_loss, beta=1.0),
+            reverse_loss,
+        )
+        torch.testing.assert_close(
+            mixed_kl_loss_from_components(forward_loss, reverse_loss, beta=0.25),
+            torch.tensor(3.0),
+        )
+
+    def test_jsd_mc_loss_matches_explicit_teacher_student_mixture_formula(self):
+        student_logits = torch.tensor(
+            [[[1.2, -0.3, 0.4], [0.1, 0.5, -0.7]]],
+            dtype=torch.float32,
+            requires_grad=True,
+        )
+        teacher_probs = torch.tensor(
+            [[[0.7, 0.2, 0.1], [0.15, 0.25, 0.6]]],
+            dtype=torch.float32,
+        )
+        teacher_targets = torch.tensor([[0, 2]], dtype=torch.long)
+        student_actions = torch.tensor([[2, 1]], dtype=torch.long)
+        beta = 0.25
+        temperature = 0.7
+
+        loss, stats = jsd_mc_loss(
+            student_logits,
+            teacher_targets,
+            student_actions,
+            teacher_probs=teacher_probs,
+            beta=beta,
+            temperature=temperature,
+            eps=1e-10,
+        )
+
+        student_log_probs = F.log_softmax(student_logits.float() / temperature, dim=-1)
+        student_probs = student_log_probs.exp()
+        mixture_probs = (1.0 - beta) * teacher_probs + beta * student_probs
+        log_mixture = torch.log(mixture_probs.clamp_min(1e-10))
+
+        teacher_to_mix = -log_mixture.gather(
+            2,
+            teacher_targets.unsqueeze(-1),
+        ).squeeze(-1)
+        log_student_action = student_log_probs.gather(
+            2,
+            student_actions.unsqueeze(-1),
+        ).squeeze(-1)
+        log_mixture_student_action = log_mixture.gather(
+            2,
+            student_actions.unsqueeze(-1),
+        ).squeeze(-1)
+        student_to_mix = log_student_action - log_mixture_student_action
+        expected_loss = (1.0 - beta) * teacher_to_mix.mean() + beta * student_to_mix.mean()
+
+        torch.testing.assert_close(loss, expected_loss)
+        torch.testing.assert_close(stats["teacher_to_mix"], teacher_to_mix)
+        torch.testing.assert_close(stats["student_to_mix"], student_to_mix)
+
+        loss.backward()
+        self.assertIsNotNone(student_logits.grad)
+        self.assertGreater(student_logits.grad.abs().sum().item(), 0.0)
 
     def test_apply_grad_clip_with_diagnostics_handles_enabled_clipping(self):
         model = torch.nn.Linear(2, 1, bias=False)

@@ -38,5 +38,6 @@ task:
     one_key_per_block: true
   teacher_signal: mc
   loss: reverse
+  kl_beta: null
   rollout_temperature_override: null
   loss_temperature_override: null

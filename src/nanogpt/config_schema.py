@@ -120,6 +120,7 @@ class TaskConfig:
     teacher_law: str = "distributional_noise"
     teacher_signal: str = "mc"
     loss: str = "reverse"
+    kl_beta: Optional[float] = None
     rollout_temperature_override: Optional[float] = None
     loss_temperature_override: Optional[float] = None
     objective: Optional[str] = None

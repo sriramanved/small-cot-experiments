@@ -11,5 +11,5 @@ defaults:
 
 run:
   output_root: ${path_join:${modadd_suite_root:${task.modadd_p},${task.modadd_m},${task.teacher_seed},${task.render_seed},${optim.seed}},opd_${task.loss}_${task.teacher_signal}}
-  name: ${modadd_student_prefix_run_name:opd,${task.loss},${task.teacher_signal},${task.modadd_p},${task.modadd_m},${task.subset_size},${task.eta},${task.teacher_law},${task.rollout_temperature_override},${task.loss_temperature_override},${optim.seed}}
+  name: ${modadd_student_prefix_run_name:opd,${task.loss},${task.teacher_signal},${task.modadd_p},${task.modadd_m},${task.subset_size},${task.eta},${task.teacher_law},${task.rollout_temperature_override},${task.loss_temperature_override},${optim.seed},${task.kl_beta}}
   out_dir: ${path_join:${run.output_root},${out_name:${run.name}}}

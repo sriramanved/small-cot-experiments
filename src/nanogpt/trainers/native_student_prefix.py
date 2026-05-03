@@ -39,7 +39,9 @@ from nanogpt.methods.student_prefix import (
     format_temperature_tag,
     forward_kl_full_loss,
     forward_kl_simple_loss,
+    jsd_mc_loss,
     normalize_student_prefix_method,
+    mixed_kl_loss_from_components,
     reverse_kl_full_loss,
     reverse_kl_tm_loss,
     rollout_student,
@@ -77,6 +79,7 @@ def validate_config(cfg: StudentPrefixConfig) -> None:
     subset_size = getattr(cfg, "subset_size", 0)
     rollout_temperature_override = getattr(cfg, "rollout_temperature_override", None)
     loss_temperature_override = getattr(cfg, "loss_temperature_override", None)
+    kl_beta = getattr(cfg, "kl_beta", None)
     teacher_law = getattr(cfg, "teacher_law", "distributional_noise")
     task_name = getattr(cfg, "task", "s5")
 
@@ -93,16 +96,28 @@ def validate_config(cfg: StudentPrefixConfig) -> None:
         validate_random_suffix_applies_to_task(random_suffix_config, task_name=task_name)
     if teacher_signal not in {"mc", "full"}:
         raise ValueError("teacher_signal must be one of {'mc', 'full'}.")
-    if loss not in {"forward", "reverse"}:
-        raise ValueError("loss must be one of {'forward', 'reverse'}.")
+    if loss not in {"forward", "reverse", "mixed", "jsd"}:
+        raise ValueError("loss must be one of {'forward', 'reverse', 'mixed', 'jsd'}.")
+    if loss in {"mixed", "jsd"}:
+        if method_family != "nail":
+            raise ValueError(f"{loss} loss is only supported for NAIL.")
+        if teacher_signal != "mc":
+            raise ValueError(f"{loss} loss requires teacher_signal='mc'.")
+        if kl_beta is None:
+            raise ValueError(f"{loss} loss requires task.kl_beta.")
+        beta = float(kl_beta)
+        if beta < 0.0 or beta > 1.0:
+            raise ValueError("task.kl_beta must be in [0, 1].")
+    elif kl_beta is not None:
+        raise ValueError("task.kl_beta is only supported when task.loss is 'mixed' or 'jsd'.")
     if method_family == "opd" and loss != "reverse":
         raise ValueError("OPD only supports reverse loss.")
     if rollout_temperature_override is not None and float(rollout_temperature_override) < 0:
         raise ValueError("rollout_temperature_override must be non-negative.")
     if loss_temperature_override is not None and float(loss_temperature_override) <= 0:
         raise ValueError("loss_temperature_override must be > 0 when set.")
-    if loss == "reverse" and loss_temperature_override is not None:
-        raise ValueError("loss_temperature_override is only supported for forward loss.")
+    if loss_temperature_override is not None and loss not in {"forward", "mixed", "jsd"}:
+        raise ValueError("loss_temperature_override is only supported for forward, mixed, or jsd loss.")
     if getattr(cfg, "compile", False) and not hasattr(torch, "compile"):
         raise ValueError("--compile requires a PyTorch build with torch.compile support.")
     if init_from == "warm_start" and not init_from_ckpt:
@@ -267,6 +282,7 @@ def canonical_student_prefix_metadata(
         "method_family": method_state["method_family"],
         "teacher_signal": method_state["teacher_signal"],
         "loss": method_state["loss"],
+        "kl_beta": method_state["kl_beta"],
         "resolved_rollout_temperature": method_state["resolved_rollout_temperature"],
         "resolved_loss_temperature": method_state["resolved_loss_temperature"],
         "shuffle_prompts": metadata.get("shuffle_prompts", False),
@@ -595,6 +611,10 @@ def build_wandb_name(
         temp_tags.append(f"loss{format_temperature_tag(resolved_loss)}")
     if temp_tags:
         name += "-" + "-".join(temp_tags)
+    if cfg.kl_beta is not None:
+        beta_tag = str(float(cfg.kl_beta)).replace(".", "p").replace("-", "neg")
+        beta_prefix = "jsd_beta" if cfg.loss == "jsd" else "beta"
+        name += f"-{beta_prefix}{beta_tag}"
     return name
 
 
@@ -608,7 +628,10 @@ def build_run_metadata(
 ) -> dict[str, object]:
     rollout_temperature = float(method_state["resolved_rollout_temperature"])
     reverse_action_source = None
-    if cfg.loss == "reverse" and cfg.teacher_signal == "mc":
+    if cfg.loss in {"mixed", "jsd"} and cfg.teacher_signal == "mc":
+        beta = float(cfg.kl_beta)
+        reverse_action_source = "student_aux_sample" if beta > 0.0 else None
+    elif cfg.loss == "reverse" and cfg.teacher_signal == "mc":
         reverse_action_source = "student_aux_sample" if cfg.method_family == "nail" else "rollout_action"
     elif cfg.loss == "reverse" and cfg.teacher_signal == "full":
         reverse_action_source = "full_distribution"
@@ -631,6 +654,7 @@ def build_run_metadata(
         "method_family": cfg.method_family,
         "teacher_signal": cfg.teacher_signal,
         "loss": cfg.loss,
+        "kl_beta": cfg.kl_beta,
         "rollout_temperature_override": cfg.rollout_temperature_override,
         "loss_temperature_override": cfg.loss_temperature_override,
         "resolved_rollout_temperature": rollout_temperature,
@@ -818,6 +842,7 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
 
     rollout_temperature = float(method_state["resolved_rollout_temperature"])
     loss_temperature = method_state["resolved_loss_temperature"]
+    kl_beta = None if cfg.kl_beta is None else float(cfg.kl_beta)
     running_metrics: dict[str, float] = {}
     running_steps = 0
     clipping_fraction_ema = 0.0
@@ -928,7 +953,18 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                 autocast_context=autocast_context,
                 **teacher_prob_kwargs,
             )
-            if cfg.teacher_signal == "mc" and cfg.loss == "forward":
+            needs_forward_teacher_targets = (
+                cfg.teacher_signal == "mc"
+                and (
+                    cfg.loss == "forward"
+                    or (
+                        cfg.loss in {"mixed", "jsd"}
+                        and kl_beta is not None
+                        and kl_beta < 1.0
+                    )
+                )
+            )
+            if needs_forward_teacher_targets:
                 teacher_targets = sample_teacher_actions(teacher_probs)
                 teacher_target_probs = teacher_probs.gather(2, teacher_targets.unsqueeze(-1)).squeeze(-1)
                 log_teacher_target = torch.log(teacher_target_probs.clamp_min(cfg.eps))
@@ -984,6 +1020,157 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                     "train/student_teacher_ce": float(objective_stats["student_teacher_ce"].mean().item()),
                     "train/student_entropy": float(objective_stats["student_entropy"].mean().item()),
                 }
+            elif cfg.teacher_signal == "mc" and cfg.loss == "mixed":
+                assert kl_beta is not None
+                forward_weight = 1.0 - kl_beta
+                reverse_weight = kl_beta
+                zero_loss = p_answer_logits.sum() * 0.0
+                forward_loss = zero_loss
+                reverse_loss = zero_loss
+                step_metrics = {"train/mixed_beta": kl_beta}
+
+                if forward_weight > 0.0:
+                    assert teacher_targets is not None
+                    assert log_teacher_target is not None
+                    forward_loss, forward_stats = forward_kl_simple_loss(
+                        p_answer_logits,
+                        teacher_targets,
+                        teacher_probs=teacher_probs,
+                        temperature=loss_temperature,
+                        eps=cfg.eps,
+                    )
+                    step_metrics["train/log_student_target"] = float(
+                        forward_stats["log_student_target"].mean().item()
+                    )
+                    step_metrics["train/log_teacher_target"] = float(log_teacher_target.mean().item())
+
+                if reverse_weight > 0.0:
+                    reverse_actions, reverse_log_q, reverse_metrics = select_reverse_mc_actions(
+                        method_family=cfg.method_family,
+                        rollout_actions=rollout_actions,
+                        rollout_log_q=rollout_log_q,
+                        student_logits=p_answer_logits,
+                    )
+                    reverse_loss, reverse_stats = reverse_kl_tm_loss(
+                        p_answer_logits,
+                        reverse_actions,
+                        log_q=reverse_log_q,
+                        teacher_probs=teacher_probs,
+                        eps=cfg.eps,
+                    )
+                    reverse_step_metrics = build_reverse_mc_step_metrics(
+                        loss=reverse_loss,
+                        objective_stats=reverse_stats,
+                        log_q=reverse_log_q,
+                        extra_metrics=reverse_metrics,
+                    )
+                    for key, value in reverse_step_metrics.items():
+                        if key != "train/loss":
+                            step_metrics[key] = value
+
+                loss = mixed_kl_loss_from_components(
+                    forward_loss,
+                    reverse_loss,
+                    beta=kl_beta,
+                )
+                step_metrics["train/loss"] = float(loss.item())
+                step_metrics["train/mixed_forward_loss"] = float(forward_loss.item())
+                step_metrics["train/mixed_reverse_loss"] = float(reverse_loss.item())
+            elif cfg.teacher_signal == "mc" and cfg.loss == "jsd":
+                assert kl_beta is not None
+                if kl_beta == 0.0:
+                    assert teacher_targets is not None
+                    assert log_teacher_target is not None
+                    loss, objective_stats = forward_kl_simple_loss(
+                        p_answer_logits,
+                        teacher_targets,
+                        teacher_probs=teacher_probs,
+                        temperature=loss_temperature,
+                        eps=cfg.eps,
+                    )
+                    step_metrics = {
+                        "train/loss": float(loss.item()),
+                        "train/jsd_beta": kl_beta,
+                        "train/jsd_loss": float(loss.item()),
+                        "train/jsd_teacher_to_mix_loss": float(loss.item()),
+                        "train/jsd_student_to_mix_loss": 0.0,
+                        "train/log_student_target": float(
+                            objective_stats["log_student_target"].mean().item()
+                        ),
+                        "train/log_teacher_target": float(log_teacher_target.mean().item()),
+                    }
+                elif kl_beta == 1.0:
+                    reverse_actions, reverse_log_q, reverse_metrics = select_reverse_mc_actions(
+                        method_family=cfg.method_family,
+                        rollout_actions=rollout_actions,
+                        rollout_log_q=rollout_log_q,
+                        student_logits=p_answer_logits,
+                    )
+                    loss, objective_stats = reverse_kl_tm_loss(
+                        p_answer_logits,
+                        reverse_actions,
+                        log_q=reverse_log_q,
+                        teacher_probs=teacher_probs,
+                        eps=cfg.eps,
+                    )
+                    step_metrics = build_reverse_mc_step_metrics(
+                        loss=loss,
+                        objective_stats=objective_stats,
+                        log_q=reverse_log_q,
+                        extra_metrics=reverse_metrics,
+                    )
+                    step_metrics["train/jsd_beta"] = kl_beta
+                    step_metrics["train/jsd_loss"] = float(loss.item())
+                    step_metrics["train/jsd_teacher_to_mix_loss"] = 0.0
+                    step_metrics["train/jsd_student_to_mix_loss"] = float(loss.item())
+                else:
+                    assert teacher_targets is not None
+                    reverse_actions, reverse_log_q, reverse_metrics = select_reverse_mc_actions(
+                        method_family=cfg.method_family,
+                        rollout_actions=rollout_actions,
+                        rollout_log_q=rollout_log_q,
+                        student_logits=p_answer_logits,
+                    )
+                    loss, objective_stats = jsd_mc_loss(
+                        p_answer_logits,
+                        teacher_targets,
+                        reverse_actions,
+                        teacher_probs=teacher_probs,
+                        beta=kl_beta,
+                        temperature=loss_temperature,
+                        eps=cfg.eps,
+                    )
+                    step_metrics = {
+                        "train/loss": float(loss.item()),
+                        "train/jsd_beta": kl_beta,
+                        "train/jsd_loss": float(loss.item()),
+                        "train/jsd_teacher_to_mix_loss": float(
+                            objective_stats["teacher_to_mix_loss"].item()
+                        ),
+                        "train/jsd_student_to_mix_loss": float(
+                            objective_stats["student_to_mix_loss"].item()
+                        ),
+                        "train/log_teacher_target": float(
+                            objective_stats["log_teacher_target"].mean().item()
+                        ),
+                        "train/jsd_log_mixture_teacher_target": float(
+                            objective_stats["log_mixture_teacher_target"].mean().item()
+                        ),
+                        "train/jsd_log_student_action": float(
+                            objective_stats["log_student_action"].mean().item()
+                        ),
+                        "train/jsd_log_mixture_student_action": float(
+                            objective_stats["log_mixture_student_action"].mean().item()
+                        ),
+                        "train/jsd_teacher_to_mix_token": float(
+                            objective_stats["teacher_to_mix"].mean().item()
+                        ),
+                        "train/jsd_student_to_mix_token": float(
+                            objective_stats["student_to_mix"].mean().item()
+                        ),
+                        "train/log_q": float(reverse_log_q.mean().item()),
+                    }
+                    step_metrics.update(reverse_metrics)
             elif cfg.teacher_signal == "mc" and cfg.loss == "forward":
                 assert teacher_targets is not None
                 assert log_teacher_target is not None

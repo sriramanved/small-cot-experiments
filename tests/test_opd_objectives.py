@@ -46,6 +46,7 @@ class OpdObjectiveTests(unittest.TestCase):
             method_family="opd",
             teacher_signal="mc",
             loss="reverse",
+            kl_beta=None,
             init_from="scratch",
             init_from_ckpt=None,
             continue_from_subset_size=0,
@@ -181,8 +182,74 @@ class OpdObjectiveTests(unittest.TestCase):
         validate_nail_args(self._cfg(method_family="nail", loss="forward"))
         validate_nail_args(self._cfg(method_family="nail", loss="reverse"))
 
+    def test_nail_accepts_mixed_mc_loss_with_beta(self):
+        validate_nail_args(
+            self._cfg(
+                method_family="nail",
+                teacher_signal="mc",
+                loss="mixed",
+                kl_beta=0.5,
+            )
+        )
+
+    def test_nail_accepts_jsd_mc_loss_with_beta(self):
+        validate_nail_args(
+            self._cfg(
+                method_family="nail",
+                teacher_signal="mc",
+                loss="jsd",
+                kl_beta=0.5,
+            )
+        )
+
+    def test_beta_losses_require_nail_mc_and_valid_beta(self):
+        invalid_cases = [
+            (self._cfg(method_family="nail", loss="mixed"), "requires task.kl_beta"),
+            (self._cfg(method_family="nail", loss="jsd"), "requires task.kl_beta"),
+            (
+                self._cfg(method_family="nail", loss="mixed", kl_beta=-0.1),
+                r"task\.kl_beta must be in \[0, 1\]",
+            ),
+            (
+                self._cfg(method_family="nail", loss="jsd", kl_beta=-0.1),
+                r"task\.kl_beta must be in \[0, 1\]",
+            ),
+            (
+                self._cfg(method_family="nail", loss="mixed", kl_beta=1.1),
+                r"task\.kl_beta must be in \[0, 1\]",
+            ),
+            (
+                self._cfg(method_family="nail", loss="jsd", kl_beta=1.1),
+                r"task\.kl_beta must be in \[0, 1\]",
+            ),
+            (
+                self._cfg(method_family="nail", teacher_signal="full", loss="mixed", kl_beta=0.5),
+                "requires teacher_signal='mc'",
+            ),
+            (
+                self._cfg(method_family="nail", teacher_signal="full", loss="jsd", kl_beta=0.5),
+                "requires teacher_signal='mc'",
+            ),
+            (
+                self._cfg(method_family="opd", loss="mixed", kl_beta=0.5),
+                "mixed loss is only supported for NAIL",
+            ),
+            (
+                self._cfg(method_family="opd", loss="jsd", kl_beta=0.5),
+                "jsd loss is only supported for NAIL",
+            ),
+        ]
+        for cfg, message in invalid_cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    validate_nail_args(cfg)
+
+    def test_kl_beta_rejected_for_non_mixed_losses(self):
+        with self.assertRaisesRegex(ValueError, "only supported when task.loss is 'mixed' or 'jsd'"):
+            validate_nail_args(self._cfg(method_family="nail", loss="forward", kl_beta=0.5))
+
     def test_reverse_loss_rejects_loss_temperature_override(self):
-        with self.assertRaisesRegex(ValueError, "only supported for forward loss"):
+        with self.assertRaisesRegex(ValueError, "only supported for forward, mixed, or jsd loss"):
             validate_nail_args(
                 self._cfg(
                     method_family="nail",
@@ -196,6 +263,26 @@ class OpdObjectiveTests(unittest.TestCase):
             self._cfg(
                 method_family="nail",
                 loss="forward",
+                loss_temperature_override=0.7,
+            )
+        )
+
+    def test_mixed_loss_accepts_positive_loss_temperature_override(self):
+        validate_nail_args(
+            self._cfg(
+                method_family="nail",
+                loss="mixed",
+                kl_beta=0.5,
+                loss_temperature_override=0.7,
+            )
+        )
+
+    def test_jsd_loss_accepts_positive_loss_temperature_override(self):
+        validate_nail_args(
+            self._cfg(
+                method_family="nail",
+                loss="jsd",
+                kl_beta=0.5,
                 loss_temperature_override=0.7,
             )
         )
