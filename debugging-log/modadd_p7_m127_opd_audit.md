@@ -13,8 +13,8 @@ This audit is about the Hydra-era ModAdd sweep with:
 and the three compared methods:
 
 - `Offline BC MC`
-- `NAIL-OPD MC` (`forward_kl_simple`)
-- `TM OPD MC` (`reverse_kl_tm`)
+- `NAIL-F MC` (`forward_kl_simple`)
+- `OPD-R MC` (`reverse_kl_tm`)
 
 The audit has two parts:
 
@@ -66,7 +66,7 @@ The current ModAdd noisy offline BC path is standard token cross-entropy on a pr
 
 So `Offline BC MC` is not a full-distribution KL objective. It is plain token imitation on one noisy Monte Carlo target sequence per prompt.
 
-### NAIL-OPD MC (`forward_kl_simple`)
+### NAIL-F MC (`forward_kl_simple`)
 
 `forward_kl_simple` is **not** the full forward KL.
 
@@ -83,7 +83,7 @@ Crucially, `log_teacher_target` is logged but it is not part of the optimized lo
 
 That makes `forward_kl_simple` much closer to Monte Carlo teacher imitation than the name “forward KL” suggests.
 
-### TM OPD MC (`reverse_kl_tm`)
+### OPD-R MC (`reverse_kl_tm`)
 
 `reverse_kl_tm` is an importance-weighted estimator on student-sampled actions.
 
@@ -119,7 +119,7 @@ One subtle but important point:
 In other words:
 
 - offline BC uses teacher-generated noisy trajectories frozen into a dataset,
-- OPD/NAIL use student-generated trajectories online.
+- student-prefix methods use student-generated trajectories online.
 
 That is a real difference, but it is a different axis than the teacher-law match.
 
@@ -160,7 +160,7 @@ So the corruption mechanism excludes the equals token and only corrupts digit to
 
 ## What Is Matched Vs Not Matched
 
-| Axis | Offline BC MC | NAIL-OPD MC | TM OPD MC | Matched? |
+| Axis | Offline BC MC | NAIL-F MC | OPD-R MC | Matched? |
 | --- | --- | --- | --- | --- |
 | Teacher-side noisy law | `sample_then_corrupt` dataset | `distributional_noise` teacher law | `distributional_noise` teacher law | Yes, if the offline run is the `-sample-` variant |
 | Target type | sampled noisy tokens | sampled teacher targets | importance-weighted reverse-KL estimator | No |
@@ -168,7 +168,7 @@ So the corruption mechanism excludes the equals token and only corrupts digit to
 | Student rollout temperature | not applicable during offline data creation | typically `1.0` | typically `1.0` | Yes across online runs |
 | Main plotted eval | greedy clean exact match | greedy clean exact match | greedy clean exact match | Yes |
 
-## Why Offline BC MC Could Track NAIL-OPD MC Closely
+## Why Offline BC MC Could Track NAIL-F MC Closely
 
 This is the main static conclusion from reading the code: the result is **not obviously a bug**.
 
@@ -181,7 +181,7 @@ They both effectively optimize student probability on sampled noisy teacher targ
 
 That means the surprising result:
 
-- “offline BC MC tracks NAIL-OPD MC pretty closely”
+- “offline BC MC tracks NAIL-F MC pretty closely”
 
 is actually plausible from the current implementation.
 
@@ -226,7 +226,7 @@ But under sampled clean evaluation at temperature `1.0`:
 
 This means the current greedy clean plots are mostly measuring whether the correct token remains the mode of the learned next-token distribution. They are **not** measuring whether the sampled policy is robust over the full 127-step chain.
 
-### 4. Offline BC MC and NAIL-OPD MC really are extremely close
+### 4. Offline BC MC and NAIL-F MC really are extremely close
 
 The runtime gap summary shows:
 
@@ -234,9 +234,9 @@ The runtime gap summary shows:
 - sampled full-exact gaps are also `0.0` because both are always zero for `eta > 0`
 - sampled final-exact gaps are small, with NAIL usually slightly better
 
-So the “offline BC MC tracks NAIL-OPD MC closely” observation is real. It is not an artifact of missing runs or a teacher-law mismatch.
+So the “offline BC MC tracks NAIL-F MC closely” observation is real. It is not an artifact of missing runs or a teacher-law mismatch.
 
-### 5. TM OPD is not failing because of exploding importance weights
+### 5. OPD-R is not failing because of exploding importance weights
 
 This was an important hypothesis, and the runtime data rejects it.
 
@@ -254,13 +254,13 @@ What does change with `eta` is the advantage scale:
 
 So the more plausible issue is not weight explosion, but that the teacher signal becomes weak and low-contrast as noise increases.
 
-### 6. TM OPD looks more mode-seeking than the other two methods
+### 6. OPD-R looks more mode-seeking than the other two methods
 
 At `eta=0.9`:
 
 - NAIL greedy: `clean_full_exact = 0.0`, `clean_final_exact = 0.1523`
 - Offline BC greedy: `clean_full_exact = 0.0`, `clean_final_exact = 0.1367`
-- TM OPD greedy: `clean_full_exact = 1.0`, `clean_final_exact = 1.0`
+- OPD-R greedy: `clean_full_exact = 1.0`, `clean_final_exact = 1.0`
 
 But under sampled eval at `eta=0.9`:
 
@@ -268,7 +268,7 @@ But under sampled eval at `eta=0.9`:
 - Offline BC sampled final exact: `0.1250`
 - TM sampled final exact: `0.1094`
 
-So TM OPD appears to be the most mode-seeking policy:
+So OPD-R appears to be the most mode-seeking policy:
 
 - best under greedy decoding at high noise
 - slightly worse under sampled decoding
@@ -313,7 +313,7 @@ Based on the code audit plus the runtime summary, the current evidence points to
 1. No obvious implementation bug in how the three compared methods are wired together.
 2. A genuine objective-level similarity between Offline BC MC and `forward_kl_simple`, which explains why they track each other closely.
 3. A strong greedy-vs-sampled evaluation mismatch that hides major differences in stochastic rollout behavior.
-4. TM OPD behaving more like a mode-seeking policy than the other two methods, especially at very high noise.
+4. OPD-R behaving more like a mode-seeking policy than the other two methods, especially at very high noise.
 
 ## What The New Audit Script Checks
 

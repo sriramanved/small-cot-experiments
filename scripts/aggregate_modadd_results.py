@@ -10,7 +10,7 @@ import torch
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Aggregate modular-addition offline BC and OPD results into CSV and Markdown tables."
+        description="Aggregate modular-addition LogLossBC and paper-method results into CSV and Markdown tables."
     )
     parser.add_argument("--root", type=str, default=".")
     parser.add_argument("--p", type=int, default=None)

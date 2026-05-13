@@ -40,12 +40,12 @@ OPD_RE = re.compile(
 )
 
 OBJECTIVE_TO_METHOD = {
-    "forward_kl_simple": "NAIL-forward",
-    "reverse_kl_simple": "NAIL-reverse",
-    "reverse_kl_tm": "OPD",
+    "forward_kl_simple": "NAIL-F",
+    "reverse_kl_simple": "NAIL-R",
+    "reverse_kl_tm": "OPD-R",
 }
 
-METHODS = ("LogLossBC", "OPD", "NAIL-forward", "NAIL-reverse")
+METHODS = ("LogLossBC", "OPD-R", "NAIL-F", "NAIL-R")
 METHOD_COLORS = {method: get_method_style(method).color for method in METHODS}
 METHOD_LINESTYLES = {method: get_method_style(method).linestyle for method in METHODS}
 METHOD_MARKERS = {method: get_method_style(method).marker for method in METHODS}

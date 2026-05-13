@@ -29,13 +29,13 @@
       },
       {
         "eta": 0.0,
-        "method": "NAIL-OPD MC",
+        "method": "NAIL-F MC",
         "count": 0,
         "run_ids": []
       },
       {
         "eta": 0.0,
-        "method": "TM OPD MC",
+        "method": "OPD-R MC",
         "count": 0,
         "run_ids": []
       },
@@ -47,13 +47,13 @@
       },
       {
         "eta": 0.1,
-        "method": "NAIL-OPD MC",
+        "method": "NAIL-F MC",
         "count": 0,
         "run_ids": []
       },
       {
         "eta": 0.1,
-        "method": "TM OPD MC",
+        "method": "OPD-R MC",
         "count": 0,
         "run_ids": []
       },
@@ -65,13 +65,13 @@
       },
       {
         "eta": 0.3,
-        "method": "NAIL-OPD MC",
+        "method": "NAIL-F MC",
         "count": 0,
         "run_ids": []
       },
       {
         "eta": 0.3,
-        "method": "TM OPD MC",
+        "method": "OPD-R MC",
         "count": 0,
         "run_ids": []
       },
@@ -83,13 +83,13 @@
       },
       {
         "eta": 0.5,
-        "method": "NAIL-OPD MC",
+        "method": "NAIL-F MC",
         "count": 0,
         "run_ids": []
       },
       {
         "eta": 0.5,
-        "method": "TM OPD MC",
+        "method": "OPD-R MC",
         "count": 0,
         "run_ids": []
       },
@@ -101,13 +101,13 @@
       },
       {
         "eta": 0.7,
-        "method": "NAIL-OPD MC",
+        "method": "NAIL-F MC",
         "count": 0,
         "run_ids": []
       },
       {
         "eta": 0.7,
-        "method": "TM OPD MC",
+        "method": "OPD-R MC",
         "count": 0,
         "run_ids": []
       },
@@ -119,36 +119,36 @@
       },
       {
         "eta": 0.9,
-        "method": "NAIL-OPD MC",
+        "method": "NAIL-F MC",
         "count": 0,
         "run_ids": []
       },
       {
         "eta": 0.9,
-        "method": "TM OPD MC",
+        "method": "OPD-R MC",
         "count": 0,
         "run_ids": []
       }
     ],
     "missing_expected_runs": [
       "eta=0.0: missing Offline BC MC",
-      "eta=0.0: missing NAIL-OPD MC",
-      "eta=0.0: missing TM OPD MC",
+      "eta=0.0: missing NAIL-F MC",
+      "eta=0.0: missing OPD-R MC",
       "eta=0.1: missing Offline BC MC",
-      "eta=0.1: missing NAIL-OPD MC",
-      "eta=0.1: missing TM OPD MC",
+      "eta=0.1: missing NAIL-F MC",
+      "eta=0.1: missing OPD-R MC",
       "eta=0.3: missing Offline BC MC",
-      "eta=0.3: missing NAIL-OPD MC",
-      "eta=0.3: missing TM OPD MC",
+      "eta=0.3: missing NAIL-F MC",
+      "eta=0.3: missing OPD-R MC",
       "eta=0.5: missing Offline BC MC",
-      "eta=0.5: missing NAIL-OPD MC",
-      "eta=0.5: missing TM OPD MC",
+      "eta=0.5: missing NAIL-F MC",
+      "eta=0.5: missing OPD-R MC",
       "eta=0.7: missing Offline BC MC",
-      "eta=0.7: missing NAIL-OPD MC",
-      "eta=0.7: missing TM OPD MC",
+      "eta=0.7: missing NAIL-F MC",
+      "eta=0.7: missing OPD-R MC",
       "eta=0.9: missing Offline BC MC",
-      "eta=0.9: missing NAIL-OPD MC",
-      "eta=0.9: missing TM OPD MC"
+      "eta=0.9: missing NAIL-F MC",
+      "eta=0.9: missing OPD-R MC"
     ],
     "duplicate_runs": []
   },

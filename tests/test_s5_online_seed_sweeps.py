@@ -283,7 +283,7 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
             )
 
             self.assertEqual(len(records), 1)
-            self.assertEqual(records[0].method, "NAIL-forward, sampled rollout")
+            self.assertEqual(records[0].method, "OPD-F")
 
     def test_prefers_newer_unknown_nail_reverse_run_when_dates_differ(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -335,25 +335,25 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
             [
                 {
                     "run_id": "old-reverse",
-                    "method": "NAIL-reverse, greedy rollout",
+                    "method": "NAIL-R, greedy rollout",
                     "reverse_variant": "unknown_or_legacy",
                     "artifact_datetime_utc": "2026-04-25T00:00:00+00:00",
                 },
                 {
                     "run_id": "manual-old-reverse",
-                    "method": "NAIL-reverse, greedy rollout",
+                    "method": "NAIL-R, greedy rollout",
                     "reverse_variant": "manual_preferred",
                     "artifact_datetime_utc": "2026-04-25T00:00:00+00:00",
                 },
                 {
                     "run_id": "new-reverse",
-                    "method": "NAIL-reverse, greedy rollout",
+                    "method": "NAIL-R, greedy rollout",
                     "reverse_variant": "fixed_aux_actions",
                     "artifact_datetime_utc": "2026-04-27T00:00:00+00:00",
                 },
                 {
                     "run_id": "forward",
-                    "method": "NAIL-forward, greedy rollout",
+                    "method": "NAIL-F, greedy rollout",
                     "reverse_variant": "standard",
                     "artifact_datetime_utc": "2026-04-01T00:00:00+00:00",
                 },
@@ -372,7 +372,7 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
             [
                 {
                     "run_id": "fixed-new",
-                    "method": "NAIL-reverse, greedy rollout",
+                    "method": "NAIL-R, greedy rollout",
                     "eta": 0.0,
                     "seed": 20260417,
                     "selection_rank": 1,
@@ -386,7 +386,7 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
                 },
                 {
                     "run_id": "legacy-old",
-                    "method": "NAIL-reverse, greedy rollout",
+                    "method": "NAIL-R, greedy rollout",
                     "eta": 0.0,
                     "seed": 20260417,
                     "selection_rank": 30,
@@ -493,7 +493,7 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
             [
                 {
                     "run_id": "trusted-seed-a",
-                    "method": "NAIL-reverse, greedy rollout",
+                    "method": "NAIL-R, greedy rollout",
                     "eta": 0.7,
                     "seed": 20260417,
                     "selection_rank": -100,
@@ -507,7 +507,7 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
                 },
                 {
                     "run_id": "trusted-seed-b",
-                    "method": "NAIL-reverse, greedy rollout",
+                    "method": "NAIL-R, greedy rollout",
                     "eta": 0.7,
                     "seed": 20260418,
                     "selection_rank": -100,
@@ -521,7 +521,7 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
                 },
                 {
                     "run_id": "unknown-third-seed",
-                    "method": "NAIL-reverse, greedy rollout",
+                    "method": "NAIL-R, greedy rollout",
                     "eta": 0.7,
                     "seed": 20260419,
                     "selection_rank": 30,
@@ -549,7 +549,7 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
             [
                 {
                     "run_id": "wandb:eta07-seed-a",
-                    "method": "NAIL-reverse, greedy rollout",
+                    "method": "NAIL-R, greedy rollout",
                     "eta": 0.7,
                     "seed": 20260417,
                     "selection_rank": -200,
@@ -563,7 +563,7 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
                 },
                 {
                     "run_id": "wandb:eta07-seed-b",
-                    "method": "NAIL-reverse, greedy rollout",
+                    "method": "NAIL-R, greedy rollout",
                     "eta": 0.7,
                     "seed": 20260418,
                     "selection_rank": -200,
@@ -577,7 +577,7 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
                 },
                 {
                     "run_id": "local-third-seed",
-                    "method": "NAIL-reverse, greedy rollout",
+                    "method": "NAIL-R, greedy rollout",
                     "eta": 0.7,
                     "seed": 20260419,
                     "selection_rank": -100,
@@ -612,7 +612,7 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
         self.assertEqual(expected_seeds, {0.7: [20260417, 20260418]})
         require_method_seed_coverage(
             filtered,
-            method="NAIL-reverse, greedy rollout",
+            method="NAIL-R, greedy rollout",
             seeds=expected_seeds,
             etas=[0.7],
         )
@@ -622,7 +622,7 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
             [
                 {
                     "run_id": "local-eta07-seed-a",
-                    "method": "NAIL-reverse, greedy rollout",
+                    "method": "NAIL-R, greedy rollout",
                     "eta": 0.7,
                     "seed": 20260417,
                     "selection_rank": -100,
@@ -647,14 +647,14 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
     def test_require_method_seed_coverage_reports_missing_reverse_seed(self):
         runs_df = pd.DataFrame(
             [
-                {"eta": 0.7, "seed": 20260417, "method": "NAIL-reverse, greedy rollout"},
-                {"eta": 0.7, "seed": 20260418, "method": "NAIL-reverse, greedy rollout"},
+                {"eta": 0.7, "seed": 20260417, "method": "NAIL-R, greedy rollout"},
+                {"eta": 0.7, "seed": 20260418, "method": "NAIL-R, greedy rollout"},
             ]
         )
 
         missing = missing_method_seed_rows(
             runs_df,
-            method="NAIL-reverse, greedy rollout",
+            method="NAIL-R, greedy rollout",
             seeds=[20260417, 20260418, 20260419],
             etas=[0.7],
         )
@@ -663,7 +663,7 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "eta=0.7, seed=20260419"):
             require_method_seed_coverage(
                 runs_df,
-                method="NAIL-reverse, greedy rollout",
+                method="NAIL-R, greedy rollout",
                 seeds=[20260417, 20260418, 20260419],
                 etas=[0.7],
             )
@@ -673,7 +673,7 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
             [
                 {
                     "run_id": "preferred",
-                    "method": "NAIL-reverse, greedy rollout",
+                    "method": "NAIL-R, greedy rollout",
                     "eta": 0.0,
                     "seed": 20260418,
                     "selection_rank": 1,
@@ -691,7 +691,7 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
                 },
                 {
                     "run_id": "duplicate-long",
-                    "method": "NAIL-reverse, greedy rollout",
+                    "method": "NAIL-R, greedy rollout",
                     "eta": 0.0,
                     "seed": 20260418,
                     "selection_rank": 30,
@@ -715,7 +715,7 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
                     "iter": [0, 125000],
                     "eta": [0.0, 0.0],
                     "seed": [20260418, 20260418],
-                    "method": ["NAIL-reverse, greedy rollout", "NAIL-reverse, greedy rollout"],
+                    "method": ["NAIL-R, greedy rollout", "NAIL-R, greedy rollout"],
                 }
             ),
             "duplicate-long": pd.DataFrame(
@@ -723,14 +723,14 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
                     "iter": [0, 187500],
                     "eta": [0.0, 0.0],
                     "seed": [20260418, 20260418],
-                    "method": ["NAIL-reverse, greedy rollout", "NAIL-reverse, greedy rollout"],
+                    "method": ["NAIL-R, greedy rollout", "NAIL-R, greedy rollout"],
                 }
             ),
         }
 
         coverage = coverage_table(run_data=run_data, runs_df=runs_df, seeds=[20260418], etas=[0.0])
         row = coverage.loc[
-            (coverage["method"] == "NAIL-reverse, greedy rollout")
+            (coverage["method"] == "NAIL-R, greedy rollout")
             & (coverage["seed"] == 20260418)
             & (coverage["eta"] == 0.0)
         ].iloc[0]
@@ -947,7 +947,7 @@ class S5OnlineSeedSweepTests(unittest.TestCase):
             runs_df, _ = build_runs_df(records)
             preferred = dedupe_preferred_runs(runs_df)
 
-            offline_rows = preferred[preferred["method"] == "Offline BC"].sort_values("eta")
+            offline_rows = preferred[preferred["method"] == "LogLossBC"].sort_values("eta")
             self.assertEqual(offline_rows["eta"].tolist(), [0.1, 0.5])
             self.assertTrue(all("-sample-" in run_id for run_id in offline_rows["run_id"]))
             self.assertTrue(all("dev_node" in run_id for run_id in offline_rows["run_id"]))

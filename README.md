@@ -1,8 +1,7 @@
 # Noisy Imitation Learning Experiments
 
 This repository contains the synthetic noisy imitation learning experiments for
-Offline BC, OPD / TM OPD, NAIL-forward, and NAIL-reverse on S5 and modular
-addition tasks.
+LogLossBC, NAIL-F, NAIL-R, OPD-F, and OPD-R on S5 and modular-addition tasks.
 
 Readers coming from the paper should start with
 [`experiment_log.md`](experiment_log.md). It maps paper method names and
@@ -29,11 +28,11 @@ pip install -e .
 
 ## Main Pipelines
 
-- `pretrain`: clean teacher training and offline BC on rendered datasets.
+- `pretrain`: clean teacher training and LogLossBC on rendered datasets.
 - `s5_prompt_bank` / `modadd_prompt_bank`: generate clean prompt banks.
 - `s5_render` / `modadd_render`: render offline noisy datasets.
-- `opd`: online OPD / TM OPD with student-sampled prefixes.
-- `nail`: online NAIL variants with student-collected prefixes.
+- `opd`: OPD-R with student-sampled prefixes.
+- `nail`: NAIL-F, NAIL-R, and OPD-F through the student-prefix trainer.
 
 ## Common Runs
 
@@ -55,25 +54,25 @@ Render an offline noisy S5 dataset:
 python -m nanogpt.run experiment=s5_noisy_render
 ```
 
-Train Offline BC on a rendered S5 dataset:
+Train LogLossBC on a rendered S5 dataset:
 
 ```sh
 python -m nanogpt.run experiment=s5_noisy_bc
 ```
 
-Run OPD / TM OPD:
+Run OPD-R:
 
 ```sh
 python -m nanogpt.run experiment=s5_opd
 ```
 
-Run NAIL-forward:
+Run NAIL-F:
 
 ```sh
 python -m nanogpt.run experiment=s5_nail
 ```
 
-Run NAIL-reverse with greedy prefix collection and auxiliary reverse-KL actions:
+Run NAIL-R with greedy prefix collection and auxiliary reverse-KL actions:
 
 ```sh
 python -m nanogpt.run experiment=s5_nail_reverse_mc_fixed
@@ -104,7 +103,7 @@ python -m nanogpt.run --multirun \
 
 ## Method Controls
 
-Native OPD/NAIL configs use:
+Student-prefix method configs use:
 
 - `task.teacher_signal`: `mc` or `full`
 - `task.loss`: `forward`, `reverse`, `mixed`, or `jsd`
@@ -117,15 +116,15 @@ analysis scripts, but it is not a supported launch control for native runs.
 
 ## Offline Datasets
 
-Offline BC consumes rendered datasets under `data/<dataset_name>/`. The renderer
+LogLossBC consumes rendered datasets under `data/<dataset_name>/`. The renderer
 saves:
 
 - `train_x.pt`, `train_y.pt`
-- optional `train_teacher_probs.pt` for full-distribution offline BC
+- optional `train_teacher_probs.pt` for full-distribution LogLossBC
 - `val_x.pt`, `val_y.pt`
 - `meta.json`
 
-The offline target span is shared with online OPD/NAIL supervision: the full
+The offline target span is shared with the student-prefix objectives: the full
 clean continuation stored in the prompt bank, including the final answer suffix
 when present.
 

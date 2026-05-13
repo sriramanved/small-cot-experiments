@@ -254,7 +254,7 @@ def _project_student_prefix_config(
         )
     if cfg.task.objective not in (None, ""):
         raise ValueError(
-            "Native OPD/NAIL pipelines use task.loss and task.teacher_signal; "
+            "Student-prefix pipelines use task.loss and task.teacher_signal; "
             "task.objective is only supported for legacy metadata parsing."
         )
     return config_cls(

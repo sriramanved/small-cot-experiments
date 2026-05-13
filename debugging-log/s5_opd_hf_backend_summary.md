@@ -2,7 +2,7 @@
 
 ## Context
 
-We attempted a backend migration for online OPD on the S5 task from the current nanoGPT-style implementation to a new Hugging Face GPT-2 backend.
+We attempted a backend migration for student-prefix OPD-F/R on the S5 task from the current nanoGPT-style implementation to a new Hugging Face GPT-2 backend.
 
 The goal was purely systems/performance:
 
@@ -15,13 +15,13 @@ This note summarizes what was implemented, what was validated, what benchmark wa
 
 ## What Was Implemented
 
-A separate HF-native online OPD path was added, without replacing the current implementation:
+A separate HF-native student-prefix OPD-F/R path was added, without replacing the current implementation:
 
 - new trainer: `train_opd_hf.py`
 - new helper layer: `data/s5_cot/opd_hf.py`
 - new sweep wrapper: `scripts/run_opd_hf_sweep.sh`
 
-The HF path preserves the same three online OPD objectives:
+The HF path preserves the same three student-prefix OPD-F/R objectives:
 
 - `reverse_kl_tm`
 - `forward_kl_simple`
@@ -45,7 +45,7 @@ Important implementation choices:
 
 The motivation was that Hugging Face generation and cache handling might be more optimized than our current native path.
 
-That hypothesis was plausible because online OPD repeatedly does two autoregressive-style operations:
+That hypothesis was plausible because student-prefix OPD-F/R repeatedly does two autoregressive-style operations:
 
 - student rollout on the prompt prefixes
 - teacher evaluation on the student-visited prefixes
@@ -92,7 +92,7 @@ These runs completed successfully.
 
 ## Benchmark Design
 
-We benchmarked the heaviest online OPD case first:
+We benchmarked the heaviest student-prefix OPD-F/R case first:
 
 - objective: `forward_kl_full`
 - teacher checkpoint: `out-s5-cot-len21-depth1-400k`
@@ -115,14 +115,14 @@ We compared four configurations:
 
 Each benchmark run was a short training job whose purpose was to estimate steady-state **training-step throughput**.
 
-In particular, each measured step included the main online OPD work:
+In particular, each measured step included the main student-prefix OPD-F/R work:
 
 - student rollout on prompts
 - teacher evaluation on the visited student prefixes
 - objective-specific loss computation
 - student backward/update step
 
-This is the dominant repeated cost in online OPD, and it is the part most directly affected by:
+This is the dominant repeated cost in student-prefix OPD-F/R, and it is the part most directly affected by:
 
 - cache implementation
 - backend choice
@@ -146,7 +146,7 @@ If those are included in a short probe, the result becomes a mixed wall-clock be
 - evaluation
 - checkpoint serialization
 
-rather than a clean comparison of the core online OPD loop.
+rather than a clean comparison of the core student-prefix OPD-F/R loop.
 
 ### Does this omit something real?
 
@@ -156,7 +156,7 @@ It is true that backend choice and compile can also affect evaluation speed. So 
 
 Instead, it measures the part of runtime we expected to dominate:
 
-- the repeated online OPD train step that happens every iteration
+- the repeated student-prefix OPD-F/R train step that happens every iteration
 
 That was considered a reasonable first decision criterion because:
 
@@ -210,7 +210,7 @@ Two additional observations matter:
 - `--compile` did **not** help in this benchmark
 - even after moving rollout and teacher-prefix logic to HF cached decoding, the full end-to-end training loop was still slower
 
-So on this setup, the hypothesized HF generation/cache advantage did **not** translate into a faster online OPD trainer.
+So on this setup, the hypothesized HF generation/cache advantage did **not** translate into a faster student-prefix OPD-F/R trainer.
 
 ## Follow-up End-to-End Benchmarks
 
@@ -313,7 +313,7 @@ So the overall empirical picture is now consistent:
 - HF loses on a short end-to-end benchmark
 - HF loses more clearly on a larger end-to-end benchmark
 
-At this point, the practical conclusion is robust: for the tested online OPD setup, the current nanoGPT backend is the better systems choice.
+At this point, the practical conclusion is robust: for the tested student-prefix OPD-F/R setup, the current nanoGPT backend is the better systems choice.
 
 ## Why This Result Is Plausible
 
@@ -333,7 +333,7 @@ That means the remaining differences are likely framework overheads and implemen
 
 The current recommendation is:
 
-- **do not switch online OPD to the HF backend for production sweeps**
+- **do not switch student-prefix OPD-F/R to the HF backend for production sweeps**
 - keep using the current `train_opd.py` backend
 - keep `--compile` off for now, since it did not help in the benchmark we ran
 
@@ -345,7 +345,7 @@ The forward-KL and reverse-KL OPD methods themselves are still the same. The onl
 
 What it does support:
 
-- for the tested online OPD configuration, the current nanoGPT backend is faster than the new HF backend
+- for the tested student-prefix OPD-F/R configuration, the current nanoGPT backend is faster than the new HF backend
 - switching to HF is not justified on speed grounds right now
 
 What it does not prove:
@@ -353,7 +353,7 @@ What it does not prove:
 - that HF is always slower on every possible OPD objective
 - that no additional systems tuning could improve the HF path
 
-However, `forward_kl_full` is the heaviest online OPD case and is a reasonable benchmark to use for the initial decision. We now tested it in three ways:
+However, `forward_kl_full` is the heaviest student-prefix OPD-F/R case and is a reasonable benchmark to use for the initial decision. We now tested it in three ways:
 
 - a train-throughput probe
 - a short end-to-end wall-clock benchmark with repeated eval/checkpoint behavior
@@ -370,4 +370,4 @@ The next systems ideas to try would be:
 - profile checkpoint-save overhead, since `save_pretrained(...)` is heavier than a plain `torch.save`
 - benchmark `forward_kl_simple` as a second check, if desired
 
-But based on the current evidence, the prudent choice is to keep the existing online OPD backend.
+But based on the current evidence, the prudent choice is to keep the existing student-prefix OPD-F/R backend.

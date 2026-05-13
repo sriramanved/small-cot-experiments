@@ -11,7 +11,7 @@ import torch.nn.functional as F
 # Shared implementation of the absorbing "random suffix after error" teacher
 # law described in the paper appendix and in `experiment_log.md`. Offline
 # rendering samples the poison state while generating a teacher trajectory;
-# online OPD/NAIL infers the poison state from student-prefix mistakes.
+# student-prefix methods infer the poison state from student-prefix mistakes.
 RANDOM_SUFFIX_AFTER_ERROR_LAW = "random_suffix_after_error"
 RANDOM_SUFFIX_KEY_POSITION_CHOICES = ("semantic_key",)
 RANDOM_SUFFIX_MODE_CHOICES = ("valid_tokens",)

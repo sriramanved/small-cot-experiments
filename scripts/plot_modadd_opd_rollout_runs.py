@@ -38,18 +38,18 @@ STUDENT_PREFIX_RE = re.compile(
 )
 
 METHOD_ORDER = {
-    "NAIL-forward": 0,
-    "NAIL-reverse": 1,
-    "OPD": 2,
+    "NAIL-F": 0,
+    "NAIL-R": 1,
+    "OPD-R": 2,
 }
 
 CURVE_COLORS = {
-    ("NAIL-forward", "greedy"): get_method_style("NAIL-forward, greedy rollout").color,
-    ("NAIL-forward", "sampled"): get_method_style("NAIL-forward, sampled rollout").color,
-    ("NAIL-reverse", "greedy"): get_method_style("NAIL-reverse, greedy rollout").color,
-    ("NAIL-reverse", "sampled"): get_method_style("NAIL-reverse, greedy rollout").color,
-    ("OPD", "greedy"): get_method_style("TM OPD").color,
-    ("OPD", "sampled"): get_method_style("TM OPD").color,
+    ("NAIL-F", "greedy"): get_method_style("NAIL-F, greedy rollout").color,
+    ("NAIL-F", "sampled"): get_method_style("NAIL-F, sampled rollout").color,
+    ("NAIL-R", "greedy"): get_method_style("NAIL-R, greedy rollout").color,
+    ("NAIL-R", "sampled"): get_method_style("NAIL-R, greedy rollout").color,
+    ("OPD-R", "greedy"): get_method_style("OPD-R").color,
+    ("OPD-R", "sampled"): get_method_style("OPD-R").color,
 }
 
 ROLLOUT_LINESTYLES = {
@@ -104,10 +104,10 @@ def load_json(path: Path) -> dict:
 
 def method_label(method_family: str, loss: str) -> str:
     if method_family == "opd":
-        return "OPD"
+        return "OPD-R"
     if loss == "forward":
-        return "NAIL-forward"
-    return "NAIL-reverse"
+        return "NAIL-F"
+    return "NAIL-R"
 
 
 def unique_run_id(root: Path, out_dir: Path) -> str:
@@ -123,7 +123,7 @@ def classify_run_selection(
     out_dir: Path,
     run_meta: dict[str, object] | None,
 ) -> tuple[int, str]:
-    if method != "NAIL-reverse":
+    if method != "NAIL-R":
         return 0, "standard_method"
 
     reverse_action_source = None if run_meta is None else run_meta.get("reverse_action_source")
@@ -150,9 +150,9 @@ def legacy_method_label(
     if run_meta is not None and "method_family" in run_meta and "loss" in run_meta:
         return method_label(str(run_meta["method_family"]), str(run_meta["loss"]))
     if objective.startswith("forward_kl_"):
-        return "NAIL-forward"
+        return "NAIL-F"
     if objective == "reverse_kl_tm":
-        return "OPD"
+        return "OPD-R"
     rollout_temp = None
     if run_meta is not None:
         rollout_temp = run_meta.get("resolved_rollout_temperature")
@@ -161,9 +161,9 @@ def legacy_method_label(
     if rollout_temp is None and temp_tag == "greedy":
         rollout_temp = 0.0
     if rollout_temp is not None and float(rollout_temp) == 0.0:
-        return "NAIL-reverse"
+        return "NAIL-R"
     if objective.startswith("reverse_kl_"):
-        return "OPD"
+        return "OPD-R"
     return None
 
 
@@ -431,12 +431,12 @@ def plot_per_eta(
     metric_name = metric.split("/")[-1]
 
     expected_combos = [
-        ("NAIL-forward", "greedy"),
-        ("NAIL-forward", "sampled"),
-        ("NAIL-reverse", "greedy"),
-        ("NAIL-reverse", "sampled"),
-        ("OPD", "greedy"),
-        ("OPD", "sampled"),
+        ("NAIL-F", "greedy"),
+        ("NAIL-F", "sampled"),
+        ("NAIL-R", "greedy"),
+        ("NAIL-R", "sampled"),
+        ("OPD-R", "greedy"),
+        ("OPD-R", "sampled"),
     ]
 
     for eta in etas:

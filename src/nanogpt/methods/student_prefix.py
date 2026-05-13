@@ -28,7 +28,7 @@ from data.synthetic.random_suffix_noise import (
     validate_random_suffix_applies_to_task,
 )
 
-# Online OPD/NAIL method helpers. The paper separates "which prefixes are
+# Student-prefix method helpers. The paper separates "which prefixes are
 # visited" from "which divergence is optimized on those prefixes"; this file is
 # where that separation is made concrete. See `experiment_log.md` for the table
 # mapping NAIL-F/R and OPD-F/R to these switches.
@@ -97,7 +97,8 @@ def normalize_student_prefix_method(
 ) -> dict[str, Any]:
     """Canonicalize the Hydra method knobs into the paper's two choices.
 
-    `method_family` fixes the default prefix policy (OPD sampled, NAIL greedy).
+    `method_family` fixes the default prefix policy (OPD-F/R sampled,
+    NAIL-F/R greedy).
     `teacher_signal` and `loss` fix whether the local teacher comparison is MC
     or full-distribution and which KL direction/surrogate is optimized.
     """
@@ -267,7 +268,7 @@ def rollout_student(
 
     The rollout temperature controls only the prefix distribution. Losses below
     can still train a different student distribution, such as temperature-1
-    logits on greedy NAIL prefixes.
+    logits on greedy NAIL-F/R prefixes.
     """
     prompt = prompt_ids.to(device=device, dtype=torch.long, non_blocking=True)
     batch_size, prompt_len = prompt.shape
@@ -605,7 +606,7 @@ def sample_student_aux_actions(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Sample auxiliary actions from the student loss distribution.
 
-    NAIL-reverse uses these samples for the reverse-KL estimator instead of
+    NAIL-R uses these samples for the reverse-KL estimator instead of
     reusing the rollout token. The rollout token chooses the prefix; the
     auxiliary token estimates the loss under the fixed-prefix student policy,
     matching the estimator discussion in the paper appendix.
@@ -662,9 +663,9 @@ def reverse_kl_tm_loss(
     teacher_probs: torch.Tensor,
     eps: float = 1e-10,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Score-function surrogate for reverse KL with teacher-model weights.
+    """Score-function surrogate for reverse KL with teacher-probability weights.
 
-    This is the MC reverse-KL estimator used by OPD-R/TM OPD and by NAIL-R once
+    This is the MC reverse-KL estimator used by OPD-R and by NAIL-R once
     the prefix distribution has been chosen.
     """
     teacher_action_probs = teacher_probs.gather(2, actions.unsqueeze(-1)).squeeze(-1)
@@ -835,8 +836,8 @@ def cached_teacher_token_probs(
     """Query the frozen teacher along already-collected rollout prefixes.
 
     In paper language, this evaluates the noisy expert on learner-induced
-    prefixes. OPD and NAIL differ in how `actions` were rolled out; this
-    function only supplies the teacher distribution on those fixed prefixes.
+    prefixes. NAIL-F/R and OPD-F/R differ in how `actions` were rolled out;
+    this function only supplies the teacher distribution on those fixed prefixes.
     """
     torch_device = torch.device(device)
     prompt = prompt_ids.to(device=torch_device, dtype=torch.long, non_blocking=True)

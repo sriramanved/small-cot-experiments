@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Launch S5 random-suffix online NAIL ablations.
+# Launch S5 random-suffix student-prefix ablations.
 #
 # Usage from repo root on the dev node:
 #   DRY_RUN=1 scripts/launch_s5_random_suffix_ablations.sh

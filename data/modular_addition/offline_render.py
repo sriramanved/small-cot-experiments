@@ -63,8 +63,8 @@ def _generate_random_suffix_targets(
     generator: torch.Generator | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None, dict[str, torch.Tensor]]:
     # Offline rendering samples a full noisy expert trajectory for LogLossBC.
-    # Online OPD/NAIL uses the same law through `cached_teacher_token_probs`,
-    # but infers poisoning from the student prefix instead of this render state.
+    # Student-prefix methods use the same law through `cached_teacher_token_probs`,
+    # but infer poisoning from the student prefix instead of this render state.
     config = random_suffix_noise_config_from_obj(random_suffix_noise_config)
     validate_random_suffix_applies_to_task(config, task_name="modadd")
     return generate_random_suffix_after_error_targets(

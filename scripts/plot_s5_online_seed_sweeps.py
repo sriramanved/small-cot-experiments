@@ -74,21 +74,21 @@ LEGACY_OPD_RE = re.compile(
 )
 
 PLOT_METHODS = (
-    "Offline BC",
-    "TM OPD",
-    "NAIL-forward, greedy rollout",
-    "NAIL-forward, sampled rollout",
-    "NAIL-reverse, greedy rollout",
+    "LogLossBC",
+    "OPD-R",
+    "NAIL-F, greedy rollout",
+    "OPD-F",
+    "NAIL-R, greedy rollout",
 )
 
 METHOD_COLORS = {method: get_method_style(method).color for method in PLOT_METHODS}
 
 PLOT_LEGEND_LABELS = {
-    "Offline BC": "Offline BC",
-    "TM OPD": "OPD-R",
-    "NAIL-forward, greedy rollout": "NAIL-F",
-    "NAIL-forward, sampled rollout": "OPD-F",
-    "NAIL-reverse, greedy rollout": "NAIL-R",
+    "LogLossBC": "LogLossBC",
+    "OPD-R": "OPD-R",
+    "NAIL-F, greedy rollout": "NAIL-F",
+    "OPD-F": "OPD-F",
+    "NAIL-R, greedy rollout": "NAIL-R",
 }
 
 SEED_LINESTYLES = {
@@ -405,7 +405,7 @@ def classify_run_selection(
     manual_rank = -100 if run_matches_override(resolved_out_dir, preferred_run_ids) else 0
     manual_reason = "manual_preferred_run_ids" if manual_rank < 0 else ""
 
-    if method == "Offline BC":
+    if method == "LogLossBC":
         if manual_reason:
             return "manual_preferred", manual_rank, manual_reason
 
@@ -424,7 +424,7 @@ def classify_run_selection(
             return "offline_bc_dev_node", 5, "offline_bc_on_dev_node"
         return "offline_bc_other", 10, "offline_bc_non_sample_run"
 
-    if method != "NAIL-reverse, greedy rollout":
+    if method != "NAIL-R, greedy rollout":
         if manual_reason:
             return "manual_preferred", manual_rank, manual_reason
         return "standard", 0, "standard_method"
@@ -634,13 +634,13 @@ def method_label_from_state(method_state: dict[str, object]) -> str | None:
     if teacher_signal != "mc":
         return None
     if method_family == "opd" and loss == "reverse":
-        return "TM OPD"
+        return "OPD-R"
     if method_family == "nail" and loss == "forward" and rollout_temperature == 0.0:
-        return "NAIL-forward, greedy rollout"
+        return "NAIL-F, greedy rollout"
     if method_family == "nail" and loss == "reverse" and rollout_temperature == 0.0:
-        return "NAIL-reverse, greedy rollout"
+        return "NAIL-R, greedy rollout"
     if method_family == "nail" and loss == "forward" and rollout_temperature > 0.0:
-        return "NAIL-forward, sampled rollout"
+        return "OPD-F"
     return None
 
 
@@ -654,9 +654,9 @@ def legacy_method_label(
         return method_label_from_state(method_state)
 
     if objective == "reverse_kl_tm":
-        return "TM OPD"
+        return "OPD-R"
     if objective.startswith("forward_kl_"):
-        return "NAIL-forward, sampled rollout"
+        return "OPD-F"
     return None
 
 
@@ -763,7 +763,7 @@ def discover_s5_online_runs(
                     if "full" in suffixes or "full-dist" in offline_match.group("suffixes"):
                         continue
                     teacher_law = "sample_then_corrupt" if "sample" in suffixes else "greedy_then_corrupt"
-                    method = "Offline BC"
+                    method = "LogLossBC"
                     teacher_signal = "offline"
                 else:
                     legacy_match = LEGACY_OPD_RE.match(name)
@@ -785,7 +785,7 @@ def discover_s5_online_runs(
 
             if method is None:
                 continue
-            if teacher_signal != "mc" and method != "Offline BC":
+            if teacher_signal != "mc" and method != "LogLossBC":
                 continue
             if run_m != m or run_seed not in seed_set or run_eta not in eta_set:
                 continue
@@ -968,7 +968,7 @@ def discover_wandb_s5_online_runs(
     api: object | None = None,
     allow_api: bool = True,
     skip_missing_cache: bool = False,
-    method: str = "NAIL-reverse, greedy rollout",
+    method: str = "NAIL-R, greedy rollout",
 ) -> list[RunRecord]:
     seed_set = {int(seed) for seed in seeds}
     eta_set = {float(eta) for eta in etas}
@@ -1082,7 +1082,7 @@ def keep_only_explicit_wandb_for_configured_nail_reverse_etas(
     runs_df: pd.DataFrame,
     run_paths_by_eta: dict[float, object],
     *,
-    method: str = "NAIL-reverse, greedy rollout",
+    method: str = "NAIL-R, greedy rollout",
 ) -> pd.DataFrame:
     configured_etas = explicit_wandb_etas(run_paths_by_eta)
     if runs_df.empty or not configured_etas:
@@ -1226,7 +1226,7 @@ def default_plot_runs_df(
 
     artifact_times = pd.to_datetime(runs_df["artifact_datetime_utc"], utc=True, errors="coerce")
     keep_mask = ~(
-        runs_df["method"].eq("NAIL-reverse, greedy rollout")
+        runs_df["method"].eq("NAIL-R, greedy rollout")
         & ~runs_df["reverse_variant"].isin(TRUSTED_NAIL_REVERSE_VARIANTS)
         & artifact_times.lt(cutoff)
     )
@@ -1246,7 +1246,7 @@ def selected_plot_runs_df(
     if require_trusted_nail_reverse and not filtered.empty:
         trusted_mask = filtered["reverse_variant"].isin(TRUSTED_NAIL_REVERSE_VARIANTS)
         filtered = filtered.loc[
-            ~filtered["method"].eq("NAIL-reverse, greedy rollout") | trusted_mask
+            ~filtered["method"].eq("NAIL-R, greedy rollout") | trusted_mask
         ].copy()
     return dedupe_preferred_runs(filtered)
 

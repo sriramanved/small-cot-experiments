@@ -70,8 +70,8 @@ def generate_teacher_targets(
     """Roll out the frozen teacher to create fixed LogLossBC trajectories.
 
     This is the offline baseline in the paper: all prefixes and labels are
-    generated before student training, unlike OPD/NAIL which query the teacher
-    on current student prefixes.
+    generated before student training, unlike the student-prefix methods which
+    query the teacher on current student prefixes.
     """
     if rollout_mode not in ROLLOUT_MODE_CHOICES:
         raise ValueError(f"unknown rollout_mode={rollout_mode!r}")

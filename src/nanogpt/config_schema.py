@@ -103,7 +103,7 @@ class TaskConfig:
     - `teacher_checkpoint` is the frozen clean expert.
     - `teacher_law` selects the noisy expert construction.
     - `loss`, `teacher_signal`, and rollout/loss temperatures select the
-      empirical OPD/NAIL objective.
+      LogLossBC, NAIL-F/R, and OPD-F/R variants.
     """
 
     dataset: str = "s5_cot"
@@ -129,7 +129,7 @@ class TaskConfig:
     teacher_checkpoint: str = ""
     prompt_bank_dir: str = ""
     # Online teacher-query law; offline render jobs store the same law in
-    # `meta.json` so LogLossBC runs can be matched to OPD/NAIL runs.
+    # `meta.json` so LogLossBC runs can be matched to student-prefix runs.
     teacher_law: str = "distributional_noise"
     # `teacher_signal=mc` samples teacher tokens; `full` uses the full
     # next-token teacher distribution when the law supports it.

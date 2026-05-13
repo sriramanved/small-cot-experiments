@@ -43,7 +43,7 @@ STUDENT_PREFIX_RE = re.compile(
     r"(?P<teacher_law>[^-]+)(?P<temp_suffix>(?:-.*)?)\-seed(?P<seed>\d+)$"
 )
 
-METHODS = ("LogLossBC", "OPD", "NAIL-forward", "NAIL-reverse")
+METHODS = ("LogLossBC", "OPD-R", "NAIL-F", "NAIL-R")
 METHOD_COLORS = {method: get_method_style(method).color for method in METHODS}
 METHOD_LINESTYLES = {method: get_method_style(method).linestyle for method in METHODS}
 METHOD_MARKERS = {method: get_method_style(method).marker for method in METHODS}
@@ -124,10 +124,10 @@ def load_json(path: Path) -> dict:
 
 def method_label(method_family: str, loss: str) -> str:
     if method_family == "opd":
-        return "OPD"
+        return "OPD-R"
     if loss == "forward":
-        return "NAIL-forward"
-    return "NAIL-reverse"
+        return "NAIL-F"
+    return "NAIL-R"
 
 
 def unique_run_id(root: Path, out_dir: Path) -> str:
@@ -143,7 +143,7 @@ def classify_run_selection(
     out_dir: Path,
     run_meta: dict[str, object] | None,
 ) -> tuple[int, str]:
-    if method != "NAIL-reverse":
+    if method != "NAIL-R":
         return 0, "standard_method"
 
     reverse_action_source = None if run_meta is None else run_meta.get("reverse_action_source")
@@ -170,9 +170,9 @@ def legacy_method_label(
     if run_meta is not None and "method_family" in run_meta and "loss" in run_meta:
         return method_label(str(run_meta["method_family"]), str(run_meta["loss"]))
     if objective.startswith("forward_kl_"):
-        return "NAIL-forward"
+        return "NAIL-F"
     if objective == "reverse_kl_tm":
-        return "OPD"
+        return "OPD-R"
     rollout_temp = None
     if run_meta is not None:
         rollout_temp = run_meta.get("resolved_rollout_temperature")
@@ -181,9 +181,9 @@ def legacy_method_label(
     if rollout_temp is None and temp_tag == "greedy":
         rollout_temp = 0.0
     if rollout_temp is not None and float(rollout_temp) == 0.0:
-        return "NAIL-reverse"
+        return "NAIL-R"
     if objective.startswith("reverse_kl_"):
-        return "OPD"
+        return "OPD-R"
     return None
 
 

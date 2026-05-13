@@ -41,55 +41,57 @@ FALLBACK_COLOR = "#4D4D4D"
 
 METHOD_ORDER = (
     "Expert",
-    "Offline BC",
-    "TM OPD",
-    "TM OPD, greedy rollout",
-    "TM OPD, sampled rollout",
-    "NAIL-forward",
-    "NAIL-forward, greedy rollout",
-    "NAIL-forward, sampled rollout",
-    "NAIL-reverse",
-    "NAIL-reverse, greedy rollout",
-    "NAIL-reverse, sampled rollout",
-    "NAIL-reverse MC",
-    "NAIL-reverse full",
+    "LogLossBC",
+    "OPD-R",
+    "OPD-R, greedy rollout",
+    "OPD-R, sampled rollout",
+    "NAIL-F",
+    "NAIL-F, greedy rollout",
+    "OPD-F",
+    "OPD-F, sampled rollout",
+    "NAIL-R",
+    "NAIL-R, greedy rollout",
+    "NAIL-R, sampled rollout",
+    "NAIL-R MC",
+    "NAIL-R full",
     "Random",
 )
 
 _CANONICAL_METHOD_STYLES: dict[str, MethodStyle] = {
     "Expert": MethodStyle("Expert", EXPERT_COLOR, linestyle="-.", linewidth=3.2),
-    "Offline BC": MethodStyle("Offline BC", OFFLINE_BC_COLOR, linestyle=":", linewidth=3.4),
-    "TM OPD": MethodStyle("OPD-R", OPD_R_COLOR, linestyle="--", linewidth=3.4),
-    "TM OPD, greedy rollout": MethodStyle("OPD-R", OPD_R_COLOR, linestyle="--", linewidth=3.4),
-    "TM OPD, sampled rollout": MethodStyle("OPD-R", OPD_R_COLOR, linestyle="--", linewidth=3.4),
-    "NAIL-forward": MethodStyle("NAIL-F", NAIL_FORWARD_COLOR, linestyle="-", linewidth=3.4),
-    "NAIL-forward, greedy rollout": MethodStyle(
+    "LogLossBC": MethodStyle("LogLossBC", OFFLINE_BC_COLOR, linestyle=":", linewidth=3.4),
+    "OPD-R": MethodStyle("OPD-R", OPD_R_COLOR, linestyle="--", linewidth=3.4),
+    "OPD-R, greedy rollout": MethodStyle("OPD-R", OPD_R_COLOR, linestyle="--", linewidth=3.4),
+    "OPD-R, sampled rollout": MethodStyle("OPD-R", OPD_R_COLOR, linestyle="--", linewidth=3.4),
+    "NAIL-F": MethodStyle("NAIL-F", NAIL_FORWARD_COLOR, linestyle="-", linewidth=3.4),
+    "NAIL-F, greedy rollout": MethodStyle(
         "NAIL-F",
         NAIL_FORWARD_COLOR,
         linestyle="-",
         linewidth=3.4,
     ),
-    "NAIL-forward, sampled rollout": MethodStyle(
+    "OPD-F": MethodStyle("OPD-F", OPD_F_COLOR, linestyle="--", linewidth=3.4),
+    "OPD-F, sampled rollout": MethodStyle(
         "OPD-F",
         OPD_F_COLOR,
         linestyle="--",
         linewidth=3.4,
     ),
-    "NAIL-reverse": MethodStyle("NAIL-R", NAIL_REVERSE_COLOR, linestyle="-", linewidth=3.4),
-    "NAIL-reverse, greedy rollout": MethodStyle(
+    "NAIL-R": MethodStyle("NAIL-R", NAIL_REVERSE_COLOR, linestyle="-", linewidth=3.4),
+    "NAIL-R, greedy rollout": MethodStyle(
         "NAIL-R",
         NAIL_REVERSE_COLOR,
         linestyle="-",
         linewidth=3.4,
     ),
-    "NAIL-reverse, sampled rollout": MethodStyle(
+    "NAIL-R, sampled rollout": MethodStyle(
         "NAIL-R sampled",
         NAIL_REVERSE_COLOR,
         linestyle="--",
         linewidth=3.4,
     ),
-    "NAIL-reverse MC": MethodStyle("NAIL-R", NAIL_REVERSE_COLOR, linestyle="-", linewidth=3.4),
-    "NAIL-reverse full": MethodStyle("NAIL-R full", NAIL_REVERSE_FULL_COLOR, linestyle="-.", linewidth=3.4),
+    "NAIL-R MC": MethodStyle("NAIL-R", NAIL_REVERSE_COLOR, linestyle="-", linewidth=3.4),
+    "NAIL-R full": MethodStyle("NAIL-R full", NAIL_REVERSE_FULL_COLOR, linestyle="-.", linewidth=3.4),
     "Random": MethodStyle("Random", RANDOM_COLOR, linestyle=":", marker=None),
 }
 
@@ -98,41 +100,31 @@ _METHOD_ALIASES = {
     "clean teacher": "Expert",
     "expert": "Expert",
     "teacher": "Expert",
-    "loglossbc": "Offline BC",
-    "log loss bc": "Offline BC",
-    "offline bc": "Offline BC",
-    "noisy bc": "Offline BC",
-    "bc": "Offline BC",
-    "opd": "TM OPD",
-    "opd, greedy rollout": "TM OPD, greedy rollout",
-    "opd, sampled rollout": "TM OPD, sampled rollout",
-    "tm opd": "TM OPD",
-    "tm-opd": "TM OPD",
-    "tm opd, greedy rollout": "TM OPD, greedy rollout",
-    "tm opd, sampled rollout": "TM OPD, sampled rollout",
-    "reverse_kl_tm": "TM OPD",
-    "nail-forward": "NAIL-forward",
-    "nail forward": "NAIL-forward",
-    "nail-forward greedy": "NAIL-forward, greedy rollout",
-    "nail-forward, greedy rollout": "NAIL-forward, greedy rollout",
-    "nail-forward sampled": "NAIL-forward, sampled rollout",
-    "nail-forward, sampled rollout": "NAIL-forward, sampled rollout",
-    "forward nail greedy": "NAIL-forward, greedy rollout",
-    "forward nail sampled": "NAIL-forward, sampled rollout",
-    "nail-opd": "NAIL-forward",
-    "nail opd": "NAIL-forward",
-    "nail-opd mc": "NAIL-forward",
-    "nail opd mc": "NAIL-forward",
-    "nail-reverse": "NAIL-reverse",
-    "nail reverse": "NAIL-reverse",
-    "nail-reverse greedy": "NAIL-reverse, greedy rollout",
-    "nail-reverse, greedy rollout": "NAIL-reverse, greedy rollout",
-    "nail-reverse sampled": "NAIL-reverse, sampled rollout",
-    "nail-reverse, sampled rollout": "NAIL-reverse, sampled rollout",
-    "nail-reverse mc": "NAIL-reverse MC",
-    "nail reverse mc": "NAIL-reverse MC",
-    "nail-reverse full": "NAIL-reverse full",
-    "nail reverse full": "NAIL-reverse full",
+    "loglossbc": "LogLossBC",
+    "log loss bc": "LogLossBC",
+    "offline bc": "LogLossBC",
+    "noisy bc": "LogLossBC",
+    "bc": "LogLossBC",
+    "opd": "OPD-R",
+    "opd r": "OPD-R",
+    "opd f": "OPD-F",
+    "opd, greedy rollout": "OPD-R, greedy rollout",
+    "opd, sampled rollout": "OPD-R, sampled rollout",
+    "reverse_kl_tm": "OPD-R",
+    "nail f": "NAIL-F",
+    "nail f greedy": "NAIL-F, greedy rollout",
+    "nail f, greedy rollout": "NAIL-F, greedy rollout",
+    "nail f sampled": "OPD-F, sampled rollout",
+    "nail f, sampled rollout": "OPD-F, sampled rollout",
+    "forward nail greedy": "NAIL-F, greedy rollout",
+    "forward nail sampled": "OPD-F, sampled rollout",
+    "nail r": "NAIL-R",
+    "nail r greedy": "NAIL-R, greedy rollout",
+    "nail r, greedy rollout": "NAIL-R, greedy rollout",
+    "nail r sampled": "NAIL-R, sampled rollout",
+    "nail r, sampled rollout": "NAIL-R, sampled rollout",
+    "nail r mc": "NAIL-R MC",
+    "nail r full": "NAIL-R full",
     "random": "Random",
     "random baseline": "Random",
 }
@@ -144,9 +136,7 @@ METHOD_LABELS = {method: style.label for method, style in _CANONICAL_METHOD_STYL
 
 def canonical_method_name(method_name: str) -> str:
     text = str(method_name).strip()
-    normalized = " ".join(text.replace("_", " ").split()).lower()
-    normalized = normalized.replace("nail forward", "nail-forward")
-    normalized = normalized.replace("nail reverse", "nail-reverse")
+    normalized = " ".join(text.replace("_", " ").replace("-", " ").split()).lower()
     return _METHOD_ALIASES.get(normalized, text)
 
 
@@ -155,25 +145,27 @@ def get_method_style(method_name: str) -> MethodStyle:
     if canonical in _CANONICAL_METHOD_STYLES:
         return _CANONICAL_METHOD_STYLES[canonical]
 
-    lower = canonical.lower()
-    if "nail-forward" in lower or "nail forward" in lower:
+    lower = canonical.lower().replace("-", " ")
+    if "nail" in lower and (" f" in lower or "forward" in lower):
         if "sample" in lower:
-            return _CANONICAL_METHOD_STYLES["NAIL-forward, sampled rollout"]
-        return _CANONICAL_METHOD_STYLES["NAIL-forward, greedy rollout"]
-    if "nail-reverse" in lower or "nail reverse" in lower:
+            return _CANONICAL_METHOD_STYLES["OPD-F, sampled rollout"]
+        return _CANONICAL_METHOD_STYLES["NAIL-F, greedy rollout"]
+    if "nail" in lower and (" r" in lower or "reverse" in lower):
         if "full" in lower:
-            return _CANONICAL_METHOD_STYLES["NAIL-reverse full"]
+            return _CANONICAL_METHOD_STYLES["NAIL-R full"]
         if "sample" in lower:
-            return _CANONICAL_METHOD_STYLES["NAIL-reverse, sampled rollout"]
-        return _CANONICAL_METHOD_STYLES["NAIL-reverse, greedy rollout"]
+            return _CANONICAL_METHOD_STYLES["NAIL-R, sampled rollout"]
+        return _CANONICAL_METHOD_STYLES["NAIL-R, greedy rollout"]
     if "opd" in lower:
+        if " f" in lower or "forward" in lower:
+            return _CANONICAL_METHOD_STYLES["OPD-F"]
         if "sample" in lower:
-            return _CANONICAL_METHOD_STYLES["TM OPD, sampled rollout"]
+            return _CANONICAL_METHOD_STYLES["OPD-R, sampled rollout"]
         if "greedy" in lower:
-            return _CANONICAL_METHOD_STYLES["TM OPD, greedy rollout"]
-        return _CANONICAL_METHOD_STYLES["TM OPD"]
+            return _CANONICAL_METHOD_STYLES["OPD-R, greedy rollout"]
+        return _CANONICAL_METHOD_STYLES["OPD-R"]
     if "offline" in lower or "bc" in lower:
-        return _CANONICAL_METHOD_STYLES["Offline BC"]
+        return _CANONICAL_METHOD_STYLES["LogLossBC"]
     if "random" in lower:
         return _CANONICAL_METHOD_STYLES["Random"]
     if "expert" in lower or "teacher" in lower:

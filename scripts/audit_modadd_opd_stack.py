@@ -58,7 +58,7 @@ STUDENT_PREFIX_RE = re.compile(
     r"(?P<teacher_law>[^-]+)(?P<temp_suffix>(?:-.*)?)\-seed(?P<seed>\d+)$"
 )
 
-EXPECTED_METHODS = ("LogLossBC", "NAIL-forward", "NAIL-reverse", "OPD")
+EXPECTED_METHODS = ("LogLossBC", "NAIL-F", "NAIL-R", "OPD-R")
 DEFAULT_ETAS = (0.0, 0.1, 0.3, 0.5, 0.7, 0.9)
 
 
@@ -83,7 +83,7 @@ class RunRecord:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Audit the ModAdd LogLossBC / NAIL / OPD stack for one p,m,subset,seed sweep."
+            "Audit the ModAdd LogLossBC, NAIL-F/R, and OPD-F/R stack for one p,m,subset,seed sweep."
         )
     )
     parser.add_argument("--root", type=Path, default=ROOT, help="Repo root to scan.")
@@ -172,21 +172,21 @@ def normalize_repo_path(value: str | None, root: Path) -> str | None:
 
 def extract_method_from_objective(objective: str) -> str | None:
     if objective == "forward_kl_simple":
-        return "NAIL-forward"
+        return "NAIL-F"
     if objective == "reverse_kl_tm":
-        return "OPD"
+        return "OPD-R"
     if objective.startswith("reverse_kl_"):
-        return "NAIL-reverse"
+        return "NAIL-R"
     return None
 
 
 def method_from_student_prefix_state(run_meta: dict[str, Any]) -> str:
     state = normalize_student_prefix_method(run_meta)
     if state["method_family"] == "opd":
-        return "OPD"
+        return "OPD-R"
     if state["loss"] == "forward":
-        return "NAIL-forward"
-    return "NAIL-reverse"
+        return "NAIL-F"
+    return "NAIL-R"
 
 
 def objective_from_student_prefix_state(run_meta: dict[str, Any]) -> str:
@@ -364,8 +364,8 @@ def discover_runs(
                 method = method_from_student_prefix_state(run_meta)
                 objective = objective_from_student_prefix_state(run_meta)
             else:
-                method = "OPD" if student_prefix_match.group("method_family") == "opd" else (
-                    "NAIL-forward" if student_prefix_match.group("loss") == "forward" else "NAIL-reverse"
+                method = "OPD-R" if student_prefix_match.group("method_family") == "opd" else (
+                    "NAIL-F" if student_prefix_match.group("loss") == "forward" else "NAIL-R"
                 )
                 objective = (
                     f"{student_prefix_match.group('method_family')}:"
@@ -926,9 +926,9 @@ def method_gap_summary(eval_summary: dict[str, dict[str, Any]]) -> list[dict[str
     for eta in sorted(by_eta):
         methods = by_eta[eta]
         offline = methods.get("LogLossBC")
-        nail_forward = methods.get("NAIL-forward")
-        nail_reverse = methods.get("NAIL-reverse")
-        opd = methods.get("OPD")
+        nail_forward = methods.get("NAIL-F")
+        nail_reverse = methods.get("NAIL-R")
+        opd = methods.get("OPD-R")
         row: dict[str, Any] = {"eta": eta}
         if offline is not None and nail_forward is not None:
             row["greedy_clean_full_gap_loglossbc_minus_nail_forward"] = safe_float(

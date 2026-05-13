@@ -66,8 +66,8 @@ from nanogpt_checkpoint import (
     load_nanogpt_model,
 )
 
-# Native single-process online trainer for the OPD/NAIL synthetic experiments.
-# This is the main implementation of the online methods in the paper. The
+# Native single-process trainer for NAIL-F/R and OPD-F/R synthetic experiments.
+# This is the main implementation of the student-prefix methods in the paper. The
 # offline LogLossBC baseline instead goes through `workers/pretrain_body.py`.
 # See `experiment_log.md` for command templates and method-name mapping.
 
@@ -104,7 +104,7 @@ def validate_config(cfg: StudentPrefixConfig) -> None:
         raise ValueError("loss must be one of {'forward', 'reverse', 'mixed', 'jsd'}.")
     if loss in {"mixed", "jsd"}:
         if method_family != "nail":
-            raise ValueError(f"{loss} loss is only supported for NAIL.")
+            raise ValueError(f"{loss} loss is only supported through the `nail` pipeline.")
         if teacher_signal != "mc":
             raise ValueError(f"{loss} loss requires teacher_signal='mc'.")
         if kl_beta is None:
@@ -115,7 +115,7 @@ def validate_config(cfg: StudentPrefixConfig) -> None:
     elif kl_beta is not None:
         raise ValueError("task.kl_beta is only supported when task.loss is 'mixed' or 'jsd'.")
     if method_family == "opd" and loss != "reverse":
-        raise ValueError("OPD only supports reverse loss.")
+        raise ValueError("The `opd` pipeline corresponds to OPD-R and only supports reverse loss.")
     if rollout_temperature_override is not None and float(rollout_temperature_override) < 0:
         raise ValueError("rollout_temperature_override must be non-negative.")
     if loss_temperature_override is not None and float(loss_temperature_override) <= 0:
@@ -709,7 +709,7 @@ def build_run_metadata(
 
 
 def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str]) -> None:
-    """Train an online OPD/NAIL student on a fixed prompt-bank subset."""
+    """Train a student-prefix method on a fixed prompt-bank subset."""
     validate_config(cfg)
     if int(os.environ.get("WORLD_SIZE", "1")) != 1:
         raise RuntimeError(
@@ -955,7 +955,7 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
 
         student.eval()
         with torch.no_grad():
-            # Rollout may be greedy (NAIL default) or sampled (OPD default).
+            # Rollout may be greedy (NAIL-F/R) or sampled (OPD-F/R).
             # This stopped rollout defines the prefix distribution in the
             # paper's augmented-trajectory objectives.
             full_seq, rollout_actions, rollout_log_q = rollout_student(
@@ -1019,9 +1019,9 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                 student_target_logits=p_answer_logits,
             )
             if cfg.teacher_signal == "mc" and cfg.loss == "reverse":
-                # OPD scores the sampled rollout actions directly. NAIL keeps those
-                # rollout actions only for prefix construction and samples separate
-                # auxiliary student actions on the resulting fixed prefixes.
+                # OPD-R scores sampled rollout actions directly. NAIL-R keeps
+                # those rollout actions only for prefix construction and samples
+                # separate auxiliary student actions on the resulting fixed prefixes.
                 reverse_actions, reverse_log_q, reverse_metrics = select_reverse_mc_actions(
                     method_family=cfg.method_family,
                     rollout_actions=rollout_actions,
@@ -1057,7 +1057,7 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
             elif cfg.teacher_signal == "mc" and cfg.loss == "mixed":
                 assert kl_beta is not None
                 # Paper Appendix B.3.2: beta interpolates between the forward
-                # and reverse stopped-prefix estimators on greedy NAIL prefixes.
+                # and reverse stopped-prefix estimators on greedy NAIL-F/R prefixes.
                 forward_weight = 1.0 - kl_beta
                 reverse_weight = kl_beta
                 zero_loss = p_answer_logits.sum() * 0.0

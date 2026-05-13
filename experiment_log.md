@@ -8,7 +8,7 @@ after reading the paper when you want to answer practical questions like:
 - Where is the absorbing random-suffix teacher law implemented?
 - Which config variable corresponds to eta, the prompt bank seed, or the
   rollout temperature?
-- What files are written by a render job or by an online OPD/NAIL run?
+- What files are written by a render job or by a student-prefix run?
 
 The public entrypoint is Hydra:
 
@@ -26,9 +26,9 @@ pipeline through `src/nanogpt/pipelines/__init__.py`.
 |---|---|---|
 | Hydra entrypoint | `src/nanogpt/run.py` | Registers resolvers, loads `hydra_configs/config.yaml`, and calls `run_pipeline`. |
 | Config schema / variable names | `src/nanogpt/config_schema.py` | Defines `task.eta`, `task.teacher_law`, `task.teacher_signal`, `task.loss`, seed fields, and noise configs. |
-| Pipeline dispatch | `src/nanogpt/pipelines/__init__.py` | Maps `pipeline.name` to pretrain, render, prompt-bank, OPD, or NAIL workers. |
-| Clean teacher and offline BC trainer | `src/nanogpt/workers/pretrain_body.py` | Used by `pipeline=pretrain`; trains clean experts and offline BC students. |
-| Online OPD/NAIL trainer | `src/nanogpt/trainers/native_student_prefix.py` | Collects student prefixes, queries the teacher, computes online losses, and saves `run_meta.json`. |
+| Pipeline dispatch | `src/nanogpt/pipelines/__init__.py` | Maps `pipeline.name` to pretrain, render, prompt-bank, and student-prefix workers. |
+| Clean teacher and LogLossBC trainer | `src/nanogpt/workers/pretrain_body.py` | Used by `pipeline=pretrain`; trains clean experts and LogLossBC students. |
+| Student-prefix trainer | `src/nanogpt/trainers/native_student_prefix.py` | Collects student prefixes, queries the teacher, computes online losses for NAIL-F/R and OPD-F/R, and saves `run_meta.json`. |
 | Online loss helpers | `src/nanogpt/methods/student_prefix.py` | Implements rollout collection, teacher distributions, forward KL, reverse KL, mixed/JSD losses, and teacher sampling. |
 | Modular addition task | `data/modular_addition/task.py` | Defines tokens, prompt/target construction, corruption IDs, and clean evaluation. |
 | Modular addition prompt/render pipelines | `src/nanogpt/pipelines/modadd_data.py`, `data/modular_addition/offline_render.py` | Generate prompt banks and offline noisy datasets. |
@@ -50,8 +50,8 @@ The paper distinguishes the rollout distribution from the divergence or token
 loss used on visited prefixes. The code exposes those two choices separately:
 
 - Prefix collection is controlled by `task.rollout_temperature_override`.
-  NAIL defaults to greedy rollout temperature `0.0`; OPD defaults to sampled
-  rollout temperature `1.0`.
+  NAIL-F and NAIL-R use greedy rollout temperature `0.0`; OPD-F and OPD-R use
+  sampled rollout temperature `1.0`.
 - The local teacher/student comparison is controlled by `task.loss` and
   `task.teacher_signal`.
 
@@ -61,10 +61,10 @@ loss used on visited prefixes. The code exposes those two choices separately:
 | NAIL-F | `experiment=modadd_nail` or `experiment=s5_nail` | `task.loss=forward task.teacher_signal=mc task.rollout_temperature_override=0.0` |
 | NAIL-R | `experiment=modadd_nail` or `experiment=s5_nail` | `task.loss=reverse task.teacher_signal=mc task.rollout_temperature_override=0.0` |
 | OPD-F | `experiment=modadd_nail` or `experiment=s5_nail` | `task.loss=forward task.teacher_signal=mc task.rollout_temperature_override=1.0`; native `opd` only supports reverse loss. |
-| OPD-R / TM OPD | `experiment=modadd_opd` or `experiment=s5_opd` | `task.loss=reverse task.teacher_signal=mc`; rollout temperature is sampled by default. |
-| Full-distribution forward KL | online NAIL with `task.teacher_signal=full task.loss=forward` | Uses exact teacher distributions instead of sampled teacher tokens. |
-| Full-distribution reverse KL | online NAIL/OPD with `task.teacher_signal=full task.loss=reverse` | Uses exact per-token `KL(student || teacher)`. |
-| Forward/reverse interpolation | online NAIL with `task.loss=mixed task.teacher_signal=mc task.kl_beta=<beta>` | `beta=0` is forward-heavy; `beta=1` is reverse-heavy. |
+| OPD-R | `experiment=modadd_opd` or `experiment=s5_opd` | `task.loss=reverse task.teacher_signal=mc`; rollout temperature is sampled by default. |
+| Full-distribution NAIL-F or OPD-F | `task.teacher_signal=full task.loss=forward` | Uses exact teacher distributions instead of sampled teacher tokens. |
+| Full-distribution NAIL-R or OPD-R | `task.teacher_signal=full task.loss=reverse` | Uses exact per-token `KL(student || teacher)`. |
+| Forward/reverse interpolation | `task.loss=mixed task.teacher_signal=mc task.kl_beta=<beta>` | `beta=0` is forward-heavy; `beta=1` is reverse-heavy. |
 
 The main online implementation is `run_student_prefix` in
 `src/nanogpt/trainers/native_student_prefix.py`. In each step it:
@@ -172,7 +172,7 @@ For sequence length `m`:
 - `prompt_len = 7 * m + 1`, `target_len = cot_len = 7 * m`, and
   `final_answer_len = 7`.
 
-S5 supports the same online OPD/NAIL trainer, plus S5-specific teacher laws:
+S5 supports the same student-prefix trainer, plus S5-specific teacher laws:
 
 - `semantic_key_noise`, implemented in `data/s5_cot/semantic_key_noise.py`.
 - `random_suffix_after_error`, implemented through the shared
@@ -214,9 +214,9 @@ For modular addition:
 
 Offline and online runs differ in where the poison state comes from:
 
-- Offline BC renders full noisy trajectories in advance. Poisoning is sampled
+- LogLossBC uses full noisy trajectories rendered in advance. Poisoning is sampled
   during rendering, so at `eta=0.0` the rendered dataset is clean.
-- Online OPD/NAIL does not render a full teacher trajectory. Poisoning is
+- Student-prefix training does not render a full teacher trajectory. Poisoning is
   inferred from the student prefix by `compute_poisoned_before`: if any previous
   semantic student action differs from the clean target, later feedback becomes
   uniform. Thus online `eta=0.0` is still not identical to an ordinary clean
@@ -239,13 +239,13 @@ launched:
 
 - `launcher_command.txt`: exact Hydra command.
 - `launcher_config.json`: materialized config.
-- `run_meta.json`: online OPD/NAIL metadata, including resolved rollout
+- `run_meta.json`: student-prefix metadata, including resolved rollout
   temperature and teacher law.
 - `meta.json`: prompt-bank or offline-dataset metadata.
 - `eval_history.jsonl`: evaluation curve points.
 - `last_eval.json`: most recent evaluation summary.
 - `ckpt.pt`: rolling checkpoint.
-- `completed.txt`: written by completed online OPD/NAIL runs.
+- `completed.txt`: written by completed student-prefix runs.
 
 The main clean evaluation metrics are:
 
@@ -255,7 +255,8 @@ The main clean evaluation metrics are:
 
 ## Modular Addition Commands
 
-Generate the shared prompt bank:
+<details>
+<summary>Generate the modular-addition prompt bank</summary>
 
 ```bash
 python -m nanogpt.run experiment=modadd_prompt_bank \
@@ -264,7 +265,10 @@ python -m nanogpt.run experiment=modadd_prompt_bank \
   task.bank_seed=1337
 ```
 
-Train the clean teacher:
+</details>
+
+<details>
+<summary>Train the modular-addition clean teacher</summary>
 
 ```bash
 python -m nanogpt.run experiment=modadd_cot_p7_m31 \
@@ -278,7 +282,10 @@ python -m nanogpt.run experiment=modadd_cot_p7_m31 \
 With the current resolvers this writes the checkpoint directory used below:
 `reruns/modadd_p7_m31_teacher20260417/out-modadd-cot-p7-m31-depth1-seed20260417`.
 
-Render the offline random-suffix datasets for LogLossBC:
+</details>
+
+<details>
+<summary>Render modular-addition random-suffix datasets for LogLossBC</summary>
 
 ```bash
 for eta in 0.0 0.2; do
@@ -298,7 +305,10 @@ for eta in 0.0 0.2; do
 done
 ```
 
-Train LogLossBC on those rendered datasets:
+</details>
+
+<details>
+<summary>Train modular-addition LogLossBC</summary>
 
 ```bash
 for eta in 0.0 0.2; do
@@ -311,14 +321,17 @@ for eta in 0.0 0.2; do
       task.teacher_law=random_suffix_after_error task.eta=$eta \
       task.random_suffix_noise.seed=$seed task.random_suffix_noise.apply_to=modadd \
       optim.seed=$seed optim.eval_interval=500 \
-      run.name=modadd-rsuffix-bc-eta${eta_tag}-seed${seed} \
-      logging.wandb_run_name=modadd-rsuffix-bc-eta${eta_tag}-seed${seed} \
-      run.out_dir=reruns/modadd_random_suffix/offline_bc/eta${eta_tag}_seed${seed}
+      run.name=modadd-rsuffix-loglossbc-eta${eta_tag}-seed${seed} \
+      logging.wandb_run_name=modadd-rsuffix-loglossbc-eta${eta_tag}-seed${seed} \
+      run.out_dir=reruns/modadd_random_suffix/loglossbc/eta${eta_tag}_seed${seed}
   done
 done
 ```
 
-Train NAIL-F:
+</details>
+
+<details>
+<summary>Train modular-addition NAIL-F</summary>
 
 ```bash
 for eta in 0.0 0.2; do
@@ -335,14 +348,17 @@ for eta in 0.0 0.2; do
       task.loss=forward task.teacher_signal=mc task.rollout_temperature_override=0.0 \
       task.random_suffix_noise.seed=$seed task.random_suffix_noise.apply_to=modadd \
       optim.seed=$seed optim.eval_interval=500 \
-      run.name=modadd-rsuffix-nail-forward-eta${eta_tag}-seed${seed} \
-      logging.wandb_run_name=modadd-rsuffix-nail-forward-eta${eta_tag}-seed${seed} \
-      run.out_dir=reruns/modadd_random_suffix/nail_forward/eta${eta_tag}_seed${seed}
+      run.name=modadd-rsuffix-nail-f-eta${eta_tag}-seed${seed} \
+      logging.wandb_run_name=modadd-rsuffix-nail-f-eta${eta_tag}-seed${seed} \
+      run.out_dir=reruns/modadd_random_suffix/nail_f/eta${eta_tag}_seed${seed}
   done
 done
 ```
 
-Train NAIL-R:
+</details>
+
+<details>
+<summary>Train modular-addition NAIL-R</summary>
 
 ```bash
 for eta in 0.0 0.2; do
@@ -359,14 +375,19 @@ for eta in 0.0 0.2; do
       task.loss=reverse task.teacher_signal=mc task.rollout_temperature_override=0.0 \
       task.random_suffix_noise.seed=$seed task.random_suffix_noise.apply_to=modadd \
       optim.seed=$seed optim.eval_interval=500 \
-      run.name=modadd-rsuffix-nail-reverse-eta${eta_tag}-seed${seed} \
-      logging.wandb_run_name=modadd-rsuffix-nail-reverse-eta${eta_tag}-seed${seed} \
-      run.out_dir=reruns/modadd_random_suffix/nail_reverse/eta${eta_tag}_seed${seed}
+      run.name=modadd-rsuffix-nail-r-eta${eta_tag}-seed${seed} \
+      logging.wandb_run_name=modadd-rsuffix-nail-r-eta${eta_tag}-seed${seed} \
+      run.out_dir=reruns/modadd_random_suffix/nail_r/eta${eta_tag}_seed${seed}
   done
 done
 ```
 
-Train OPD-F, which is implemented as forward NAIL with sampled rollouts:
+</details>
+
+<details>
+<summary>Train modular-addition OPD-F</summary>
+
+OPD-F uses the forward loss with sampled rollouts.
 
 ```bash
 for eta in 0.0 0.2; do
@@ -383,14 +404,17 @@ for eta in 0.0 0.2; do
       task.loss=forward task.teacher_signal=mc task.rollout_temperature_override=1.0 \
       task.random_suffix_noise.seed=$seed task.random_suffix_noise.apply_to=modadd \
       optim.seed=$seed optim.eval_interval=500 \
-      run.name=modadd-rsuffix-opd-forward-eta${eta_tag}-seed${seed} \
-      logging.wandb_run_name=modadd-rsuffix-opd-forward-eta${eta_tag}-seed${seed} \
-      run.out_dir=reruns/modadd_random_suffix/opd_forward/eta${eta_tag}_seed${seed}
+      run.name=modadd-rsuffix-opd-f-eta${eta_tag}-seed${seed} \
+      logging.wandb_run_name=modadd-rsuffix-opd-f-eta${eta_tag}-seed${seed} \
+      run.out_dir=reruns/modadd_random_suffix/opd_f/eta${eta_tag}_seed${seed}
   done
 done
 ```
 
-Train OPD-R / TM OPD:
+</details>
+
+<details>
+<summary>Train modular-addition OPD-R</summary>
 
 ```bash
 for eta in 0.0 0.2; do
@@ -407,12 +431,14 @@ for eta in 0.0 0.2; do
       task.loss=reverse task.teacher_signal=mc \
       task.random_suffix_noise.seed=$seed task.random_suffix_noise.apply_to=modadd \
       optim.seed=$seed optim.eval_interval=500 \
-      run.name=modadd-rsuffix-opd-reverse-eta${eta_tag}-seed${seed} \
-      logging.wandb_run_name=modadd-rsuffix-opd-reverse-eta${eta_tag}-seed${seed} \
-      run.out_dir=reruns/modadd_random_suffix/opd_reverse/eta${eta_tag}_seed${seed}
+      run.name=modadd-rsuffix-opd-r-eta${eta_tag}-seed${seed} \
+      logging.wandb_run_name=modadd-rsuffix-opd-r-eta${eta_tag}-seed${seed} \
+      run.out_dir=reruns/modadd_random_suffix/opd_r/eta${eta_tag}_seed${seed}
   done
 done
 ```
+
+</details>
 
 The online budget is one pass over the fixed prompt subset. With
 `subset_size=3000000` and `batch_size=64`, the resolver in
@@ -421,7 +447,7 @@ iterations.
 
 ## S5 Endpoints And Commands
 
-S5 uses the same Hydra entrypoint and the same online OPD/NAIL trainer. The
+S5 uses the same Hydra entrypoint and the same student-prefix trainer. The
 main endpoint names are:
 
 ```text
@@ -435,14 +461,18 @@ s5_nail_reverse_mc_fixed
 s5_noisy_bc_full_dist
 ```
 
-Generate an S5 prompt bank:
+<details>
+<summary>Generate an S5 prompt bank</summary>
 
 ```bash
 python -m nanogpt.run experiment=s5_prompt_bank \
   task.s5_m=21 task.n_train=15000000 task.n_val=5000 task.bank_seed=1337
 ```
 
-Train a clean S5 teacher:
+</details>
+
+<details>
+<summary>Train a clean S5 teacher</summary>
 
 ```bash
 python -m nanogpt.run experiment=s5_cot_len21 \
@@ -450,8 +480,10 @@ python -m nanogpt.run experiment=s5_cot_len21 \
   optim.max_iters=100000 optim.lr_decay_iters=100000
 ```
 
-Render an offline noisy S5 dataset with the distributional-noise match to
-offline BC:
+</details>
+
+<details>
+<summary>Render an S5 distributional-noise dataset for LogLossBC</summary>
 
 ```bash
 python -m nanogpt.run experiment=s5_noisy_render \
@@ -465,7 +497,10 @@ python -m nanogpt.run experiment=s5_noisy_render \
   task.gen_batch_size=8192
 ```
 
-Train S5 offline BC on that rendered dataset:
+</details>
+
+<details>
+<summary>Train S5 LogLossBC</summary>
 
 ```bash
 python -m nanogpt.run experiment=s5_noisy_bc \
@@ -477,7 +512,10 @@ python -m nanogpt.run experiment=s5_noisy_bc \
   optim.seed=20260417
 ```
 
-Run S5 NAIL-F:
+</details>
+
+<details>
+<summary>Run S5 NAIL-F</summary>
 
 ```bash
 python -m nanogpt.run experiment=s5_nail \
@@ -491,7 +529,10 @@ python -m nanogpt.run experiment=s5_nail \
   optim.seed=20260417
 ```
 
-Run S5 NAIL-R:
+</details>
+
+<details>
+<summary>Run S5 NAIL-R</summary>
 
 ```bash
 python -m nanogpt.run experiment=s5_nail \
@@ -505,7 +546,12 @@ python -m nanogpt.run experiment=s5_nail \
   optim.seed=20260417
 ```
 
-Run S5 OPD-F, again through the NAIL endpoint with sampled rollouts:
+</details>
+
+<details>
+<summary>Run S5 OPD-F</summary>
+
+OPD-F uses the forward loss with sampled rollouts.
 
 ```bash
 python -m nanogpt.run experiment=s5_nail \
@@ -519,7 +565,10 @@ python -m nanogpt.run experiment=s5_nail \
   optim.seed=20260417
 ```
 
-Run S5 OPD-R / TM OPD:
+</details>
+
+<details>
+<summary>Run S5 OPD-R</summary>
 
 ```bash
 python -m nanogpt.run experiment=s5_opd \
@@ -533,15 +582,24 @@ python -m nanogpt.run experiment=s5_opd \
   optim.seed=20260417
 ```
 
-To switch the S5 commands to semantic-key noise, keep the same endpoint and add:
+</details>
+
+<details>
+<summary>Switch S5 commands to semantic-key noise</summary>
+
+Keep the same endpoint and add:
 
 ```bash
 task.teacher_law=semantic_key_noise \
 task.semantic_key_noise.coord_strategy=cyclic
 ```
 
-To switch the S5 commands to absorbing random-suffix noise, keep the same
-endpoint and add:
+</details>
+
+<details>
+<summary>Switch S5 commands to absorbing random-suffix noise</summary>
+
+Keep the same endpoint and add:
 
 ```bash
 task.teacher_law=random_suffix_after_error \
@@ -552,3 +610,5 @@ task.random_suffix_noise.random_suffix_mode=valid_tokens \
 task.random_suffix_noise.keep_format_tokens=true \
 task.random_suffix_noise.coord_strategy=cyclic
 ```
+
+</details>

@@ -267,7 +267,7 @@ if offline_target_type not in ('tokens', 'teacher_probs'):
         f"{offline_target_type!r}"
     )
 if offline_target_type == 'teacher_probs':
-    # Full-distribution offline BC: instead of hard rendered tokens, train on
+    # Full-distribution LogLossBC: instead of hard rendered tokens, train on
     # saved teacher next-token probabilities. The paper's main LogLossBC runs
     # use hard token targets, but this supports the full-information ablation.
     if not is_s5_offline_dataset(dataset):
@@ -440,7 +440,7 @@ def unpack_batch(batch):
 
 def offline_teacher_prob_loss(model_ref, X, Y, teacher_probs):
     # Soft-target behavior cloning on saved teacher distributions. This is the
-    # offline analogue of `teacher_signal=full` in online OPD/NAIL.
+    # offline analogue of `teacher_signal=full` in the student-prefix methods.
     logits, _ = model_ref(X, return_full_logits=True)
     _, loss, stats = offline_teacher_prob_loss_from_logits(logits, Y, teacher_probs)
     return logits, loss, stats
@@ -651,7 +651,7 @@ def estimate_loss():
     model.eval()
 
     if is_synthetic_offline_dataset(dataset):
-        # Offline BC evaluates against the fixed clean validation split from
+        # LogLossBC evaluates against the fixed clean validation split from
         # the prompt bank, not against newly sampled noisy trajectories.
         for split in ['train', 'val']:
             split_target_type = offline_target_type if split == 'train' else 'tokens'
