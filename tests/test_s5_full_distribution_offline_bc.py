@@ -239,6 +239,8 @@ class S5FullDistributionOfflineBCTests(unittest.TestCase):
             shutil.rmtree(out_dir, ignore_errors=True)
 
     def test_render_teacher_probs_rejects_unsupported_rollout_mode(self):
+        # Full-distribution LogLossBC stores teacher probabilities for prefixes
+        # produced by sample-then-corrupt rendering; unsupported modes stay explicit.
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             prompt_bank_dir = root / "prompt_bank"
@@ -264,6 +266,7 @@ class S5FullDistributionOfflineBCTests(unittest.TestCase):
                 )
 
     def test_render_teacher_prob_dataset_writes_probs_and_metadata(self):
+        # Documents the offline full-teacher-probability artifact contract.
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             prompt_bank_dir = root / "prompt_bank"

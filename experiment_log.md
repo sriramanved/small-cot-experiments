@@ -55,6 +55,10 @@ loss used on visited prefixes. The code exposes those two choices separately:
 - The local teacher/student comparison is controlled by `task.loss` and
   `task.teacher_signal`.
 
+The online implementations are stopped-prefix empirical objectives. They match
+the appendix implementation choices, but should not be read as literal
+differentiation through the augmented trajectory law.
+
 | Paper method | Hydra surface | Important overrides |
 |---|---|---|
 | LogLossBC / SFT | `experiment=modadd_noisy_bc` or `experiment=s5_noisy_bc` | Consumes a rendered offline dataset. Uses `pipeline=pretrain`. |

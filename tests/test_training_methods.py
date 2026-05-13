@@ -27,6 +27,8 @@ from model import causal_lm_loss
 
 class TrainingMethodTests(unittest.TestCase):
     def test_reverse_kl_tm_loss_matches_manual_formula_and_detaches_log_q(self):
+        # Guards the stopped-prefix reverse-MC surrogate: rollout log_q is a
+        # sampling weight, not a path for gradients back through prefix rollout.
         student_logits = torch.tensor(
             [[[1.2, -0.3, 0.4], [0.1, 0.5, -0.7]]],
             dtype=torch.float32,
@@ -66,6 +68,8 @@ class TrainingMethodTests(unittest.TestCase):
         self.assertGreater(student_logits.grad.abs().sum().item(), 0.0)
 
     def test_forward_kl_simple_loss_matches_manual_formula_and_ignores_teacher_grad(self):
+        # Guards NAIL-F/OPD-F semantics: the MC teacher token is a sampled label,
+        # while gradients update only the student next-token distribution.
         student_logits = torch.tensor(
             [[[0.3, -0.1, 0.7], [0.5, -0.4, 0.0]]],
             dtype=torch.float32,
@@ -359,6 +363,8 @@ class TrainingMethodTests(unittest.TestCase):
         )
 
     def test_sample_student_aux_actions_returns_action_samples_and_log_q(self):
+        # NAIL-R needs an auxiliary student token drawn at the fixed prefix,
+        # separate from whatever token built the greedy rollout prefix.
         torch.manual_seed(0)
         student_logits = torch.tensor(
             [
@@ -380,6 +386,8 @@ class TrainingMethodTests(unittest.TestCase):
         torch.testing.assert_close(log_q, expected_log_q)
 
     def test_select_reverse_mc_actions_uses_auxiliary_student_actions_for_nail(self):
+        # NAIL-R must not reuse the greedy rollout token as its reverse-KL
+        # sample; doing so collapses the distinction explained in the appendix.
         torch.manual_seed(7)
         rollout_actions = torch.tensor([[0, 0], [1, 1]], dtype=torch.long)
         rollout_log_q = torch.tensor([[-0.2, -0.3], [-0.4, -0.5]], dtype=torch.float32)
@@ -410,6 +418,8 @@ class TrainingMethodTests(unittest.TestCase):
         )
 
     def test_select_reverse_mc_actions_keeps_rollout_behavior_for_opd(self):
+        # OPD-R reuses the sampled rollout token when the rollout distribution is
+        # the student sampling distribution being estimated.
         rollout_actions = torch.tensor([[0, 2], [1, 1]], dtype=torch.long)
         rollout_log_q = torch.tensor([[-0.2, -0.3], [-0.4, -0.5]], dtype=torch.float32)
         student_logits = torch.randn(2, 2, 3, dtype=torch.float32)
@@ -426,6 +436,8 @@ class TrainingMethodTests(unittest.TestCase):
         torch.testing.assert_close(reverse_log_q, rollout_log_q)
 
     def test_mixed_kl_loss_from_components_uses_beta_as_reverse_weight(self):
+        # Documents the config convention: beta=0 is forward-only, beta=1 is
+        # reverse-only.
         forward_loss = torch.tensor(2.0)
         reverse_loss = torch.tensor(6.0)
 
@@ -549,6 +561,8 @@ class TrainingMethodTests(unittest.TestCase):
         self.assertGreater(abs(mc_loss.item() - full_loss.item()), 0.1)
 
     def test_offline_bc_loss_matches_manual_masked_cross_entropy(self):
+        # LogLossBC trains on already-rendered tokens and should reduce to the
+        # usual masked causal-LM cross entropy on the target span.
         logits = torch.tensor(
             [[[2.0, 0.0, -1.0], [0.0, 1.0, -0.5], [0.3, -0.2, 0.1], [-0.1, 0.2, 0.4]]],
             dtype=torch.float32,

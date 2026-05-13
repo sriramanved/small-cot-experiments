@@ -245,6 +245,8 @@ class HydraConfigTests(unittest.TestCase):
             project_opd_config(cfg)
 
     def test_s5_nail_reverse_mc_fixed_projection_wires_reverse_controls(self):
+        # Config wiring invariant: this endpoint is NAIL-R, so it uses reverse
+        # MC loss with greedy-prefix controls unless explicitly overridden.
         cfg = _compose_app(
             "experiment=s5_nail_reverse_mc_fixed",
             "task.rollout_temperature_override=0.2",
@@ -281,6 +283,8 @@ class HydraConfigTests(unittest.TestCase):
         self.assertTrue(projected.shuffle_prompts)
 
     def test_modadd_nail_mixed_projection_wires_beta_and_run_name(self):
+        # The run name and projected config must preserve beta, whose code
+        # convention is reverse-weight for mixed/JSD losses.
         cfg = _compose_app(
             "experiment=modadd_nail",
             "task.loss=mixed",
@@ -445,6 +449,8 @@ class HydraConfigTests(unittest.TestCase):
             self.assertIn("clipping_fraction_ema", checkpoint["diagnostics_state"])
 
     def test_s5_nail_reverse_mc_fixed_uses_rollout_prefixes_and_auxiliary_actions(self):
+        # NAIL-R queries the teacher on rollout prefixes but estimates reverse
+        # KL with separate auxiliary student samples at those prefixes.
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             prompt_bank_dir = root / "prompt_bank"
@@ -553,6 +559,8 @@ class HydraConfigTests(unittest.TestCase):
             torch.testing.assert_close(captured["reverse_log_q"], aux_log_q)
 
     def test_s5_opd_reverse_mc_keeps_rollout_actions_and_log_q(self):
+        # OPD-R reuses the sampled rollout action/log_q as the reverse-MC sample
+        # instead of drawing NAIL-R-style auxiliary actions.
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             prompt_bank_dir = root / "prompt_bank"
@@ -656,6 +664,7 @@ class HydraConfigTests(unittest.TestCase):
             torch.testing.assert_close(captured["reverse_log_q"], rollout_log_q)
 
     def test_modadd_nail_reverse_mc_fixed_uses_rollout_prefixes_and_auxiliary_actions(self):
+        # Same NAIL-R invariant as S5, but over the modular-addition task shape.
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             prompt_bank_dir = root / "prompt_bank"

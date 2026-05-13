@@ -148,6 +148,9 @@ def _generate_random_suffix_targets(
     random_suffix_noise_config=None,
     generator: torch.Generator | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None, dict[str, torch.Tensor]]:
+    # Offline S5 random-suffix rendering samples the absorbing poison state as
+    # part of the fixed teacher trajectory. The online path instead infers the
+    # same state from student-generated prefixes in `cached_teacher_token_probs`.
     config = random_suffix_noise_config_from_obj(random_suffix_noise_config)
     validate_random_suffix_applies_to_task(config, task_name="s5")
     eligible_token_ids = eligible_token_ids_from_values(config.eligible_values)

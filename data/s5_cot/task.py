@@ -125,6 +125,8 @@ def sample_prompt_only(m=21):
     prompt.append('=')
     return prompt
 
+# Only permutation value tokens are semantically corruptible. Parentheses and
+# "=" are scaffold tokens, so noisy laws leave them clean or force them valid.
 CORRUPTIBLE_IDS = [stoi[str(i)] for i in range(1, 6)]  # for S5
 
 def corrupt_token(tok_id, eta):

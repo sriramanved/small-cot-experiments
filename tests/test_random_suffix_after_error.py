@@ -65,6 +65,8 @@ def s5_random_suffix_config(seed: int = 1) -> dict[str, object]:
 
 class RandomSuffixAfterErrorTests(unittest.TestCase):
     def test_compute_poisoned_before_uses_previous_key_mismatches(self):
+        # Online random-suffix feedback becomes uniform only after a previous
+        # semantic/key mismatch, not at the mismatching token itself.
         actions = torch.tensor([[1, 9, 3, 4], [1, 2, 8, 4]], dtype=torch.long)
         clean = torch.tensor([[1, 2, 3, 4], [1, 2, 3, 4]], dtype=torch.long)
         key_mask = torch.tensor([False, True, True, False])
@@ -96,6 +98,8 @@ class RandomSuffixAfterErrorTests(unittest.TestCase):
         )
 
     def test_s5_eta_zero_matches_clean_greedy_rendering(self):
+        # eta=0 should leave the rendered offline trajectory identical to the
+        # clean greedy expert trajectory.
         clean = [LPAREN_ID, 3, 4, 5, 6, 7, RPAREN_ID]
         targets, teacher_probs = generate_s5_teacher_targets(
             ScriptedTeacher(clean, vocab_size=S5_VOCAB_SIZE),
@@ -282,6 +286,8 @@ class RandomSuffixAfterErrorTests(unittest.TestCase):
         self.assertFalse(torch.equal(targets, torch.tensor([clean], dtype=torch.long)))
 
     def test_s5_online_random_suffix_uses_student_prefix_to_poison(self):
+        # Student-prefix methods do not have a rendered poison flag; they infer
+        # it from the learner prefix versus the clean target.
         clean = [
             LPAREN_ID, 3, 4, 5, 6, 7, RPAREN_ID,
             LPAREN_ID, 3, 4, 5, 6, 7, RPAREN_ID,
@@ -316,6 +322,8 @@ class RandomSuffixAfterErrorTests(unittest.TestCase):
         torch.testing.assert_close(teacher_probs[0, 6], expected_rparen)
 
     def test_modadd_online_random_suffix_uses_student_prefix_to_poison(self):
+        # In modular addition every target token is semantic, so a wrong first
+        # residue makes all later teacher feedback uniform over residues.
         p = 5
         clean = [1, 2, 3]
         actions = torch.tensor([[4, 2, 3]], dtype=torch.long)

@@ -104,7 +104,7 @@ def validate_config(cfg: StudentPrefixConfig) -> None:
         raise ValueError("loss must be one of {'forward', 'reverse', 'mixed', 'jsd'}.")
     if loss in {"mixed", "jsd"}:
         if method_family != "nail":
-            raise ValueError(f"{loss} loss is only supported through the `nail` pipeline.")
+            raise ValueError(f"{loss} loss is only supported for NAIL.")
         if teacher_signal != "mc":
             raise ValueError(f"{loss} loss requires teacher_signal='mc'.")
         if kl_beta is None:
@@ -115,7 +115,7 @@ def validate_config(cfg: StudentPrefixConfig) -> None:
     elif kl_beta is not None:
         raise ValueError("task.kl_beta is only supported when task.loss is 'mixed' or 'jsd'.")
     if method_family == "opd" and loss != "reverse":
-        raise ValueError("The `opd` pipeline corresponds to OPD-R and only supports reverse loss.")
+        raise ValueError("OPD only supports reverse loss.")
     if rollout_temperature_override is not None and float(rollout_temperature_override) < 0:
         raise ValueError("rollout_temperature_override must be non-negative.")
     if loss_temperature_override is not None and float(loss_temperature_override) <= 0:
@@ -208,9 +208,11 @@ def select_reverse_mc_actions(
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, float]]:
     """Choose which student action distribution drives the reverse-KL estimator.
 
-    OPD-R uses the sampled rollout token as the reverse-KL sample. NAIL-R keeps
-    the greedy rollout token only for prefix construction and draws an auxiliary
-    token from the student distribution at that fixed prefix.
+    NAIL-R keeps the greedy rollout token only for prefix construction and draws
+    an auxiliary token from the student distribution at that fixed prefix.
+    OPD-R reuses the sampled rollout token as the reverse-KL sample; this is the
+    literal MC estimator when rollout sampling matches the temperature-one
+    student distribution, and a stopped-prefix surrogate otherwise.
     """
     if method_family == "opd":
         return rollout_actions, rollout_log_q, {}
@@ -957,7 +959,9 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
         with torch.no_grad():
             # Rollout may be greedy (NAIL-F/R) or sampled (OPD-F/R).
             # This stopped rollout defines the prefix distribution in the
-            # paper's augmented-trajectory objectives.
+            # paper's augmented-trajectory objectives. The no-grad boundary is
+            # intentional: gradients below update the next-token distribution at
+            # the visited prefixes, not the sampling process that produced them.
             full_seq, rollout_actions, rollout_log_q = rollout_student(
                 student,
                 prompt_ids,
@@ -1021,7 +1025,10 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
             if cfg.teacher_signal == "mc" and cfg.loss == "reverse":
                 # OPD-R scores sampled rollout actions directly. NAIL-R keeps
                 # those rollout actions only for prefix construction and samples
-                # separate auxiliary student actions on the resulting fixed prefixes.
+                # separate auxiliary student actions on the resulting fixed
+                # prefixes. If OPD-R uses a non-temperature-one rollout, this
+                # branch is a surrogate rather than the literal reverse-KL MC
+                # estimator for the temperature-one student.
                 reverse_actions, reverse_log_q, reverse_metrics = select_reverse_mc_actions(
                     method_family=cfg.method_family,
                     rollout_actions=rollout_actions,

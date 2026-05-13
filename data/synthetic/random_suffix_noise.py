@@ -33,10 +33,19 @@ RANDOM_SUFFIX_CONFIG_KEYS = (
 
 @dataclass(frozen=True)
 class RandomSuffixNoiseConfig:
+    """Config for the paper's absorbing random-suffix noisy teacher law."""
+
     enabled: bool = True
+    # Key tokens are semantic decision points that can trigger the absorbing
+    # poisoned state. For modadd every target token is a key token; for S5 this
+    # is one selected value coordinate per CoT block.
     key_positions: str = "semantic_key"
+    # Optional trigger rate separate from eta, useful for ablations. When null,
+    # eta both triggers first errors and controls the unpoisoned key mixture.
     trigger_eta: float | None = None
     random_suffix_mode: str = "valid_tokens"
+    # S5 can keep parentheses syntactically valid after poisoning while making
+    # later value-token feedback uninformative.
     keep_format_tokens: bool = True
     seed: int = 1337
     apply_to: str = "both"
@@ -236,7 +245,13 @@ def random_suffix_after_error_probs(
     scaffold_token_ids: torch.Tensor | None = None,
     keep_format_tokens: bool = True,
 ) -> torch.Tensor:
-    """Apply the absorbing random-suffix law to one teacher-query step."""
+    """Apply the absorbing random-suffix law to one teacher-query step.
+
+    `clean_probs` is the clean expert distribution. Before poisoning, key
+    positions mix it with uniform mass over corruptible semantic tokens using
+    eta. After poisoning, semantic positions are uniform over those tokens;
+    optional scaffold tokens are forced to remain well-formed.
+    """
     probs = clean_probs.float()
     had_token_dim = probs.ndim == 3
     if had_token_dim:

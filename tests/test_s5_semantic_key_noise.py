@@ -57,6 +57,8 @@ class UniformTeacher:
 
 class S5SemanticKeyNoiseTests(unittest.TestCase):
     def test_semantic_key_noise_probs_only_mixes_key_positions(self):
+        # Semantic-key noise corrupts one chosen value coordinate per block; all
+        # other positions should keep the clean expert distribution.
         teacher_probs = torch.tensor(
             [
                 [0.05, 0.10, 0.10, 0.20, 0.25, 0.10, 0.10, 0.10],
@@ -121,6 +123,8 @@ class S5SemanticKeyNoiseTests(unittest.TestCase):
         self.assertEqual(first.sum(dim=1).tolist(), [4, 4])
 
     def test_offline_semantic_rollout_feeds_sampled_key_token_back(self):
+        # Offline rendering feeds the realized noisy token into the next teacher
+        # query, so later labels can depend on earlier corruption.
         torch.manual_seed(1)
         config = {
             "enabled": True,
@@ -148,6 +152,8 @@ class S5SemanticKeyNoiseTests(unittest.TestCase):
         torch.testing.assert_close(targets, torch.tensor([[LPAREN_ID, 6, 5]], dtype=torch.long))
 
     def test_online_cached_teacher_uses_same_semantic_key_mask(self):
+        # Online teacher queries must use the same key-position rule as offline
+        # rendering so S5 method comparisons are apples-to-apples.
         prompt_ids = torch.zeros((1, 8), dtype=torch.long)
         actions = torch.zeros((1, 14), dtype=torch.long)
         config = SemanticKeyNoiseConfig(coord_strategy="cyclic")

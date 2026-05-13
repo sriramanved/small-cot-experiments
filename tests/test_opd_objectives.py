@@ -129,6 +129,8 @@ class OpdObjectiveTests(unittest.TestCase):
         )
 
     def test_cached_teacher_probs_match_explicit_stepwise_teacher_distribution(self):
+        # Online methods query the noisy teacher along learner-induced prefixes;
+        # this guards the stepwise cached path against teacher-forcing drift.
         model = ToyCachedModel()
         prompt_ids = torch.tensor([[0, 1, 2], [2, 1, 0]], dtype=torch.uint8)
         actions = torch.tensor([[3, 4, 5], [5, 4, 3]], dtype=torch.long)
@@ -203,6 +205,8 @@ class OpdObjectiveTests(unittest.TestCase):
         )
 
     def test_beta_losses_require_nail_mc_and_valid_beta(self):
+        # Mixed/JSD beta ablations are defined for the student-prefix MC path;
+        # config validation should keep unsupported combinations out.
         invalid_cases = [
             (self._cfg(method_family="nail", loss="mixed"), "requires task.kl_beta"),
             (self._cfg(method_family="nail", loss="jsd"), "requires task.kl_beta"),

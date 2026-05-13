@@ -71,7 +71,9 @@ def generate_teacher_targets(
 
     This is the offline baseline in the paper: all prefixes and labels are
     generated before student training, unlike the student-prefix methods which
-    query the teacher on current student prefixes.
+    query the teacher on current student prefixes. Because the realized noisy
+    token is fed back into the next clean-teacher query, LogLossBC can train on
+    downstream prefixes that are already corrupted or poisoned.
     """
     if rollout_mode not in ROLLOUT_MODE_CHOICES:
         raise ValueError(f"unknown rollout_mode={rollout_mode!r}")

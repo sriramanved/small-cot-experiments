@@ -55,6 +55,8 @@ def equals_token_id(p: int) -> int:
 
 
 def corruptible_token_ids(p: int) -> tuple[int, ...]:
+    # All residues are semantic answer/running-sum tokens; the equals token is
+    # prompt scaffold and is never sampled as random-suffix feedback.
     validate_task_params(p=p)
     return tuple(range(int(p)))
 

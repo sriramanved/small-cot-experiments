@@ -125,10 +125,14 @@ class TaskConfig:
     n_train: int = 0
     n_val: int = 0
     subset_size: int = 0
+    # Paper eta: corruption/mixing rate for the selected noisy teacher law.
     eta: float = 0.0
+    # Clean expert checkpoint pi*: queried directly online, or rolled out once
+    # to render fixed LogLossBC datasets.
     teacher_checkpoint: str = ""
     prompt_bank_dir: str = ""
-    # Online teacher-query law; offline render jobs store the same law in
+    # Noisy teacher law pi_eta: distributional, semantic-key, or absorbing
+    # random-suffix feedback. Offline render jobs store the same law in
     # `meta.json` so LogLossBC runs can be matched to student-prefix runs.
     teacher_law: str = "distributional_noise"
     # `teacher_signal=mc` samples teacher tokens; `full` uses the full
@@ -137,14 +141,20 @@ class TaskConfig:
     # `forward`, `reverse`, `mixed`, and `jsd` are the code-level switches for
     # the KL directions and ablations described in the paper appendix.
     loss: str = "reverse"
+    # For `mixed` and `jsd`, beta is the reverse/student-side weight in code:
+    # beta=0 is forward-only, beta=1 is reverse-only.
     kl_beta: Optional[float] = None
-    # Rollout temperature controls which prefixes are visited; loss
-    # temperature, when set, controls the student distribution optimized there.
+    # Rollout temperature controls which prefixes are visited. It does not
+    # change the default temperature-one student distribution used in the loss.
     rollout_temperature_override: Optional[float] = None
+    # Optional loss-side temperature for forward/mixed/JSD ablations.
     loss_temperature_override: Optional[float] = None
+    # Legacy objective/temperature fields are parsed for old checkpoints and
+    # analysis metadata only; native launches should use the explicit fields.
     objective: Optional[str] = None
     student_temperature: Optional[float] = None
     student_rollout_temperature: Optional[float] = None
+    # Offline rendering controls for fixed LogLossBC datasets.
     rollout_mode: str = "greedy_then_corrupt"
     target_mode: str = "tokens"
     semantic_key_noise: SemanticKeyNoiseConfig = field(default_factory=SemanticKeyNoiseConfig)

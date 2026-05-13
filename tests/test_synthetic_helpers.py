@@ -123,6 +123,8 @@ class SyntheticHelperTests(unittest.TestCase):
             self.assertEqual(prompt_bank.final_answer_len, 7)
 
     def test_generate_teacher_targets_applies_corruption_fn_and_preserves_dtype(self):
+        # Offline LogLossBC data is rendered once from the noisy teacher; this
+        # checks that the renderer actually uses the configured corruption law.
         model = ConstantTeacherModel(vocab_size=5, preferred_token=1)
         prompt_ids = torch.tensor([[0, 1], [2, 3]], dtype=torch.int32)
 
@@ -177,6 +179,8 @@ class SyntheticHelperTests(unittest.TestCase):
         self.assertEqual(meta["answer_len"], 1)
 
     def test_offline_render_uses_canonical_target_len(self):
+        # The rendered target span must match the prompt-bank target definition
+        # used by both LogLossBC and student-prefix objectives.
         prompt_bank = PromptBank(
             clean_train_prompt_ids=torch.tensor([[0, 1, 7], [2, 3, 7]], dtype=torch.int32),
             clean_train_cot_ids=torch.tensor([[0, 1, 1], [2, 5, 5]], dtype=torch.int32),
@@ -208,6 +212,8 @@ class SyntheticHelperTests(unittest.TestCase):
         )
 
     def test_compute_teacher_token_probs_handles_custom_noncontiguous_corruptible_ids(self):
+        # Teacher laws should respect task-provided corruptible token sets
+        # instead of assuming contiguous S5-style value IDs.
         clean_logits = torch.full((1, 1, 6), -10.0)
         clean_logits[..., 4] = 10.0
         teacher_probs = compute_teacher_token_probs(

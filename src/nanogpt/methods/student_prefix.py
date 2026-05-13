@@ -98,9 +98,10 @@ def normalize_student_prefix_method(
     """Canonicalize the Hydra method knobs into the paper's two choices.
 
     `method_family` fixes the default prefix policy (OPD-F/R sampled,
-    NAIL-F/R greedy).
-    `teacher_signal` and `loss` fix whether the local teacher comparison is MC
-    or full-distribution and which KL direction/surrogate is optimized.
+    NAIL-F/R greedy). `teacher_signal` and `loss` fix whether the local teacher
+    comparison is MC or full-distribution and which KL direction/surrogate is
+    optimized. Keeping these knobs separate is the main code-level translation
+    of the paper's rollout-law versus per-prefix-loss distinction.
     """
     method_family = _lookup(value, "method_family") or default_method_family
     teacher_signal = _lookup(value, "teacher_signal")
@@ -266,9 +267,9 @@ def rollout_student(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Collect fixed prefixes from the student rollout policy.
 
-    The rollout temperature controls only the prefix distribution. Losses below
-    can still train a different student distribution, such as temperature-1
-    logits on greedy NAIL-F/R prefixes.
+    The rollout temperature controls only which prefixes are visited. The
+    trainer later recomputes logits on those stopped prefixes and optimizes the
+    loss-side distribution, normally the temperature-one student distribution.
     """
     prompt = prompt_ids.to(device=device, dtype=torch.long, non_blocking=True)
     batch_size, prompt_len = prompt.shape
@@ -606,10 +607,9 @@ def sample_student_aux_actions(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Sample auxiliary actions from the student loss distribution.
 
-    NAIL-R uses these samples for the reverse-KL estimator instead of
-    reusing the rollout token. The rollout token chooses the prefix; the
-    auxiliary token estimates the loss under the fixed-prefix student policy,
-    matching the estimator discussion in the paper appendix.
+    NAIL-R uses these samples for the reverse-KL estimator instead of reusing
+    the greedy rollout token. The rollout token chooses the prefix; this
+    auxiliary token is a separate draw from the fixed-prefix student policy.
     """
     if temperature is not None and temperature <= 0:
         raise ValueError("sample_student_aux_actions temperature must be > 0 when set.")
@@ -666,7 +666,9 @@ def reverse_kl_tm_loss(
     """Score-function surrogate for reverse KL with teacher-probability weights.
 
     This is the MC reverse-KL estimator used by OPD-R and by NAIL-R once
-    the prefix distribution has been chosen.
+    the prefix distribution has been chosen. `actions` and `log_q` describe the
+    sampling distribution; gradients intentionally flow only through `log_p`
+    from the current loss-side logits.
     """
     teacher_action_probs = teacher_probs.gather(2, actions.unsqueeze(-1)).squeeze(-1)
     log_teacher = torch.log(teacher_action_probs.clamp_min(eps))
@@ -835,9 +837,10 @@ def cached_teacher_token_probs(
 ) -> torch.Tensor:
     """Query the frozen teacher along already-collected rollout prefixes.
 
-    In paper language, this evaluates the noisy expert on learner-induced
-    prefixes. NAIL-F/R and OPD-F/R differ in how `actions` were rolled out;
-    this function only supplies the teacher distribution on those fixed prefixes.
+    In the language of the paper, this evaluates the noisy expert on
+    learner-induced prefixes. NAIL-F/R and OPD-F/R differ in how `actions` were
+    rolled out; this function only supplies the teacher distribution on those
+    fixed prefixes.
     """
     torch_device = torch.device(device)
     prompt = prompt_ids.to(device=torch_device, dtype=torch.long, non_blocking=True)
@@ -911,6 +914,10 @@ def cached_teacher_token_probs(
             corruptible_token_ids=corruptible_token_ids_tensor,
             device=torch_device,
         )
+        # Online random-suffix feedback has no rendered teacher trajectory.
+        # The poisoned state is inferred from learner actions versus the clean
+        # expert target, so later semantic feedback becomes uniform after the
+        # first previous key-token mistake.
         poisoned_before = compute_poisoned_before(
             actions,
             clean_targets,
