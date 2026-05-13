@@ -61,16 +61,6 @@ def get_nanogpt_lr(
     return min_lr + coeff * (learning_rate - min_lr)
 
 
-def get_linear_warmup_lr(step: int, *, learning_rate: float, warmup_iters: int) -> float:
-    return get_nanogpt_lr(
-        step,
-        learning_rate=learning_rate,
-        warmup_iters=warmup_iters,
-        lr_decay_iters=warmup_iters,
-        min_lr=learning_rate,
-    )
-
-
 def capture_rng_state(device: str) -> dict[str, object]:
     state = {
         "python": random.getstate(),

@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import sys
 from dataclasses import asdict, dataclass
-from pathlib import Path
-
-import torch
 
 from nanogpt.config_schema import AppConfig, TorchrunConfig
 
@@ -144,49 +141,6 @@ class NailConfig(StudentPrefixConfig):
     pass
 
 
-@dataclass
-class OpdHfConfig:
-    teacher_checkpoint: str
-    prompt_bank_dir: str
-    subset_size: int
-    eta: float
-    teacher_law: str
-    semantic_key_noise: dict[str, object]
-    random_suffix_noise: dict[str, object]
-    objective: str
-    out_dir: str
-    init_from: str
-    batch_size: int
-    max_iters: int
-    learning_rate: float
-    warmup_iters: int
-    weight_decay: float
-    beta1: float
-    beta2: float
-    grad_clip: float
-    student_temperature: float
-    student_rollout_temperature: float
-    eval_interval: int
-    eval_n: int
-    eval_batch_size: int
-    log_interval: int
-    save_interval: int
-    shuffle_prompts: bool
-    seed: int
-    device: str | None
-    dtype: str | None
-    compile: bool
-    eps: float
-    wandb_log: bool
-    wandb_project: str
-    wandb_run_name: str | None
-    wandb_run_id: str | None
-    wandb_init_timeout: int
-
-    def config_dict(self) -> dict[str, object]:
-        return asdict(self)
-
-
 def _require_model_field(value, field_name: str):
     if value is None:
         raise ValueError(f"pretrain experiments require model.{field_name}")
@@ -301,7 +255,7 @@ def _project_student_prefix_config(
     if cfg.task.objective not in (None, ""):
         raise ValueError(
             "Native OPD/NAIL pipelines use task.loss and task.teacher_signal; "
-            "task.objective is only supported by the opd_hf pipeline."
+            "task.objective is only supported for legacy metadata parsing."
         )
     return config_cls(
         method_family=expected_pipeline,
@@ -366,49 +320,4 @@ def project_nail_config(cfg: AppConfig) -> NailConfig:
         cfg,
         expected_pipeline="nail",
         config_cls=NailConfig,
-    )
-
-
-def project_opd_hf_config(cfg: AppConfig) -> OpdHfConfig:
-    if cfg.pipeline.name != "opd_hf":
-        raise ValueError(f"expected pipeline='opd_hf', got {cfg.pipeline.name!r}")
-    if cfg.runtime.torchrun.nproc_per_node != 1 or cfg.runtime.torchrun.nnodes != 1:
-        raise ValueError("OPD pipelines are single-process only; leave runtime.torchrun at 1")
-    return OpdHfConfig(
-        teacher_checkpoint=cfg.task.teacher_checkpoint,
-        prompt_bank_dir=cfg.task.prompt_bank_dir,
-        subset_size=cfg.task.subset_size,
-        eta=cfg.task.eta,
-        teacher_law=cfg.task.teacher_law,
-        semantic_key_noise=asdict(cfg.task.semantic_key_noise),
-        random_suffix_noise=asdict(cfg.task.random_suffix_noise),
-        objective=cfg.task.objective,
-        out_dir=cfg.run.out_dir,
-        init_from=cfg.optim.init_from,
-        batch_size=cfg.optim.batch_size,
-        max_iters=cfg.optim.max_iters,
-        learning_rate=cfg.optim.learning_rate,
-        warmup_iters=cfg.optim.warmup_iters,
-        weight_decay=cfg.optim.weight_decay,
-        beta1=cfg.optim.beta1,
-        beta2=cfg.optim.beta2,
-        grad_clip=cfg.optim.grad_clip,
-        student_temperature=cfg.task.student_temperature,
-        student_rollout_temperature=cfg.task.student_rollout_temperature,
-        eval_interval=cfg.optim.eval_interval,
-        eval_n=cfg.optim.eval_n,
-        eval_batch_size=cfg.optim.eval_batch_size,
-        log_interval=cfg.optim.log_interval,
-        save_interval=cfg.optim.save_interval,
-        shuffle_prompts=cfg.optim.shuffle_prompts,
-        seed=cfg.optim.seed,
-        device=cfg.runtime.device,
-        dtype=cfg.runtime.dtype,
-        compile=cfg.runtime.compile,
-        eps=cfg.optim.eps,
-        wandb_log=cfg.logging.wandb_log,
-        wandb_project=cfg.logging.wandb_project,
-        wandb_run_name=cfg.logging.wandb_run_name,
-        wandb_run_id=cfg.logging.wandb_run_id,
-        wandb_init_timeout=cfg.logging.wandb_init_timeout,
     )

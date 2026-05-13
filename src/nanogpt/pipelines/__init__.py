@@ -3,11 +3,10 @@ from __future__ import annotations
 from nanogpt.config_schema import AppConfig
 from nanogpt.pipelines.modadd_data import run_modadd_prompt_bank, run_modadd_render
 from nanogpt.pipelines.s5_data import run_s5_prompt_bank, run_s5_render
-from nanogpt.trainers import run_nail, run_opd, run_opd_hf, run_pretrain
+from nanogpt.trainers import run_nail, run_opd, run_pretrain
 from nanogpt.trainers.configs import (
     project_nail_config,
     project_opd_config,
-    project_opd_hf_config,
     project_pretrain_config,
 )
 
@@ -21,9 +20,6 @@ def run_pipeline(cfg: AppConfig, *, launcher_command: list[str]) -> None:
         return
     if cfg.pipeline.name == "nail":
         run_nail(project_nail_config(cfg), launcher_command=launcher_command)
-        return
-    if cfg.pipeline.name == "opd_hf":
-        run_opd_hf(project_opd_hf_config(cfg), launcher_command=launcher_command)
         return
     if cfg.pipeline.name == "modadd_prompt_bank":
         run_modadd_prompt_bank(cfg, launcher_command=launcher_command)

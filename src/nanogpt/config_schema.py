@@ -219,7 +219,6 @@ def materialize_config(raw_cfg: DictConfig) -> AppConfig:
         "pretrain",
         "opd",
         "nail",
-        "opd_hf",
         "modadd_prompt_bank",
         "modadd_render",
         "s5_prompt_bank",
@@ -228,7 +227,7 @@ def materialize_config(raw_cfg: DictConfig) -> AppConfig:
         raise ValueError(f"unsupported pipeline {cfg.pipeline.name!r}")
     if cfg.pipeline.name == "pretrain" and not cfg.task.dataset:
         raise ValueError("pretrain experiments require task.dataset")
-    if cfg.pipeline.name in {"opd", "nail", "opd_hf"}:
+    if cfg.pipeline.name in {"opd", "nail"}:
         if not cfg.task.teacher_checkpoint:
             raise ValueError(f"{cfg.pipeline.name} experiments require task.teacher_checkpoint")
         if not cfg.task.prompt_bank_dir:

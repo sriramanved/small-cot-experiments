@@ -17,7 +17,6 @@ from data.s5_cot.semantic_key_noise import (
     default_eligible_token_ids,
     eligible_token_ids_from_values,
     semantic_key_mask,
-    semantic_key_mask_for_step,
     semantic_key_noise_config_from_obj,
 )
 from data.synthetic.random_suffix_noise import (
@@ -252,6 +251,12 @@ def rollout_student(
     device: str | torch.device,
     autocast_context=nullcontext(),
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Collect fixed prefixes from the student rollout policy.
+
+    The rollout temperature controls only the prefix distribution. Losses below
+    can still train a different student distribution, such as temperature-1
+    logits on greedy NAIL prefixes.
+    """
     prompt = prompt_ids.to(device=device, dtype=torch.long, non_blocking=True)
     batch_size, prompt_len = prompt.shape
     full_seq = torch.empty((batch_size, prompt_len + target_len), dtype=torch.long, device=device)
@@ -320,7 +325,7 @@ def distributional_noisy_teacher_probs(
     clean_logits: torch.Tensor,
     *,
     eta: float,
-    corruptible_token_ids: tuple[int, ...] | list[int] = CORRUPTIBLE_IDS,
+    corruptible_token_ids: tuple[int, ...] | list[int] | torch.Tensor = CORRUPTIBLE_IDS,
 ) -> torch.Tensor:
     clean_probs = F.softmax(clean_logits.float(), dim=-1)
     if eta <= 0:
@@ -345,7 +350,7 @@ def corrupted_greedy_teacher_probs(
     clean_logits: torch.Tensor,
     *,
     eta: float,
-    corruptible_token_ids: tuple[int, ...] | list[int] = CORRUPTIBLE_IDS,
+    corruptible_token_ids: tuple[int, ...] | list[int] | torch.Tensor = CORRUPTIBLE_IDS,
 ) -> torch.Tensor:
     greedy_actions = torch.argmax(clean_logits, dim=-1)
     corruptible_ids = torch.as_tensor(corruptible_token_ids, dtype=torch.long, device=clean_logits.device)
@@ -416,10 +421,11 @@ def compute_teacher_token_probs(
     *,
     eta: float,
     teacher_law: str,
-    corruptible_token_ids: tuple[int, ...] | list[int] = CORRUPTIBLE_IDS,
+    corruptible_token_ids: tuple[int, ...] | list[int] | torch.Tensor = CORRUPTIBLE_IDS,
     key_mask: torch.Tensor | None = None,
     eligible_token_ids: tuple[int, ...] | list[int] | None = None,
 ) -> torch.Tensor:
+    """Return the noisy expert next-token distribution for each clean logit row."""
     if teacher_law == "distributional_noise":
         return distributional_noisy_teacher_probs(
             clean_logits,
@@ -461,7 +467,7 @@ def compute_teacher_log_probs(
     *,
     eta: float,
     teacher_law: str,
-    corruptible_token_ids: tuple[int, ...] | list[int] = CORRUPTIBLE_IDS,
+    corruptible_token_ids: tuple[int, ...] | list[int] | torch.Tensor = CORRUPTIBLE_IDS,
     key_mask: torch.Tensor | None = None,
     eligible_token_ids: tuple[int, ...] | list[int] | None = None,
     eps: float = 1e-10,
@@ -541,7 +547,7 @@ def _random_suffix_online_masks(
     prompt: torch.Tensor,
     actions: torch.Tensor,
     config,
-    corruptible_token_ids: tuple[int, ...] | list[int],
+    corruptible_token_ids: tuple[int, ...] | list[int] | torch.Tensor,
     device: str | torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, tuple[int, ...] | list[int]]:
     target_len = int(actions.size(1))
@@ -567,6 +573,12 @@ def sample_student_aux_actions(
     *,
     temperature: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Sample auxiliary actions from the student loss distribution.
+
+    NAIL-reverse uses these samples for the reverse-KL estimator instead of
+    reusing the rollout token. The rollout token chooses the prefix; the
+    auxiliary token estimates the loss under the fixed-prefix student policy.
+    """
     if temperature is not None and temperature <= 0:
         raise ValueError("sample_student_aux_actions temperature must be > 0 when set.")
 
@@ -600,6 +612,7 @@ def teacher_forward_kl(
     temperature: float | None = None,
     eps: float = 1e-10,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Exact per-token KL(teacher || student) for full teacher distributions."""
     teacher_log_probs = torch.log(teacher_probs.clamp_min(eps))
     ce = teacher_cross_entropy(
         teacher_probs,
@@ -618,6 +631,7 @@ def reverse_kl_tm_loss(
     teacher_probs: torch.Tensor,
     eps: float = 1e-10,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Score-function surrogate for reverse KL with teacher-model weights."""
     teacher_action_probs = teacher_probs.gather(2, actions.unsqueeze(-1)).squeeze(-1)
     log_teacher = torch.log(teacher_action_probs.clamp_min(eps))
     advantage = log_teacher - log_q
@@ -638,6 +652,7 @@ def reverse_kl_full_loss(
     teacher_probs: torch.Tensor,
     eps: float = 1e-10,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Exact per-token KL(student || teacher) when the teacher law is available."""
     student_log_probs = F.log_softmax(student_logits.float(), dim=-1)
     student_probs = student_log_probs.exp()
     teacher_log_probs = torch.log(teacher_probs.clamp_min(eps))
@@ -660,6 +675,7 @@ def forward_kl_simple_loss(
     temperature: float | None = None,
     eps: float = 1e-10,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Monte Carlo teacher-sample surrogate for forward KL."""
     teacher_target_probs = teacher_probs.gather(2, teacher_targets.unsqueeze(-1)).squeeze(-1)
     log_teacher_target = torch.log(teacher_target_probs.clamp_min(eps))
     log_student_target = gather_action_log_probs(
@@ -693,6 +709,7 @@ def jsd_mc_loss(
     temperature: float | None = None,
     eps: float = 1e-10,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Monte Carlo Jensen-Shannon-style mixture loss on fixed rollout prefixes."""
     beta = float(beta)
     student_log_probs = log_probs_from_logits(
         student_logits,
@@ -745,6 +762,7 @@ def forward_kl_full_loss(
     temperature: float | None = None,
     eps: float = 1e-10,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Exact forward KL against the full noisy teacher distribution."""
     token_kl, teacher_ce, teacher_entropy = teacher_forward_kl(
         teacher_probs,
         student_logits,
@@ -775,20 +793,34 @@ def cached_teacher_token_probs(
     device: str | torch.device,
     autocast_context=nullcontext(),
 ) -> torch.Tensor:
-    prompt = prompt_ids.to(device=device, dtype=torch.long, non_blocking=True)
-    actions = actions.to(device=device, dtype=torch.long, non_blocking=True)
+    """Query the frozen teacher along already-collected rollout prefixes."""
+    torch_device = torch.device(device)
+    prompt = prompt_ids.to(device=torch_device, dtype=torch.long, non_blocking=True)
+    actions = actions.to(device=torch_device, dtype=torch.long, non_blocking=True)
+    target_len = int(actions.size(1))
+    corruptible_token_ids_tensor = torch.as_tensor(
+        corruptible_token_ids,
+        dtype=torch.long,
+        device=torch_device,
+    )
     teacher_probs = torch.empty(
         (*actions.shape, model.config.vocab_size),
         dtype=torch.float32,
-        device=device,
+        device=torch_device,
     )
     input_ids = prompt
     past_key_values = None
-    semantic_config = None
     eligible_token_ids = None
+    semantic_key_masks = None
     if teacher_law == SEMANTIC_KEY_NOISE_LAW:
-        semantic_config = semantic_key_noise_config_from_obj(semantic_key_noise_config)
+        semantic_config = semantic_key_noise_config_from_obj(
+            semantic_key_noise_config,
+        )
         eligible_token_ids = eligible_token_ids_from_values(semantic_config.eligible_values)
+        semantic_key_masks = semantic_key_mask(prompt, target_len, semantic_config).to(
+            device=torch_device,
+            dtype=torch.bool,
+        )
     random_suffix_config = None
     random_suffix_key_mask = None
     random_suffix_semantic_mask = None
@@ -804,7 +836,11 @@ def cached_teacher_token_probs(
                 f"{RANDOM_SUFFIX_AFTER_ERROR_LAW} online teacher queries require "
                 "clean_target_ids so poisoned prefixes can be inferred."
             )
-        clean_targets = clean_target_ids.to(device=device, dtype=torch.long, non_blocking=True)
+        clean_targets = clean_target_ids.to(
+            device=torch_device,
+            dtype=torch.long,
+            non_blocking=True,
+        )
         if clean_targets.ndim != 2 or clean_targets.size(0) != actions.size(0):
             raise ValueError(
                 "clean_target_ids must have shape [B, T] with the same batch size "
@@ -816,7 +852,7 @@ def cached_teacher_token_probs(
                 f"clean_target_ids length {clean_targets.size(1)} is shorter than "
                 f"actions length {actions.size(1)}"
             )
-        clean_targets = clean_targets[:, :actions.size(1)]
+        clean_targets = clean_targets[:, :target_len]
         (
             random_suffix_key_mask,
             random_suffix_semantic_mask,
@@ -827,8 +863,8 @@ def cached_teacher_token_probs(
             prompt=prompt,
             actions=actions,
             config=random_suffix_config,
-            corruptible_token_ids=corruptible_token_ids,
-            device=device,
+            corruptible_token_ids=corruptible_token_ids_tensor,
+            device=torch_device,
         )
         poisoned_before = compute_poisoned_before(
             actions,
@@ -837,7 +873,7 @@ def cached_teacher_token_probs(
         )
         random_suffix_eta = effective_trigger_eta(float(eta), random_suffix_config)
 
-    for step in range(actions.size(1)):
+    for step in range(target_len):
         with autocast_context:
             logits, _, past_key_values = model(
                 input_ids,
@@ -866,54 +902,19 @@ def cached_teacher_token_probs(
             ).squeeze(1)
         else:
             key_mask = None
-            if semantic_config is not None:
-                key_mask = semantic_key_mask_for_step(prompt, step, semantic_config)
+            if semantic_key_masks is not None:
+                key_mask = semantic_key_masks[:, step]
             teacher_probs[:, step, :] = compute_teacher_token_probs(
                 logits[:, -1:, :],
                 eta=eta,
                 teacher_law=teacher_law,
-                corruptible_token_ids=corruptible_token_ids,
+                corruptible_token_ids=corruptible_token_ids_tensor,
                 key_mask=key_mask,
                 eligible_token_ids=eligible_token_ids,
             ).squeeze(1)
         input_ids = actions[:, step:step + 1]
 
     return teacher_probs
-
-
-@torch.no_grad()
-def cached_teacher_log_probs(
-    model,
-    prompt_ids: torch.Tensor,
-    actions: torch.Tensor,
-    *,
-    eta: float,
-    teacher_law: str,
-    corruptible_token_ids: tuple[int, ...] | list[int] = CORRUPTIBLE_IDS,
-    semantic_key_noise_config: dict[str, object] | object | None = None,
-    clean_target_ids: torch.Tensor | None = None,
-    random_suffix_noise_config: dict[str, object] | object | None = None,
-    task_name: str = "s5",
-    eps: float,
-    device: str | torch.device,
-    autocast_context=nullcontext(),
-) -> torch.Tensor:
-    teacher_probs = cached_teacher_token_probs(
-        model,
-        prompt_ids,
-        actions,
-        eta=eta,
-        teacher_law=teacher_law,
-        corruptible_token_ids=corruptible_token_ids,
-        semantic_key_noise_config=semantic_key_noise_config,
-        clean_target_ids=clean_target_ids,
-        random_suffix_noise_config=random_suffix_noise_config,
-        task_name=task_name,
-        device=device,
-        autocast_context=autocast_context,
-    )
-    teacher_action_probs = teacher_probs.gather(2, actions.to(device=device).unsqueeze(-1)).squeeze(-1)
-    return torch.log(teacher_action_probs.clamp_min(eps))
 
 
 @torch.no_grad()

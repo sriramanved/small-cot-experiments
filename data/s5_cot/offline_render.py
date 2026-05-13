@@ -14,7 +14,7 @@ from data.s5_cot.semantic_key_noise import (
     SEMANTIC_KEY_NOISE_LAW,
     SemanticKeyNoiseConfig,
     eligible_token_ids_from_values,
-    semantic_key_mask_for_step,
+    semantic_key_mask,
     semantic_key_noise_config_from_obj,
 )
 from data.s5_cot.task import VOCAB_SIZE, CORRUPTIBLE_IDS, LPAREN_ID, RPAREN_ID
@@ -30,16 +30,14 @@ from data.synthetic.random_suffix_noise import (
     validate_random_suffix_applies_to_task,
 )
 from data.synthetic.offline_render import (
-    DTYPE_LOOKUP,
     ROLLOUT_MODE_CHOICES,
     TARGET_MODE_CHOICES,
     build_dataset_meta as shared_build_dataset_meta,
     build_oracle_val_split,
     generate_teacher_targets as shared_generate_teacher_targets,
-    load_hf_teacher,
+    load_native_teacher,
     render_offline_dataset as shared_render_offline_dataset,
     render_train_split as shared_render_train_split,
-    resolve_torch_dtype,
     save_rendered_dataset,
 )
 from nanogpt.methods.student_prefix import compute_teacher_token_probs
@@ -70,29 +68,64 @@ def _semantic_config_from_random_suffix_config(
     )
 
 
-def _build_random_suffix_step_spec_fn(config: RandomSuffixNoiseConfig):
+def _build_random_suffix_step_spec_fn(
+    config: RandomSuffixNoiseConfig,
+    *,
+    target_len: int,
+):
     semantic_config = _semantic_config_from_random_suffix_config(config)
+    cached_prompt_ids = None
+    cached_device = None
+    cached_key_masks = None
+    cached_semantic_masks = None
+    cached_scaffold_token_ids = None
+
+    def prepare_masks(
+        prompt_ids: torch.Tensor,
+        device: torch.device,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        nonlocal cached_prompt_ids
+        nonlocal cached_device
+        nonlocal cached_key_masks
+        nonlocal cached_semantic_masks
+        nonlocal cached_scaffold_token_ids
+        if cached_prompt_ids is prompt_ids and cached_device == device:
+            assert cached_key_masks is not None
+            assert cached_semantic_masks is not None
+            assert cached_scaffold_token_ids is not None
+            return cached_key_masks, cached_semantic_masks, cached_scaffold_token_ids
+
+        prompt_on_device = prompt_ids.to(device=device, dtype=torch.long)
+        key_masks = semantic_key_mask(prompt_on_device, target_len, semantic_config).to(
+            device=device,
+            dtype=torch.bool,
+        )
+        offsets = torch.arange(int(target_len), dtype=torch.long, device=device) % 7
+        semantic_by_position = (offsets >= 1) & (offsets <= 5)
+        scaffold_by_position = torch.where(
+            offsets.eq(0),
+            torch.full_like(offsets, LPAREN_ID),
+            torch.full_like(offsets, RPAREN_ID),
+        )
+        cached_prompt_ids = prompt_ids
+        cached_device = device
+        cached_key_masks = key_masks
+        cached_semantic_masks = semantic_by_position.view(1, target_len).expand(
+            prompt_ids.size(0),
+            target_len,
+        )
+        cached_scaffold_token_ids = scaffold_by_position.view(1, target_len).expand(
+            prompt_ids.size(0),
+            target_len,
+        )
+        return cached_key_masks, cached_semantic_masks, cached_scaffold_token_ids
 
     def step_spec(step: int, prompt_ids: torch.Tensor, device: torch.device) -> RandomSuffixStepSpec:
-        prompt_on_device = prompt_ids.to(device=device, dtype=torch.long)
-        key_mask = semantic_key_mask_for_step(prompt_on_device, step, semantic_config)
-        offset = int(step) % 7
-        semantic = 1 <= offset <= 5
-        scaffold_token = LPAREN_ID if offset == 0 else RPAREN_ID
+        key_masks, semantic_masks, scaffold_token_ids = prepare_masks(prompt_ids, device)
         return RandomSuffixStepSpec(
-            key_mask=key_mask,
-            semantic_mask=torch.full(
-                (prompt_ids.size(0),),
-                semantic,
-                dtype=torch.bool,
-                device=device,
-            ),
-            scaffold_token_ids=torch.full(
-                (prompt_ids.size(0),),
-                scaffold_token,
-                dtype=torch.long,
-                device=device,
-            ),
+            key_mask=key_masks[:, step],
+            semantic_mask=semantic_masks[:, step],
+            scaffold_token_ids=scaffold_token_ids[:, step],
         )
 
     return step_spec
@@ -123,7 +156,7 @@ def _generate_random_suffix_targets(
         device=device,
         config=config,
         eligible_token_ids=eligible_token_ids,
-        step_spec_fn=_build_random_suffix_step_spec_fn(config),
+        step_spec_fn=_build_random_suffix_step_spec_fn(config, target_len=target_len),
         generator=generator,
     )
 
@@ -153,22 +186,35 @@ def _build_step_teacher_probs_fn(
     *,
     eta: float,
     teacher_law: str,
+    target_len: int,
     semantic_key_noise_config=None,
 ):
     semantic_config = None
     eligible_token_ids = None
+    cached_prompt_ids = None
+    cached_device = None
+    cached_key_masks = None
     if teacher_law == SEMANTIC_KEY_NOISE_LAW:
         semantic_config = semantic_key_noise_config_from_obj(semantic_key_noise_config)
         eligible_token_ids = eligible_token_ids_from_values(semantic_config.eligible_values)
 
     def step_teacher_probs(clean_logits: torch.Tensor, step: int, prompt_ids: torch.Tensor) -> torch.Tensor:
+        nonlocal cached_prompt_ids
+        nonlocal cached_device
+        nonlocal cached_key_masks
         key_mask = None
         if semantic_config is not None:
-            key_mask = semantic_key_mask_for_step(
-                prompt_ids.to(device=clean_logits.device),
-                step,
-                semantic_config,
-            )
+            device = clean_logits.device
+            if cached_prompt_ids is not prompt_ids or cached_device != device:
+                cached_key_masks = semantic_key_mask(
+                    prompt_ids.to(device=device, dtype=torch.long),
+                    target_len,
+                    semantic_config,
+                ).to(device=device, dtype=torch.bool)
+                cached_prompt_ids = prompt_ids
+                cached_device = device
+            assert cached_key_masks is not None
+            key_mask = cached_key_masks[:, step]
         return compute_teacher_token_probs(
             clean_logits,
             eta=eta,
@@ -214,6 +260,7 @@ def generate_teacher_targets(
         step_teacher_probs_fn = _build_step_teacher_probs_fn(
             eta=eta,
             teacher_law=teacher_law,
+            target_len=target_len,
             semantic_key_noise_config=semantic_key_noise_config,
         )
         rollout_probs_step_fn = step_teacher_probs_fn
@@ -271,6 +318,7 @@ def render_train_split(
         step_teacher_probs_fn = _build_step_teacher_probs_fn(
             eta=eta,
             teacher_law=teacher_law,
+            target_len=prompt_bank.target_len,
             semantic_key_noise_config=semantic_key_noise_config,
         )
         rollout_probs_step_fn = step_teacher_probs_fn
@@ -379,6 +427,7 @@ def render_offline_dataset(
         step_teacher_probs_fn = _build_step_teacher_probs_fn(
             eta=eta,
             teacher_law=teacher_law,
+            target_len=prompt_bank.target_len,
             semantic_key_noise_config=semantic_config,
         )
         rollout_probs_step_fn = step_teacher_probs_fn
@@ -393,7 +442,7 @@ def render_offline_dataset(
                 random_suffix_noise_config=random_suffix_noise_config,
             )
         )
-        model = load_hf_teacher(
+        model = load_native_teacher(
             teacher_checkpoint,
             device=device,
             dtype_name=dtype_name,

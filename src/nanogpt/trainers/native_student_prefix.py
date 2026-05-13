@@ -145,11 +145,30 @@ def normalize_state_dict_for_save(state_dict: dict[str, torch.Tensor]) -> dict[s
     return {key: value.detach().cpu() for key, value in state_dict.items()}
 
 
-def task_reports_cot_exact(task_name: str) -> bool:
-    return False
-
-
 CLIPPING_FRACTION_EMA_DECAY = 0.95
+
+
+def metric_scalar(value: torch.Tensor) -> float:
+    return float(value.detach().float().item())
+
+
+def metric_mean(value: torch.Tensor) -> float:
+    return metric_scalar(value.detach().float().mean())
+
+
+def build_teacher_prob_kwargs(
+    cfg: StudentPrefixConfig,
+    *,
+    clean_target_ids: torch.Tensor,
+) -> dict[str, object]:
+    kwargs: dict[str, object] = {}
+    if cfg.teacher_law == SEMANTIC_KEY_NOISE_LAW:
+        kwargs["semantic_key_noise_config"] = cfg.semantic_key_noise
+    if cfg.teacher_law == RANDOM_SUFFIX_AFTER_ERROR_LAW:
+        kwargs["clean_target_ids"] = clean_target_ids
+        kwargs["random_suffix_noise_config"] = cfg.random_suffix_noise
+        kwargs["task_name"] = cfg.task
+    return kwargs
 
 
 def build_reverse_mc_step_metrics(
@@ -161,15 +180,15 @@ def build_reverse_mc_step_metrics(
 ) -> dict[str, float]:
     importance_weight = objective_stats["importance_weight"]
     metrics = {
-        "train/loss": float(loss.item()),
-        "train/advantage": float(objective_stats["advantage"].mean().item()),
-        "train/log_q": float(log_q.mean().item()),
-        "train/log_teacher": float(objective_stats["log_teacher"].mean().item()),
-        "train/log_p": float(objective_stats["log_p"].mean().item()),
-        "train/importance_weight_mean": float(importance_weight.mean().item()),
-        "train/importance_weight_std": float(importance_weight.std(unbiased=False).item()),
-        "train/importance_weight_max": float(importance_weight.max().item()),
-        "train/importance_weight_min": float(importance_weight.min().item()),
+        "train/loss": metric_scalar(loss),
+        "train/advantage": metric_mean(objective_stats["advantage"]),
+        "train/log_q": metric_mean(log_q),
+        "train/log_teacher": metric_mean(objective_stats["log_teacher"]),
+        "train/log_p": metric_mean(objective_stats["log_p"]),
+        "train/importance_weight_mean": metric_mean(importance_weight),
+        "train/importance_weight_std": metric_scalar(importance_weight.detach().float().std(unbiased=False)),
+        "train/importance_weight_max": metric_scalar(importance_weight.detach().float().max()),
+        "train/importance_weight_min": metric_scalar(importance_weight.detach().float().min()),
     }
     if extra_metrics is not None:
         metrics.update(extra_metrics)
@@ -183,6 +202,7 @@ def select_reverse_mc_actions(
     rollout_log_q: torch.Tensor,
     student_logits: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, float]]:
+    """Choose which student action distribution drives the reverse-KL estimator."""
     if method_family == "opd":
         return rollout_actions, rollout_log_q, {}
     if method_family != "nail":
@@ -190,10 +210,10 @@ def select_reverse_mc_actions(
 
     aux_actions, aux_log_q = sample_student_aux_actions(student_logits)
     return aux_actions, aux_log_q, {
-        "train/rollout_log_q_mean": float(rollout_log_q.mean().item()),
-        "train/aux_log_q_mean": float(aux_log_q.mean().item()),
-        "train/aux_equals_rollout_rate": float(
-            aux_actions.eq(rollout_actions).to(dtype=torch.float32).mean().item()
+        "train/rollout_log_q_mean": metric_mean(rollout_log_q),
+        "train/aux_log_q_mean": metric_mean(aux_log_q),
+        "train/aux_equals_rollout_rate": metric_mean(
+            aux_actions.eq(rollout_actions).to(dtype=torch.float32)
         ),
     }
 
@@ -555,8 +575,6 @@ def run_eval(
         "val/clean_full_exact": metrics["clean_full_exact"],
         "val/clean_final_exact": metrics["clean_final_exact"],
     }
-    if task_reports_cot_exact(task_name):
-        eval_stats["val/cot_exact"] = metrics["cot_exact"]
     return eval_stats
 
 
@@ -842,6 +860,8 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
 
     rollout_temperature = float(method_state["resolved_rollout_temperature"])
     loss_temperature = method_state["resolved_loss_temperature"]
+    # Rollout temperature controls prefix collection; loss temperature controls
+    # the trained student distribution for forward/mixed/JSD losses.
     kl_beta = None if cfg.kl_beta is None else float(cfg.kl_beta)
     running_metrics: dict[str, float] = {}
     running_steps = 0
@@ -921,11 +941,12 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
         )[:, :target_len]
 
         teacher_targets = None
-        teacher_target_probs = None
         log_teacher_target = None
 
         student.eval()
         with torch.no_grad():
+            # Rollout may be greedy (NAIL default) or sampled (OPD default);
+            # either way it only defines the prefix distribution.
             full_seq, rollout_actions, rollout_log_q = rollout_student(
                 student,
                 prompt_ids,
@@ -935,13 +956,10 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                 autocast_context=autocast_context,
             )
             rollout_inputs = full_seq[:, :-1]
-            teacher_prob_kwargs = {}
-            if cfg.teacher_law == SEMANTIC_KEY_NOISE_LAW:
-                teacher_prob_kwargs["semantic_key_noise_config"] = cfg.semantic_key_noise
-            if cfg.teacher_law == RANDOM_SUFFIX_AFTER_ERROR_LAW:
-                teacher_prob_kwargs["clean_target_ids"] = clean_target_ids
-                teacher_prob_kwargs["random_suffix_noise_config"] = cfg.random_suffix_noise
-                teacher_prob_kwargs["task_name"] = cfg.task
+            teacher_prob_kwargs = build_teacher_prob_kwargs(
+                cfg,
+                clean_target_ids=clean_target_ids,
+            )
             teacher_probs = cached_teacher_token_probs(
                 teacher,
                 prompt_ids,
@@ -965,8 +983,12 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                 )
             )
             if needs_forward_teacher_targets:
+                # Teacher MC targets come from the noisy expert law, not the student.
                 teacher_targets = sample_teacher_actions(teacher_probs)
-                teacher_target_probs = teacher_probs.gather(2, teacher_targets.unsqueeze(-1)).squeeze(-1)
+                teacher_target_probs = teacher_probs.gather(
+                    2,
+                    teacher_targets.unsqueeze(-1),
+                ).squeeze(-1)
                 log_teacher_target = torch.log(teacher_target_probs.clamp_min(cfg.eps))
         student.train()
 
@@ -1014,11 +1036,11 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                     eps=cfg.eps,
                 )
                 step_metrics = {
-                    "train/loss": float(loss.item()),
-                    "train/reverse_kl": float(objective_stats["reverse_kl"].mean().item()),
-                    "train/reverse_kl_full": float(objective_stats["reverse_kl"].mean().item()),
-                    "train/student_teacher_ce": float(objective_stats["student_teacher_ce"].mean().item()),
-                    "train/student_entropy": float(objective_stats["student_entropy"].mean().item()),
+                    "train/loss": metric_scalar(loss),
+                    "train/reverse_kl": metric_mean(objective_stats["reverse_kl"]),
+                    "train/reverse_kl_full": metric_mean(objective_stats["reverse_kl"]),
+                    "train/student_teacher_ce": metric_mean(objective_stats["student_teacher_ce"]),
+                    "train/student_entropy": metric_mean(objective_stats["student_entropy"]),
                 }
             elif cfg.teacher_signal == "mc" and cfg.loss == "mixed":
                 assert kl_beta is not None
@@ -1039,10 +1061,10 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                         temperature=loss_temperature,
                         eps=cfg.eps,
                     )
-                    step_metrics["train/log_student_target"] = float(
-                        forward_stats["log_student_target"].mean().item()
+                    step_metrics["train/log_student_target"] = metric_mean(
+                        forward_stats["log_student_target"]
                     )
-                    step_metrics["train/log_teacher_target"] = float(log_teacher_target.mean().item())
+                    step_metrics["train/log_teacher_target"] = metric_mean(log_teacher_target)
 
                 if reverse_weight > 0.0:
                     reverse_actions, reverse_log_q, reverse_metrics = select_reverse_mc_actions(
@@ -1073,9 +1095,9 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                     reverse_loss,
                     beta=kl_beta,
                 )
-                step_metrics["train/loss"] = float(loss.item())
-                step_metrics["train/mixed_forward_loss"] = float(forward_loss.item())
-                step_metrics["train/mixed_reverse_loss"] = float(reverse_loss.item())
+                step_metrics["train/loss"] = metric_scalar(loss)
+                step_metrics["train/mixed_forward_loss"] = metric_scalar(forward_loss)
+                step_metrics["train/mixed_reverse_loss"] = metric_scalar(reverse_loss)
             elif cfg.teacher_signal == "mc" and cfg.loss == "jsd":
                 assert kl_beta is not None
                 if kl_beta == 0.0:
@@ -1089,15 +1111,15 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                         eps=cfg.eps,
                     )
                     step_metrics = {
-                        "train/loss": float(loss.item()),
+                        "train/loss": metric_scalar(loss),
                         "train/jsd_beta": kl_beta,
-                        "train/jsd_loss": float(loss.item()),
-                        "train/jsd_teacher_to_mix_loss": float(loss.item()),
+                        "train/jsd_loss": metric_scalar(loss),
+                        "train/jsd_teacher_to_mix_loss": metric_scalar(loss),
                         "train/jsd_student_to_mix_loss": 0.0,
-                        "train/log_student_target": float(
-                            objective_stats["log_student_target"].mean().item()
+                        "train/log_student_target": metric_mean(
+                            objective_stats["log_student_target"]
                         ),
-                        "train/log_teacher_target": float(log_teacher_target.mean().item()),
+                        "train/log_teacher_target": metric_mean(log_teacher_target),
                     }
                 elif kl_beta == 1.0:
                     reverse_actions, reverse_log_q, reverse_metrics = select_reverse_mc_actions(
@@ -1120,9 +1142,9 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                         extra_metrics=reverse_metrics,
                     )
                     step_metrics["train/jsd_beta"] = kl_beta
-                    step_metrics["train/jsd_loss"] = float(loss.item())
+                    step_metrics["train/jsd_loss"] = metric_scalar(loss)
                     step_metrics["train/jsd_teacher_to_mix_loss"] = 0.0
-                    step_metrics["train/jsd_student_to_mix_loss"] = float(loss.item())
+                    step_metrics["train/jsd_student_to_mix_loss"] = metric_scalar(loss)
                 else:
                     assert teacher_targets is not None
                     reverse_actions, reverse_log_q, reverse_metrics = select_reverse_mc_actions(
@@ -1141,34 +1163,34 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                         eps=cfg.eps,
                     )
                     step_metrics = {
-                        "train/loss": float(loss.item()),
+                        "train/loss": metric_scalar(loss),
                         "train/jsd_beta": kl_beta,
-                        "train/jsd_loss": float(loss.item()),
-                        "train/jsd_teacher_to_mix_loss": float(
-                            objective_stats["teacher_to_mix_loss"].item()
+                        "train/jsd_loss": metric_scalar(loss),
+                        "train/jsd_teacher_to_mix_loss": metric_scalar(
+                            objective_stats["teacher_to_mix_loss"]
                         ),
-                        "train/jsd_student_to_mix_loss": float(
-                            objective_stats["student_to_mix_loss"].item()
+                        "train/jsd_student_to_mix_loss": metric_scalar(
+                            objective_stats["student_to_mix_loss"]
                         ),
-                        "train/log_teacher_target": float(
-                            objective_stats["log_teacher_target"].mean().item()
+                        "train/log_teacher_target": metric_mean(
+                            objective_stats["log_teacher_target"]
                         ),
-                        "train/jsd_log_mixture_teacher_target": float(
-                            objective_stats["log_mixture_teacher_target"].mean().item()
+                        "train/jsd_log_mixture_teacher_target": metric_mean(
+                            objective_stats["log_mixture_teacher_target"]
                         ),
-                        "train/jsd_log_student_action": float(
-                            objective_stats["log_student_action"].mean().item()
+                        "train/jsd_log_student_action": metric_mean(
+                            objective_stats["log_student_action"]
                         ),
-                        "train/jsd_log_mixture_student_action": float(
-                            objective_stats["log_mixture_student_action"].mean().item()
+                        "train/jsd_log_mixture_student_action": metric_mean(
+                            objective_stats["log_mixture_student_action"]
                         ),
-                        "train/jsd_teacher_to_mix_token": float(
-                            objective_stats["teacher_to_mix"].mean().item()
+                        "train/jsd_teacher_to_mix_token": metric_mean(
+                            objective_stats["teacher_to_mix"]
                         ),
-                        "train/jsd_student_to_mix_token": float(
-                            objective_stats["student_to_mix"].mean().item()
+                        "train/jsd_student_to_mix_token": metric_mean(
+                            objective_stats["student_to_mix"]
                         ),
-                        "train/log_q": float(reverse_log_q.mean().item()),
+                        "train/log_q": metric_mean(reverse_log_q),
                     }
                     step_metrics.update(reverse_metrics)
             elif cfg.teacher_signal == "mc" and cfg.loss == "forward":
@@ -1182,11 +1204,12 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                     eps=cfg.eps,
                 )
                 step_metrics = {
-                    "train/loss": float(loss.item()),
-                    "train/log_student_target": float(objective_stats["log_student_target"].mean().item()),
-                    "train/log_teacher_target": float(log_teacher_target.mean().item()),
+                    "train/loss": metric_scalar(loss),
+                    "train/log_student_target": metric_mean(objective_stats["log_student_target"]),
+                    "train/log_teacher_target": metric_mean(log_teacher_target),
                 }
             else:
+                # Full-distribution losses train all logits under the loss temperature.
                 loss, objective_stats = forward_kl_full_loss(
                     p_answer_logits,
                     teacher_probs=teacher_probs,
@@ -1194,10 +1217,10 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                     eps=cfg.eps,
                 )
                 step_metrics = {
-                    "train/loss": float(loss.item()),
-                    "train/forward_kl": float(objective_stats["forward_kl"].mean().item()),
-                    "train/teacher_ce": float(objective_stats["teacher_ce"].mean().item()),
-                    "train/teacher_entropy": float(objective_stats["teacher_entropy"].mean().item()),
+                    "train/loss": metric_scalar(loss),
+                    "train/forward_kl": metric_mean(objective_stats["forward_kl"]),
+                    "train/teacher_ce": metric_mean(objective_stats["teacher_ce"]),
+                    "train/teacher_entropy": metric_mean(objective_stats["teacher_entropy"]),
                 }
 
         scaler.scale(loss).backward()

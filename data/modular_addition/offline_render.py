@@ -21,15 +21,13 @@ from data.synthetic.random_suffix_noise import (
     validate_random_suffix_applies_to_task,
 )
 from data.synthetic.offline_render import (
-    DTYPE_LOOKUP,
     ROLLOUT_MODE_CHOICES,
     build_dataset_meta as shared_build_dataset_meta,
     build_oracle_val_split,
     generate_teacher_targets as shared_generate_teacher_targets,
-    load_hf_teacher,
+    load_native_teacher,
     render_offline_dataset as shared_render_offline_dataset,
     render_train_split as shared_render_train_split,
-    resolve_torch_dtype,
     save_rendered_dataset,
 )
 
@@ -240,7 +238,7 @@ def render_offline_dataset(
     prompt_bank = load_prompt_bank(prompt_bank_dir)
     subset_idx = select_train_subset(prompt_bank, subset_size)
     if teacher_law == RANDOM_SUFFIX_AFTER_ERROR_LAW:
-        model = load_hf_teacher(
+        model = load_native_teacher(
             teacher_checkpoint,
             device=device,
             dtype_name=dtype_name,

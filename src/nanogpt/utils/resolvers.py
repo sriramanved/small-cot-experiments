@@ -16,17 +16,6 @@ def _temp_tag(value: object) -> str:
     return f"t{_float_tag(value)}"
 
 
-def _opd_student_tag(
-    rollout_temperature: object,
-    student_temperature: object,
-) -> str:
-    rollout_tag = _temp_tag(rollout_temperature)
-    student_tag = _temp_tag(student_temperature)
-    if float(rollout_temperature) == float(student_temperature):
-        return student_tag
-    return f"roll{rollout_tag}-stud{student_tag}"
-
-
 def _student_prefix_temp_suffix(
     method_family: object,
     rollout_temperature_override: object,
@@ -276,25 +265,6 @@ def _s5_noisy_bc_run_name(
     )
 
 
-def _s5_opd_run_name(
-    objective: object,
-    m: object,
-    subset_size: object,
-    eta: object,
-    teacher_law: object,
-    student_rollout_temperature: object,
-    student_temperature: object,
-    seed: object,
-    backend: object = "nanogpt",
-) -> str:
-    prefix = "s5-opd-hf" if str(backend) == "hf" else "s5-opd"
-    return (
-        f"{prefix}-{objective}-m{int(m)}-n{int(subset_size)}-eta{_float_tag(eta)}-"
-        f"{teacher_law}-{_opd_student_tag(student_rollout_temperature, student_temperature)}-"
-        f"seed{int(seed)}"
-    )
-
-
 def _s5_student_prefix_run_name(
     method_family: object,
     loss: object,
@@ -376,24 +346,6 @@ def _modadd_noisy_bc_run_name(
     )
 
 
-def _modadd_opd_run_name(
-    objective: object,
-    p: object,
-    m: object,
-    subset_size: object,
-    eta: object,
-    teacher_law: object,
-    student_rollout_temperature: object,
-    student_temperature: object,
-    seed: object,
-) -> str:
-    return (
-        f"modadd-opd-{objective}-p{int(p)}-m{int(m)}-n{int(subset_size)}-eta{_float_tag(eta)}-"
-        f"{teacher_law}-{_opd_student_tag(student_rollout_temperature, student_temperature)}-"
-        f"seed{int(seed)}"
-    )
-
-
 def _modadd_student_prefix_run_name(
     method_family: object,
     loss: object,
@@ -439,7 +391,6 @@ def register_resolvers() -> None:
     OmegaConf.register_new_resolver("s5_expert_run_name", _s5_expert_run_name, replace=True)
     OmegaConf.register_new_resolver("s5_clean_offline_run_name", _s5_clean_offline_run_name, replace=True)
     OmegaConf.register_new_resolver("s5_noisy_bc_run_name", _s5_noisy_bc_run_name, replace=True)
-    OmegaConf.register_new_resolver("s5_opd_run_name", _s5_opd_run_name, replace=True)
     OmegaConf.register_new_resolver("s5_student_prefix_run_name", _s5_student_prefix_run_name, replace=True)
     OmegaConf.register_new_resolver("modadd_teacher_root", _modadd_teacher_root, replace=True)
     OmegaConf.register_new_resolver("modadd_suite_root", _modadd_suite_root, replace=True)
@@ -449,5 +400,4 @@ def register_resolvers() -> None:
     OmegaConf.register_new_resolver("modadd_noisy_dataset_name", _modadd_noisy_dataset_name, replace=True)
     OmegaConf.register_new_resolver("modadd_expert_run_name", _modadd_expert_run_name, replace=True)
     OmegaConf.register_new_resolver("modadd_noisy_bc_run_name", _modadd_noisy_bc_run_name, replace=True)
-    OmegaConf.register_new_resolver("modadd_opd_run_name", _modadd_opd_run_name, replace=True)
     OmegaConf.register_new_resolver("modadd_student_prefix_run_name", _modadd_student_prefix_run_name, replace=True)

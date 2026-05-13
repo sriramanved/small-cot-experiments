@@ -43,19 +43,6 @@ def load_native_teacher(
     return model
 
 
-def load_hf_teacher(
-    teacher_checkpoint: str | Path,
-    *,
-    device: str | torch.device,
-    dtype_name: str | None,
-):
-    return load_native_teacher(
-        teacher_checkpoint,
-        device=device,
-        dtype_name=dtype_name,
-    )
-
-
 ROLLOUT_MODE_CHOICES = ("greedy_then_corrupt", "sample_then_corrupt")
 TARGET_MODE_CHOICES = ("tokens", "teacher_probs")
 

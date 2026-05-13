@@ -24,7 +24,6 @@ from nanogpt.trainers.nail import run_nail
 from nanogpt.trainers.configs import (
     project_nail_config,
     project_opd_config,
-    project_opd_hf_config,
     project_pretrain_config,
 )
 from nanogpt.trainers.opd import run_opd
@@ -314,23 +313,10 @@ class HydraConfigTests(unittest.TestCase):
         self.assertNotIn("beta", cfg.run.name)
         self.assertEqual(project_nail_config(cfg).kl_beta, None)
 
-    def test_opd_hf_projection_rejects_parallel_torchrun(self):
-        cfg = _compose_app(
-            "experiment=s5_opd_hf",
-            "runtime.torchrun.nproc_per_node=2",
-        )
-        with self.assertRaisesRegex(ValueError, "single-process only"):
-            project_opd_hf_config(cfg)
-
     def test_all_supported_experiments_compose(self):
         experiments = [
             "shakespeare_char",
             "gpt2",
-            "finetune_shakespeare",
-            "eval_gpt2",
-            "eval_gpt2_medium",
-            "eval_gpt2_large",
-            "eval_gpt2_xl",
             "s5_cot",
             "s5_cot_len21",
             "s5_base",
@@ -352,7 +338,6 @@ class HydraConfigTests(unittest.TestCase):
             "modadd_nail",
             "modadd_nail_reverse_full",
             "modadd_nail_reverse_mc_fixed",
-            "s5_opd_hf",
         ]
 
         for experiment in experiments:
@@ -372,7 +357,6 @@ class HydraConfigTests(unittest.TestCase):
             "s5_nail_eta": "s5_nail",
             "modadd_opd_eta": "modadd_opd",
             "modadd_nail_eta": "modadd_nail",
-            "s5_opd_hf_eta": "s5_opd_hf",
         }
 
         for sweep, experiment in sweep_matrix.items():
