@@ -8,6 +8,10 @@ import torch
 import torch.nn.functional as F
 
 
+# Shared implementation of the absorbing "random suffix after error" teacher
+# law described in the paper appendix and in `experiment_log.md`. Offline
+# rendering samples the poison state while generating a teacher trajectory;
+# online OPD/NAIL infers the poison state from student-prefix mistakes.
 RANDOM_SUFFIX_AFTER_ERROR_LAW = "random_suffix_after_error"
 RANDOM_SUFFIX_KEY_POSITION_CHOICES = ("semantic_key",)
 RANDOM_SUFFIX_MODE_CHOICES = ("valid_tokens",)
@@ -165,7 +169,12 @@ def compute_poisoned_before(
     clean_targets: torch.Tensor,
     key_mask: torch.Tensor,
 ) -> torch.Tensor:
-    """Return whether each prefix already has a previous key-token mismatch."""
+    """Return whether each prefix already has a previous key-token mismatch.
+
+    This is the online counterpart of the paper's poisoned flag: after a prior
+    semantic/key error, later semantic feedback is uniform and no longer
+    informative about the clean continuation.
+    """
     if actions.ndim != 2:
         raise ValueError(f"actions must have shape [B, T], got {tuple(actions.shape)}")
     if clean_targets.ndim != 2:
@@ -227,6 +236,7 @@ def random_suffix_after_error_probs(
     scaffold_token_ids: torch.Tensor | None = None,
     keep_format_tokens: bool = True,
 ) -> torch.Tensor:
+    """Apply the absorbing random-suffix law to one teacher-query step."""
     probs = clean_probs.float()
     had_token_dim = probs.ndim == 3
     if had_token_dim:
@@ -308,6 +318,12 @@ def generate_random_suffix_after_error_targets(
     generator: torch.Generator | None = None,
     saved_teacher_probs_dtype: torch.dtype = torch.float16,
 ) -> tuple[torch.Tensor, torch.Tensor | None, dict[str, torch.Tensor]]:
+    """Render fixed offline trajectories for LogLossBC under the absorbing law.
+
+    The realized tokens are fed back into later teacher queries, so once a key
+    token visibly differs from the clean teacher argmax, the remaining semantic
+    suffix is sampled from the valid-token uniform distribution.
+    """
     if rollout_mode not in {"greedy_then_corrupt", "sample_then_corrupt"}:
         raise ValueError(f"unknown rollout_mode={rollout_mode!r}")
     if target_mode not in {"tokens", "teacher_probs"}:

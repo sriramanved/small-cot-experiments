@@ -1,3 +1,10 @@
+"""Modular-addition synthetic task used in the paper experiments.
+
+See `experiment_log.md` for the paper-to-code map. This file defines the
+symbolic vocabulary, clean CoT target, corruption support, and clean-task
+evaluation metrics for the p=7, m=31 suite.
+"""
+
 from __future__ import annotations
 
 import random

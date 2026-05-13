@@ -4,6 +4,11 @@ This repository contains the synthetic noisy imitation learning experiments for
 Offline BC, OPD / TM OPD, NAIL-forward, and NAIL-reverse on S5 and modular
 addition tasks.
 
+Readers coming from the paper should start with
+[`experiment_log.md`](experiment_log.md). It maps paper method names and
+notation to the Hydra entrypoints, config variables, source files, artifacts,
+and S5 / modular-addition command templates in this repo.
+
 The supported public entrypoint is Hydra:
 
 ```sh

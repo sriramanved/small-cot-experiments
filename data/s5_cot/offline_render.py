@@ -54,6 +54,8 @@ TEACHER_LAW_CHOICES = (
 def _semantic_config_from_random_suffix_config(
     config: RandomSuffixNoiseConfig,
 ) -> SemanticKeyNoiseConfig:
+    # Random-suffix S5 uses the same key-coordinate selector as semantic-key
+    # noise: one semantically pivotal value slot per CoT block.
     return semantic_key_noise_config_from_obj(
         {
             "enabled": True,
@@ -73,6 +75,9 @@ def _build_random_suffix_step_spec_fn(
     *,
     target_len: int,
 ):
+    # S5 targets alternate scaffold tokens and permutation values. The paper's
+    # "semantic" feedback is only on values; after poisoning we keep scaffold
+    # parentheses valid while randomizing value tokens.
     semantic_config = _semantic_config_from_random_suffix_config(config)
     cached_prompt_ids = None
     cached_device = None
@@ -189,6 +194,8 @@ def _build_step_teacher_probs_fn(
     target_len: int,
     semantic_key_noise_config=None,
 ):
+    # Per-step teacher-probability callback for S5 laws whose noisy support
+    # depends on the target position or prompt-specific semantic key.
     semantic_config = None
     eligible_token_ids = None
     cached_prompt_ids = None

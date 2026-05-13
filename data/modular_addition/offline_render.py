@@ -36,6 +36,9 @@ TEACHER_LAW_CHOICES = ("distributional_noise", RANDOM_SUFFIX_AFTER_ERROR_LAW)
 
 
 def _build_random_suffix_step_spec_fn():
+    # In modular addition every target position is a semantic running-sum
+    # token, so the paper's absorbing law can treat every target token as a
+    # possible poison trigger.
     def step_spec(step: int, prompt_ids: torch.Tensor, device: torch.device) -> RandomSuffixStepSpec:
         del step
         return RandomSuffixStepSpec(
@@ -59,6 +62,9 @@ def _generate_random_suffix_targets(
     random_suffix_noise_config=None,
     generator: torch.Generator | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None, dict[str, torch.Tensor]]:
+    # Offline rendering samples a full noisy expert trajectory for LogLossBC.
+    # Online OPD/NAIL uses the same law through `cached_teacher_token_probs`,
+    # but infers poisoning from the student prefix instead of this render state.
     config = random_suffix_noise_config_from_obj(random_suffix_noise_config)
     validate_random_suffix_applies_to_task(config, task_name="modadd")
     return generate_random_suffix_after_error_targets(
@@ -233,6 +239,9 @@ def render_offline_dataset(
     teacher_law: str = "distributional_noise",
     random_suffix_noise_config=None,
 ) -> None:
+    # Rendered datasets are the fixed D_eta trajectories in the paper's
+    # LogLossBC baseline. The clean validation split is copied from the prompt
+    # bank so all methods report comparable clean-task metrics.
     if teacher_law not in TEACHER_LAW_CHOICES:
         raise ValueError(f"unknown teacher_law={teacher_law!r}")
     prompt_bank = load_prompt_bank(prompt_bank_dir)

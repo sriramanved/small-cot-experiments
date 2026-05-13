@@ -28,9 +28,15 @@ from data.synthetic.random_suffix_noise import (
     validate_random_suffix_applies_to_task,
 )
 
+# Online OPD/NAIL method helpers. The paper separates "which prefixes are
+# visited" from "which divergence is optimized on those prefixes"; this file is
+# where that separation is made concrete. See `experiment_log.md` for the table
+# mapping NAIL-F/R and OPD-F/R to these switches.
 
 DEFAULT_ROLLOUT_TEMPERATURE = {
+    # OPD-R / OPD-F collect sampled student prefixes by default.
     "opd": 1.0,
+    # NAIL-F / NAIL-R collect greedy student prefixes by default.
     "nail": 0.0,
 }
 
@@ -89,6 +95,12 @@ def normalize_student_prefix_method(
     *,
     default_method_family: str | None = None,
 ) -> dict[str, Any]:
+    """Canonicalize the Hydra method knobs into the paper's two choices.
+
+    `method_family` fixes the default prefix policy (OPD sampled, NAIL greedy).
+    `teacher_signal` and `loss` fix whether the local teacher comparison is MC
+    or full-distribution and which KL direction/surrogate is optimized.
+    """
     method_family = _lookup(value, "method_family") or default_method_family
     teacher_signal = _lookup(value, "teacher_signal")
     loss = _lookup(value, "loss")
@@ -327,6 +339,11 @@ def distributional_noisy_teacher_probs(
     eta: float,
     corruptible_token_ids: tuple[int, ...] | list[int] | torch.Tensor = CORRUPTIBLE_IDS,
 ) -> torch.Tensor:
+    """Distribution-level counterpart of offline `sample_then_corrupt`.
+
+    This is the standard noisy expert law in the paper: redistribute mass among
+    eligible semantic tokens with mixing weight `eta`.
+    """
     clean_probs = F.softmax(clean_logits.float(), dim=-1)
     if eta <= 0:
         return clean_probs
@@ -352,6 +369,7 @@ def corrupted_greedy_teacher_probs(
     eta: float,
     corruptible_token_ids: tuple[int, ...] | list[int] | torch.Tensor = CORRUPTIBLE_IDS,
 ) -> torch.Tensor:
+    """Distribution-level counterpart of offline `greedy_then_corrupt`."""
     greedy_actions = torch.argmax(clean_logits, dim=-1)
     corruptible_ids = torch.as_tensor(corruptible_token_ids, dtype=torch.long, device=clean_logits.device)
     is_greedy_digit = greedy_actions.unsqueeze(-1).eq(
@@ -425,7 +443,13 @@ def compute_teacher_token_probs(
     key_mask: torch.Tensor | None = None,
     eligible_token_ids: tuple[int, ...] | list[int] | None = None,
 ) -> torch.Tensor:
-    """Return the noisy expert next-token distribution for each clean logit row."""
+    """Return the noisy expert next-token distribution for clean teacher logits.
+
+    Stateless laws can be computed from the current clean logits alone. The
+    absorbing random-suffix law is stateful, so online code must call
+    `cached_teacher_token_probs` with the clean target to infer whether the
+    student prefix has already become poisoned.
+    """
     if teacher_law == "distributional_noise":
         return distributional_noisy_teacher_probs(
             clean_logits,
@@ -515,6 +539,9 @@ def _s5_random_suffix_online_masks(
     config,
     device: str | torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, tuple[int, ...]]:
+    # In S5, only one selected value coordinate per CoT block is the semantic
+    # "fork" token. Parentheses are scaffold tokens and can be forced to remain
+    # syntactically valid after poisoning.
     torch_device = torch.device(device)
     semantic_config = _semantic_config_from_random_suffix_config(config)
     key_mask = semantic_key_mask(prompt, target_len, semantic_config).to(
@@ -559,6 +586,9 @@ def _random_suffix_online_masks(
             device=device,
         )
     if task_name == "modadd":
+        # In modular addition every target token is a running-sum token, so the
+        # key mask and semantic mask are both all true. This is the paper's
+        # p=7, m=31 random-suffix experiment.
         mask = torch.ones_like(actions, dtype=torch.bool, device=torch.device(device))
         return mask, mask, None, tuple(int(token_id) for token_id in corruptible_token_ids)
     raise ValueError(
@@ -577,7 +607,8 @@ def sample_student_aux_actions(
 
     NAIL-reverse uses these samples for the reverse-KL estimator instead of
     reusing the rollout token. The rollout token chooses the prefix; the
-    auxiliary token estimates the loss under the fixed-prefix student policy.
+    auxiliary token estimates the loss under the fixed-prefix student policy,
+    matching the estimator discussion in the paper appendix.
     """
     if temperature is not None and temperature <= 0:
         raise ValueError("sample_student_aux_actions temperature must be > 0 when set.")
@@ -631,7 +662,11 @@ def reverse_kl_tm_loss(
     teacher_probs: torch.Tensor,
     eps: float = 1e-10,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Score-function surrogate for reverse KL with teacher-model weights."""
+    """Score-function surrogate for reverse KL with teacher-model weights.
+
+    This is the MC reverse-KL estimator used by OPD-R/TM OPD and by NAIL-R once
+    the prefix distribution has been chosen.
+    """
     teacher_action_probs = teacher_probs.gather(2, actions.unsqueeze(-1)).squeeze(-1)
     log_teacher = torch.log(teacher_action_probs.clamp_min(eps))
     advantage = log_teacher - log_q
@@ -675,7 +710,11 @@ def forward_kl_simple_loss(
     temperature: float | None = None,
     eps: float = 1e-10,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Monte Carlo teacher-sample surrogate for forward KL."""
+    """Monte Carlo teacher-sample surrogate for forward KL.
+
+    This is the NAIL-F/OPD-F hard-label update: sample a teacher action at the
+    visited prefix, then do next-token cross entropy on that sampled token.
+    """
     teacher_target_probs = teacher_probs.gather(2, teacher_targets.unsqueeze(-1)).squeeze(-1)
     log_teacher_target = torch.log(teacher_target_probs.clamp_min(eps))
     log_student_target = gather_action_log_probs(
@@ -793,7 +832,12 @@ def cached_teacher_token_probs(
     device: str | torch.device,
     autocast_context=nullcontext(),
 ) -> torch.Tensor:
-    """Query the frozen teacher along already-collected rollout prefixes."""
+    """Query the frozen teacher along already-collected rollout prefixes.
+
+    In paper language, this evaluates the noisy expert on learner-induced
+    prefixes. OPD and NAIL differ in how `actions` were rolled out; this
+    function only supplies the teacher distribution on those fixed prefixes.
+    """
     torch_device = torch.device(device)
     prompt = prompt_ids.to(device=torch_device, dtype=torch.long, non_blocking=True)
     actions = actions.to(device=torch_device, dtype=torch.long, non_blocking=True)

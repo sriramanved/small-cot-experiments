@@ -66,6 +66,10 @@ from nanogpt_checkpoint import (
     load_nanogpt_model,
 )
 
+# Native single-process online trainer for the OPD/NAIL synthetic experiments.
+# This is the main implementation of the online methods in the paper. The
+# offline LogLossBC baseline instead goes through `workers/pretrain_body.py`.
+# See `experiment_log.md` for command templates and method-name mapping.
 
 def validate_config(cfg: StudentPrefixConfig) -> None:
     method_family = getattr(cfg, "method_family", None)
@@ -202,7 +206,12 @@ def select_reverse_mc_actions(
     rollout_log_q: torch.Tensor,
     student_logits: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, float]]:
-    """Choose which student action distribution drives the reverse-KL estimator."""
+    """Choose which student action distribution drives the reverse-KL estimator.
+
+    OPD-R uses the sampled rollout token as the reverse-KL sample. NAIL-R keeps
+    the greedy rollout token only for prefix construction and draws an auxiliary
+    token from the student distribution at that fixed prefix.
+    """
     if method_family == "opd":
         return rollout_actions, rollout_log_q, {}
     if method_family != "nail":
@@ -700,6 +709,7 @@ def build_run_metadata(
 
 
 def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str]) -> None:
+    """Train an online OPD/NAIL student on a fixed prompt-bank subset."""
     validate_config(cfg)
     if int(os.environ.get("WORLD_SIZE", "1")) != 1:
         raise RuntimeError(
@@ -945,8 +955,9 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
 
         student.eval()
         with torch.no_grad():
-            # Rollout may be greedy (NAIL default) or sampled (OPD default);
-            # either way it only defines the prefix distribution.
+            # Rollout may be greedy (NAIL default) or sampled (OPD default).
+            # This stopped rollout defines the prefix distribution in the
+            # paper's augmented-trajectory objectives.
             full_seq, rollout_actions, rollout_log_q = rollout_student(
                 student,
                 prompt_ids,
@@ -983,7 +994,8 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                 )
             )
             if needs_forward_teacher_targets:
-                # Teacher MC targets come from the noisy expert law, not the student.
+                # NAIL-F / OPD-F MC targets come from the noisy expert law, not
+                # from the student rollout token.
                 teacher_targets = sample_teacher_actions(teacher_probs)
                 teacher_target_probs = teacher_probs.gather(
                     2,
@@ -1044,6 +1056,8 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                 }
             elif cfg.teacher_signal == "mc" and cfg.loss == "mixed":
                 assert kl_beta is not None
+                # Paper Appendix B.3.2: beta interpolates between the forward
+                # and reverse stopped-prefix estimators on greedy NAIL prefixes.
                 forward_weight = 1.0 - kl_beta
                 reverse_weight = kl_beta
                 zero_loss = p_answer_logits.sum() * 0.0

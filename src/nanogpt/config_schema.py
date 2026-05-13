@@ -95,6 +95,17 @@ class RandomSuffixNoiseConfig:
 
 @dataclass
 class TaskConfig:
+    """Hydra task surface shared by the synthetic experiments.
+
+    For readers coming from the paper, `experiment_log.md` gives the longer
+    notation map. The short version is:
+    - `eta` is the paper noise level.
+    - `teacher_checkpoint` is the frozen clean expert.
+    - `teacher_law` selects the noisy expert construction.
+    - `loss`, `teacher_signal`, and rollout/loss temperatures select the
+      empirical OPD/NAIL objective.
+    """
+
     dataset: str = "s5_cot"
     dataset_prefix: str = ""
     run_prefix: str = ""
@@ -117,10 +128,18 @@ class TaskConfig:
     eta: float = 0.0
     teacher_checkpoint: str = ""
     prompt_bank_dir: str = ""
+    # Online teacher-query law; offline render jobs store the same law in
+    # `meta.json` so LogLossBC runs can be matched to OPD/NAIL runs.
     teacher_law: str = "distributional_noise"
+    # `teacher_signal=mc` samples teacher tokens; `full` uses the full
+    # next-token teacher distribution when the law supports it.
     teacher_signal: str = "mc"
+    # `forward`, `reverse`, `mixed`, and `jsd` are the code-level switches for
+    # the KL directions and ablations described in the paper appendix.
     loss: str = "reverse"
     kl_beta: Optional[float] = None
+    # Rollout temperature controls which prefixes are visited; loss
+    # temperature, when set, controls the student distribution optimized there.
     rollout_temperature_override: Optional[float] = None
     loss_temperature_override: Optional[float] = None
     objective: Optional[str] = None

@@ -67,6 +67,12 @@ def generate_teacher_targets(
     rollout_probs_step_fn: Callable[[torch.Tensor, int, torch.Tensor], torch.Tensor] | None = None,
     saved_teacher_probs_dtype: torch.dtype = torch.float16,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Roll out the frozen teacher to create fixed LogLossBC trajectories.
+
+    This is the offline baseline in the paper: all prefixes and labels are
+    generated before student training, unlike OPD/NAIL which query the teacher
+    on current student prefixes.
+    """
     if rollout_mode not in ROLLOUT_MODE_CHOICES:
         raise ValueError(f"unknown rollout_mode={rollout_mode!r}")
     if target_mode not in TARGET_MODE_CHOICES:
@@ -227,6 +233,9 @@ def save_rendered_dataset(
     save_dir: str | Path,
     meta: dict[str, Any],
 ) -> None:
+    # Save both packed train tensors and the clean prompt/target provenance.
+    # The provenance lets analysis scripts verify that online and offline runs
+    # used the same prompt-bank subset described in `experiment_log.md`.
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 

@@ -8,6 +8,9 @@ from data.synthetic.target_spans import (
     target_ids_from_y_row,
 )
 
+# Loader for fixed rendered datasets used by LogLossBC/SFT. Online OPD/NAIL
+# never uses these train tensors; it reads the prompt bank and queries the
+# teacher on current student prefixes instead. See `experiment_log.md`.
 _CACHE = {}
 _STATE = {}
 

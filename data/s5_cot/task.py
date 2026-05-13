@@ -1,3 +1,10 @@
+"""S5 composition task used by the synthetic OPD/NAIL experiments.
+
+The paper's S5 examples are symbolic permutation-composition chains. This file
+defines the token vocabulary, clean CoT generation, corruptible value tokens,
+and clean autoregressive evaluation metrics.
+"""
+
 import itertools
 import random
 import torch

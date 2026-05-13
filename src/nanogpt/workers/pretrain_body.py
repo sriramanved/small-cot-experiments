@@ -173,6 +173,9 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(
 
 
 def synthetic_task_name(dataset_name):
+    # Synthetic offline datasets are the rendered noisy-expert trajectory
+    # datasets used by LogLossBC/SFT in the paper. Clean expert training uses
+    # the non-offline task names (`s5_cot`, `modadd_cot`, `modadd_base`).
     if dataset_name == 's5_cot' or dataset_name.startswith('s5_clean_offline') or dataset_name.startswith('s5_noisy_offline'):
         return 's5'
     if dataset_name in ('modadd_cot', 'modadd_base') or dataset_name.startswith('modadd_clean_offline') or dataset_name.startswith('modadd_noisy_offline'):
@@ -264,6 +267,9 @@ if offline_target_type not in ('tokens', 'teacher_probs'):
         f"{offline_target_type!r}"
     )
 if offline_target_type == 'teacher_probs':
+    # Full-distribution offline BC: instead of hard rendered tokens, train on
+    # saved teacher next-token probabilities. The paper's main LogLossBC runs
+    # use hard token targets, but this supports the full-information ablation.
     if not is_s5_offline_dataset(dataset):
         raise ValueError(
             "offline_target_type='teacher_probs' is currently only supported "
@@ -433,6 +439,8 @@ def unpack_batch(batch):
 
 
 def offline_teacher_prob_loss(model_ref, X, Y, teacher_probs):
+    # Soft-target behavior cloning on saved teacher distributions. This is the
+    # offline analogue of `teacher_signal=full` in online OPD/NAIL.
     logits, _ = model_ref(X, return_full_logits=True)
     _, loss, stats = offline_teacher_prob_loss_from_logits(logits, Y, teacher_probs)
     return logits, loss, stats
@@ -643,6 +651,8 @@ def estimate_loss():
     model.eval()
 
     if is_synthetic_offline_dataset(dataset):
+        # Offline BC evaluates against the fixed clean validation split from
+        # the prompt bank, not against newly sampled noisy trajectories.
         for split in ['train', 'val']:
             split_target_type = offline_target_type if split == 'train' else 'tokens'
             if offline_eval_full:
