@@ -65,7 +65,7 @@ def s5_corruptible_mask(target_ids: torch.Tensor) -> torch.Tensor:
 
 
 def extract_supervised_targets(y: torch.Tensor) -> tuple[torch.Tensor, int]:
-    """Return the contiguous supervised suffix from a nanoGPT offline-BC Y tensor."""
+    """Return the contiguous supervised suffix from an offline-BC label tensor."""
     if y.ndim != 2:
         raise ValueError(f"expected Y to be rank-2 [B, T], got shape {tuple(y.shape)}")
     if y.size(0) == 0:

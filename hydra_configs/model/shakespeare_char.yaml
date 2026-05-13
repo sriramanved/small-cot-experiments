@@ -1,8 +1,0 @@
-# @package _global_
-model:
-  n_layer: 6
-  n_head: 6
-  n_embd: 384
-  dropout: 0.2
-  bias: false
-  block_size: 256

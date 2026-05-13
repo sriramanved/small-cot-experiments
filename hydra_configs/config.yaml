@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - experiment: shakespeare_char
+  - experiment: s5_cot
   - sweep: none
 
 run:

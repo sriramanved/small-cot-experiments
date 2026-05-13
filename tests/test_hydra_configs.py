@@ -315,8 +315,6 @@ class HydraConfigTests(unittest.TestCase):
 
     def test_all_supported_experiments_compose(self):
         experiments = [
-            "shakespeare_char",
-            "gpt2",
             "s5_cot",
             "s5_cot_len21",
             "s5_base",

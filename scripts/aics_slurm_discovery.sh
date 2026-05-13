@@ -27,7 +27,7 @@ COMMANDS=(
   'squeue -u $USER'
   'if command -v resource_usage >/dev/null 2>&1; then resource_usage; else echo "resource_usage not found"; fi'
   'if [[ -f ~/bin/interactivejob ]]; then cat ~/bin/interactivejob; else echo "~/bin/interactivejob not found"; fi'
-  'find ~ -maxdepth 4 -type d \( -name nanoGPT -o -name small-cot-experiments \) 2>/dev/null'
+  'find ~ -maxdepth 4 -type d -name small-cot-experiments 2>/dev/null'
   'find ~ -maxdepth 5 -type f -path "*/bin/activate" 2>/dev/null | grep -E "/(\.venv|venv)/bin/activate$"'
 )
 

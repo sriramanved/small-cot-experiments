@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nanogpt-hydra"
+name = "small-cot-experiments"
 version = "0.1.0"
-description = "Hydra-first experiment launcher for this nanoGPT research repo"
+description = "Hydra-first launcher for synthetic noisy imitation learning experiments"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

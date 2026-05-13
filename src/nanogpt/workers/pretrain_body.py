@@ -2,23 +2,23 @@
 Low-level trainer backend used by `python -m nanogpt.run`.
 
 Public launches should generally go through Hydra presets, e.g.:
-$ python -m nanogpt.run experiment=shakespeare_char
-$ python -m nanogpt.run experiment=gpt2
+$ python -m nanogpt.run experiment=s5_cot
+$ python -m nanogpt.run experiment=s5_noisy_bc
 
 This training script can also be run both on a single gpu in debug mode,
 and in a larger training run with distributed data parallel (ddp).
 
 To run on a single GPU, example:
-$ python -m nanogpt.run experiment=shakespeare_char optim.batch_size=32 runtime.compile=false
+$ python -m nanogpt.run experiment=s5_cot optim.batch_size=32 runtime.compile=false
 
 To run with DDP on 4 gpus on 1 node, example:
-$ torchrun --standalone --nproc_per_node=4 -m nanogpt.run experiment=gpt2
+$ torchrun --standalone --nproc_per_node=4 -m nanogpt.run experiment=s5_cot
 
 To run with DDP on 4 gpus across 2 nodes, example:
 - Run on the first (master) node with example IP 123.456.123.456:
-$ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr=123.456.123.456 --master_port=1234 -m nanogpt.run experiment=gpt2
+$ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr=123.456.123.456 --master_port=1234 -m nanogpt.run experiment=s5_cot
 - Run on the worker node:
-$ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123.456 --master_port=1234 -m nanogpt.run experiment=gpt2
+$ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123.456 --master_port=1234 -m nanogpt.run experiment=s5_cot
 (If your cluster does not have Infiniband interconnect prepend NCCL_IB_DISABLE=1)
 """
 
@@ -40,7 +40,7 @@ from model import GPTConfig, GPT
 from nanogpt.trainers.wandb import maybe_init_wandb
 
 # -----------------------------------------------------------------------------
-# default config values designed to train a gpt2 (124M) on OpenWebText
+# default config values; Hydra experiment presets are the supported interface
 # I/O
 out_dir = 'out'
 eval_interval = 2000
@@ -48,17 +48,17 @@ log_interval = 1
 eval_iters = 200
 eval_only = False  # if True, script exits right after the first eval
 always_save_checkpoint = True  # if True, always save a checkpoint after each eval
-init_from = 'scratch'  # 'scratch' or 'resume' or 'gpt2*'
+init_from = 'scratch'  # 'scratch', 'resume', or 'warm_start'
 init_from_ckpt = ''
 continue_from_subset_size = 0
 # wandb logging
 wandb_log = False  # disabled by default
-wandb_project = 'owt'
-wandb_run_name = 'gpt2'  # 'run' + str(time.time())
+wandb_project = 'small-cot-experiments'
+wandb_run_name = 's5-cot'  # 'run' + str(time.time())
 wandb_run_id = ''
 wandb_init_timeout = 300
 # data
-dataset = 'openwebtext'
+dataset = 's5_cot'
 s5_mode = 'cot'
 s5_m = 21
 modadd_p = 7
@@ -70,7 +70,7 @@ block_size = 1024
 n_layer = 12
 n_head = 12
 n_embd = 768
-dropout = 0.0  # for pretraining 0 is good, for finetuning try 0.1+
+dropout = 0.0
 bias = False  # do we use bias inside LayerNorm and Linear layers?
 # adamw optimizer
 learning_rate = 6e-4  # max learning rate
@@ -477,7 +477,8 @@ if init_from == 'scratch':
     # determine the vocab size we'll use for from-scratch training
     if meta_vocab_size is None:
         print(
-            "defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
+            "defaulting to padded vocab_size 50304 because dataset metadata "
+            "did not specify a vocabulary size")
     model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)

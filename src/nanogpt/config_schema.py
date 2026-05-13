@@ -95,7 +95,7 @@ class RandomSuffixNoiseConfig:
 
 @dataclass
 class TaskConfig:
-    dataset: str = "openwebtext"
+    dataset: str = "s5_cot"
     dataset_prefix: str = ""
     run_prefix: str = ""
     out_prefix: str = ""

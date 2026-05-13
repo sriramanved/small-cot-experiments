@@ -1,52 +1,93 @@
+# Noisy Imitation Learning Experiments
 
-# nanoGPT
+This repository contains the synthetic noisy imitation learning experiments for
+Offline BC, OPD / TM OPD, NAIL-forward, and NAIL-reverse on S5 and modular
+addition tasks.
 
-![nanoGPT](assets/nanogpt.jpg)
+The supported public entrypoint is Hydra:
 
-
----
-
-**Update Nov 2025** nanoGPT has a new and improved cousin called [nanochat](https://github.com/karpathy/nanochat). It is very likely you meant to use/find nanochat instead. nanoGPT (this repo) is now very old and deprecated but I will leave it up for posterity.
-
----
-
-The simplest, fastest repository for training/finetuning medium-sized GPTs. It is a rewrite of [minGPT](https://github.com/karpathy/minGPT) that prioritizes teeth over education. This fork uses Hydra via `python -m nanogpt.run`; the old upstream helper scripts such as `train.py`, `sample.py`, and `bench.py` are not part of the supported interface here.
-
-![repro124m](assets/gpt2_124M_loss.png)
-
-Because the code is so simple, it is very easy to hack to your needs, train new models from scratch, or finetune pretrained checkpoints (e.g. biggest one currently available as a starting point would be the GPT-2 1.3B model from OpenAI).
-
-## install
-
+```sh
+python -m nanogpt.run <overrides>
 ```
-pip install torch numpy datasets tiktoken wandb tqdm
+
+Experiment presets live in `hydra_configs/experiment/`, task presets in
+`hydra_configs/task/`, and sweep presets in `hydra_configs/sweep/`.
+
+## Install
+
+```sh
+pip install torch numpy wandb tqdm hydra-core hydra-submitit-launcher
 pip install -e .
 ```
 
-Dependencies:
+`wandb` is optional unless `logging=enabled` or `logging.wandb_log=true`.
 
-- [pytorch](https://pytorch.org) <3
-- [numpy](https://numpy.org/install/) <3
--  `datasets` for huggingface datasets <3 (if you want to download + preprocess OpenWebText)
--  `tiktoken` for OpenAI's fast BPE code <3
--  `wandb` for optional logging <3
--  `tqdm` for progress bars <3
+## Main Pipelines
 
-This repo now uses Hydra for experiment composition. The public launcher is
-`python -m nanogpt.run`, experiment presets live in `hydra_configs/experiment/`,
-sweep presets live in `hydra_configs/sweep/`, and Slurm submission goes through
-Hydra Submitit.
+- `pretrain`: clean teacher training and offline BC on rendered datasets.
+- `s5_prompt_bank` / `modadd_prompt_bank`: generate clean prompt banks.
+- `s5_render` / `modadd_render`: render offline noisy datasets.
+- `opd`: online OPD / TM OPD with student-sampled prefixes.
+- `nail`: online NAIL variants with student-collected prefixes.
 
-Examples:
+## Common Runs
+
+Generate an S5 prompt bank:
 
 ```sh
-# single run
-python -m nanogpt.run experiment=shakespeare_char
+python -m nanogpt.run experiment=s5_prompt_bank
+```
 
-# local multirun sweep
-python -m nanogpt.run --multirun experiment=s5_noisy_bc sweep=s5_noisy_bc_eta task.subset_size=1024
+Train a clean S5 teacher:
 
-# Slurm multirun sweep
+```sh
+python -m nanogpt.run experiment=s5_cot
+```
+
+Render an offline noisy S5 dataset:
+
+```sh
+python -m nanogpt.run experiment=s5_noisy_render
+```
+
+Train Offline BC on a rendered S5 dataset:
+
+```sh
+python -m nanogpt.run experiment=s5_noisy_bc
+```
+
+Run OPD / TM OPD:
+
+```sh
+python -m nanogpt.run experiment=s5_opd
+```
+
+Run NAIL-forward:
+
+```sh
+python -m nanogpt.run experiment=s5_nail
+```
+
+Run NAIL-reverse with greedy prefix collection and auxiliary reverse-KL actions:
+
+```sh
+python -m nanogpt.run experiment=s5_nail_reverse_mc_fixed
+```
+
+## Sweeps
+
+Local multirun:
+
+```sh
+python -m nanogpt.run --multirun \
+  experiment=s5_noisy_bc \
+  sweep=s5_noisy_bc_eta \
+  task.subset_size=1024
+```
+
+Slurm multirun through Hydra Submitit:
+
+```sh
 python -m nanogpt.run --multirun \
   experiment=s5_opd \
   sweep=s5_opd_eta \
@@ -56,161 +97,42 @@ python -m nanogpt.run --multirun \
   cluster.partition=<PARTITION>
 ```
 
-## quick start
+## Method Controls
 
-If you are not a deep learning professional and you just want to feel the magic and get your feet wet, the fastest way to get started is to train a character-level GPT on the works of Shakespeare. First, we download it as a single (1MB) file and turn it from raw text into one large stream of integers:
+Native OPD/NAIL configs use:
 
-```sh
-python data/shakespeare_char/prepare.py
-```
+- `task.teacher_signal`: `mc` or `full`
+- `task.loss`: `forward`, `reverse`, `mixed`, or `jsd`
+- `task.kl_beta`: mixture/JSD weight when applicable
+- `task.rollout_temperature_override`: prefix collection policy temperature
+- `task.loss_temperature_override`: loss-distribution temperature for supported losses
 
-This creates a `train.bin` and `val.bin` in that data directory. Now it is time to train your GPT. The size of it very much depends on the computational resources of your system:
+Legacy `task.objective` metadata is still readable for old checkpoints and
+analysis scripts, but it is not a supported launch control for native runs.
 
-**I have a GPU**. Great, we can quickly train a baby GPT with the
-`shakespeare_char` Hydra preset:
+## Offline Datasets
 
-```sh
-python -m nanogpt.run experiment=shakespeare_char
-```
+Offline BC consumes rendered datasets under `data/<dataset_name>/`. The renderer
+saves:
 
-If you peek inside it, you'll see that we're training a GPT with a context size of up to 256 characters, 384 feature channels, and it is a 6-layer Transformer with 6 heads in each layer. On one A100 GPU this training run takes about 3 minutes and the best validation loss is 1.4697. Based on the configuration, the model checkpoints are being written into the resolved `out_dir`, e.g. `out-shakespeare-char`.
+- `train_x.pt`, `train_y.pt`
+- optional `train_teacher_probs.pt` for full-distribution offline BC
+- `val_x.pt`, `val_y.pt`
+- `meta.json`
 
-This generates a few samples, for example:
+The offline target span is shared with online OPD/NAIL supervision: the full
+clean continuation stored in the prompt bank, including the final answer suffix
+when present.
 
-```
-ANGELO:
-And cowards it be strawn to my bed,
-And thrust the gates of my threats,
-Because he that ale away, and hang'd
-An one with him.
+## Validation
 
-DUKE VINCENTIO:
-I thank your eyes against it.
-
-DUKE VINCENTIO:
-Then will answer him to save the malm:
-And what have you tyrannous shall do this?
-
-DUKE VINCENTIO:
-If you have done evils of all disposition
-To end his power, the day of thrust for a common men
-That I leave, to fight with over-liking
-Hasting in a roseman.
-```
-
-lol  `¯\_(ツ)_/¯`. Not bad for a character-level model after 3 minutes of training on a GPU. Better results are quite likely obtainable by instead finetuning a pretrained GPT-2 model on this dataset (see finetuning section later).
-
-**I only have a macbook** (or other cheap computer). No worries, we can still train a GPT but we want to dial things down a notch. I recommend getting the bleeding edge PyTorch nightly ([select it here](https://pytorch.org/get-started/locally/) when installing) as it is currently quite likely to make your code more efficient. But even without it, a simple train run could look as follows:
+Useful targeted checks:
 
 ```sh
-python -m nanogpt.run \
-  experiment=shakespeare_char \
-  runtime=cpu \
-  optim.eval_iters=20 \
-  optim.log_interval=1 \
-  model.block_size=64 \
-  optim.batch_size=12 \
-  model.n_layer=4 \
-  model.n_head=4 \
-  model.n_embd=128 \
-  optim.max_iters=2000 \
-  optim.lr_decay_iters=2000 \
-  model.dropout=0.0
+python -m compileall -q src data tests model.py nanogpt_checkpoint.py torch_dtypes.py
+python -m unittest tests/test_training_methods.py tests/test_opd_objectives.py
+python -m pytest tests/test_hydra_configs.py tests/test_modadd_integration.py tests/test_s5_full_distribution_offline_bc.py -q
+python -m pytest -q
 ```
 
-Here, since we are running on CPU instead of GPU we must set both `--device=cpu` and also turn off PyTorch 2.0 compile with `--compile=False`. Then when we evaluate we get a bit more noisy but faster estimate (`--eval_iters=20`, down from 200), our context size is only 64 characters instead of 256, and the batch size only 12 examples per iteration, not 64. We'll also use a much smaller Transformer (4 layers, 4 heads, 128 embedding size), and decrease the number of iterations to 2000 (and correspondingly usually decay the learning rate to around max_iters with `--lr_decay_iters`). Because our network is so small we also ease down on regularization (`--dropout=0.0`). This still runs in about ~3 minutes, but gets us a loss of only 1.88 and therefore also worse generations, but it's still good fun:
-Generates samples like this:
-
-```
-GLEORKEN VINGHARD III:
-Whell's the couse, the came light gacks,
-And the for mought you in Aut fries the not high shee
-bot thou the sought bechive in that to doth groan you,
-No relving thee post mose the wear
-```
-
-Not bad for ~3 minutes on a CPU, for a hint of the right character gestalt. If you're willing to wait longer, feel free to tune the hyperparameters, increase the size of the network, the context length (`--block_size`), the length of training, etc.
-
-Finally, on Apple Silicon Macbooks and with a recent PyTorch version make sure to add `--device=mps` (short for "Metal Performance Shaders"); PyTorch then uses the on-chip GPU that can *significantly* accelerate training (2-3X) and allow you to use larger networks. See [Issue 28](https://github.com/karpathy/nanoGPT/issues/28) for more.
-
-## reproducing GPT-2
-
-A more serious deep learning professional may be more interested in reproducing GPT-2 results. So here we go - we first tokenize the dataset, in this case the [OpenWebText](https://openwebtext2.readthedocs.io/en/latest/), an open reproduction of OpenAI's (private) WebText:
-
-```sh
-python data/openwebtext/prepare.py
-```
-
-This downloads and tokenizes the [OpenWebText](https://huggingface.co/datasets/openwebtext) dataset. It will create a `train.bin` and `val.bin` which holds the GPT2 BPE token ids in one sequence, stored as raw uint16 bytes. Then we're ready to kick off training. To reproduce GPT-2 (124M) you'll want at least an 8X A100 40GB node and run:
-
-```sh
-python -m nanogpt.run experiment=gpt2
-```
-
-This will run for about 4 days using PyTorch Distributed Data Parallel (DDP) and go down to loss of ~2.85. Now, a GPT-2 model just evaluated on OWT gets a val loss of about 3.11, but if you finetune it it will come down to ~2.85 territory (due to an apparent domain gap), making the two models ~match.
-
-If you're in a cluster environment and you are blessed with multiple GPU nodes you can make GPU go brrrr e.g. across 2 nodes like:
-
-```sh
-# Run on the first (master) node with example IP 123.456.123.456:
-python -m nanogpt.run \
-  experiment=gpt2 \
-  runtime.torchrun.nnodes=2 \
-  runtime.torchrun.node_rank=0 \
-  runtime.torchrun.master_addr=123.456.123.456 \
-  runtime.torchrun.master_port=1234 \
-  runtime.torchrun.standalone=false
-# Run on the worker node:
-python -m nanogpt.run \
-  experiment=gpt2 \
-  runtime.torchrun.nnodes=2 \
-  runtime.torchrun.node_rank=1 \
-  runtime.torchrun.master_addr=123.456.123.456 \
-  runtime.torchrun.master_port=1234 \
-  runtime.torchrun.standalone=false
-```
-
-It is a good idea to benchmark your interconnect (e.g. iperf3). In particular, if you don't have Infiniband then also prepend `NCCL_IB_DISABLE=1` to the above launches. Your multinode training will work, but most likely _crawl_. By default checkpoints are periodically written to the resolved `out_dir`.
-
-Finally, to train on a single GPU, launch the same preset with a single-process
-runtime override, e.g.
-`python -m nanogpt.run experiment=gpt2 runtime=gpu_bfloat16 runtime.torchrun.nproc_per_node=1`.
-
-## finetuning
-
-Finetuning is no different than training, you just resume or warm-start from one
-of this repo's native nanoGPT checkpoints and train with a smaller learning
-rate. For an example of how to prepare text data, go to `data/shakespeare` and
-run `prepare.py` to download the tiny Shakespeare dataset and render it into a
-`train.bin` and `val.bin`. Unlike OpenWebText this will run in seconds.
-
-## efficiency notes
-
-This fork does not maintain the old standalone `bench.py` helper; profiling should be done from the Hydra-launched training path.
-
-Note that the code by default uses [PyTorch 2.0](https://pytorch.org/get-started/pytorch-2.0/). At the time of writing (Dec 29, 2022) this makes `torch.compile()` available in the nightly release. The improvement from the one line of code is noticeable, e.g. cutting down iteration time from ~250ms / iter to 135ms / iter. Nice work PyTorch team!
-
-## todos
-
-- Investigate and add FSDP instead of DDP
-- Eval zero-shot perplexities on standard evals (e.g. LAMBADA? HELM? etc.)
-- Finetune the finetuning script, I think the hyperparams are not great
-- Schedule for linear batch size increase during training
-- Incorporate other embeddings (rotary, alibi)
-- Separate out the optim buffers from model params in checkpoints I think
-- Additional logging around network health (e.g. gradient clip events, magnitudes)
-- Few more investigations around better init etc.
-
-## troubleshooting
-
-Note that by default this repo uses PyTorch 2.0 (i.e. `torch.compile`). This is fairly new and experimental, and not yet available on all platforms (e.g. Windows). If you're running into related error messages try to disable this by adding `--compile=False` flag. This will slow down the code but at least it will run.
-
-For some context on this repository, GPT, and language modeling it might be helpful to watch my [Zero To Hero series](https://karpathy.ai/zero-to-hero.html). Specifically, the [GPT video](https://www.youtube.com/watch?v=kCc8FmEb1nY) is popular if you have some prior language modeling context.
-
-For more questions/discussions feel free to stop by **#nanoGPT** on Discord:
-
-[![](https://dcbadge.vercel.app/api/server/3zy8kqD9Cp?compact=true&style=flat)](https://discord.gg/3zy8kqD9Cp)
-
-## acknowledgements
-
-All nanoGPT experiments are powered by GPUs on [Lambda labs](https://lambdalabs.com), my favorite Cloud GPU provider. Thank you Lambda labs for sponsoring nanoGPT!
+No lint formatter is currently configured in this repo.
