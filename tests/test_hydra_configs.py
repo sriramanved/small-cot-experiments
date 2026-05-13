@@ -22,6 +22,7 @@ from nanogpt.config_schema import materialize_config
 from nanogpt.methods.student_prefix import jsd_mc_loss as method_jsd_mc_loss
 from nanogpt.methods.student_prefix import normalize_student_prefix_method
 from nanogpt.methods.student_prefix import reverse_kl_tm_loss as method_reverse_kl_tm_loss
+from nanogpt.pipelines import run_pipeline
 from nanogpt.trainers.nail import run_nail
 from nanogpt.trainers.configs import (
     project_nail_config,
@@ -339,6 +340,29 @@ class HydraConfigTests(unittest.TestCase):
 
         self.assertEqual(cfg.pipeline.name, "nail")
         self.assertEqual(projected.method_family, "nail")
+
+    def test_opd_forward_aliases_dispatch_through_student_prefix_backend(self):
+        for experiment, task_name in (
+            ("s5_opd_forward", "s5"),
+            ("modadd_opd_forward", "modadd"),
+        ):
+            with self.subTest(experiment=experiment):
+                cfg = _compose_app(f"experiment={experiment}")
+                self.assertEqual(cfg.pipeline.name, "student_prefix")
+
+                with mock.patch("nanogpt.pipelines.run_nail") as run_nail_mock:
+                    run_pipeline(
+                        cfg,
+                        launcher_command=[str(PYTHON), "-m", "nanogpt.run", f"experiment={experiment}"],
+                    )
+
+                run_nail_mock.assert_called_once()
+                projected = run_nail_mock.call_args.args[0]
+                self.assertEqual(projected.task, task_name)
+                self.assertEqual(projected.method_family, "nail")
+                self.assertEqual(projected.loss, "forward")
+                self.assertEqual(projected.teacher_signal, "mc")
+                self.assertEqual(projected.rollout_temperature_override, 1.0)
 
     def test_s5_nail_reverse_full_projection_wires_full_reverse_controls(self):
         cfg = _compose_app(

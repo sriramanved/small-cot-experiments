@@ -59,7 +59,8 @@ loss used on visited prefixes. The code exposes those choices separately:
 - The shared online implementation backend is `student_prefix`, implemented by
   `src/nanogpt/trainers/native_student_prefix.py`. Use
   `pipeline=student_prefix` for new configs; `pipeline=nail` remains a legacy
-  alias, and `pipeline=opd` is the historical sampled-default OPD-R entrypoint.
+  alias. OPD-R uses the `opd` pipeline entrypoint, but that entrypoint delegates
+  to the shared `run_student_prefix` backend with sampled rollout defaults.
 
 The online implementations are stopped-prefix empirical objectives. They match
 the appendix implementation choices, but should not be read as literal
@@ -79,6 +80,10 @@ older `experiment=s5_nail task.rollout_temperature_override=1.0` and
 `experiment=modadd_nail task.rollout_temperature_override=1.0` paths still work
 for compatibility, but the OPD-F aliases above are the reader-facing launch
 surface.
+
+OPD-R has a single implementation path here: `pipeline=opd` dispatches to
+`run_opd`, and `run_opd` delegates to the same `run_student_prefix` trainer used
+by the other online methods.
 
 Full-distribution forward variants use `task.teacher_signal=full task.loss=forward`.
 Forward/reverse interpolation uses

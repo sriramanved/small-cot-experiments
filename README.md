@@ -45,6 +45,9 @@ teacher signal.
 
 OPD-F shares the student-prefix backend with NAIL-F/R, but it is conceptually
 OPD because it uses sampled student prefixes rather than greedy prefixes.
+OPD-R uses the `opd` pipeline entrypoint, but that entrypoint delegates to the
+shared `run_student_prefix` backend; there is not a second OPD-R
+implementation.
 
 | Paper notation / concept | Code name |
 |---|---|
@@ -93,7 +96,8 @@ pip install -e .
 - `s5_prompt_bank` / `modadd_prompt_bank`: generate clean prompt banks.
 - `s5_render` / `modadd_render`: render offline noisy datasets.
 - `student_prefix`: neutral online backend for NAIL-F/R and OPD-F aliases.
-- `opd`: historical sampled-default OPD-R entrypoint over the same backend.
+- `opd`: OPD-R entrypoint; it delegates to the shared `run_student_prefix`
+  backend with sampled rollout defaults.
 - `nail`: legacy greedy-default alias for the student-prefix backend.
 
 ## Common Runs

@@ -15,8 +15,9 @@ knobs:
 `student_prefix` is the shared backend for NAIL-F, NAIL-R, OPD-F, and OPD-R.
 Use `pipeline=student_prefix` for new student-prefix configs. Historical Hydra
 pipeline names remain compatibility entrypoints: `pipeline=nail` is the old
-greedy-default name, while `pipeline=opd` is the sampled-default OPD-R
-entrypoint over the same `run_student_prefix` trainer.
+greedy-default name. OPD-R uses the `opd` pipeline entrypoint, but that
+entrypoint delegates to the shared `run_student_prefix` backend with sampled
+rollout defaults.
 
 | Paper method | Backend/trainer | Prefix policy | Loss sample | Teacher signal | Canonical launch |
 |---|---|---|---|---|---|
@@ -28,6 +29,8 @@ entrypoint over the same `run_student_prefix` trainer.
 
 OPD-F shares the student-prefix backend with NAIL-F/R, but it is conceptually
 OPD because it uses sampled student prefixes rather than greedy prefixes.
+OPD-R also uses the same backend: `pipeline=opd` is only the entrypoint name,
+and it delegates to `run_student_prefix`.
 
 ## Paper Object To Code
 
