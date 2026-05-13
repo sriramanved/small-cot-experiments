@@ -1,9 +1,8 @@
 # @package _global_
-# Paper-facing OPD-F alias. This reuses the student_prefix backend currently
-# exposed through the historical `nail` pipeline, but the method semantics are:
-# sampled student prefixes + forward/teacher-sample loss.
+# Paper-facing OPD-F alias: sampled student prefixes + forward/teacher-sample
+# loss on the shared student_prefix backend.
 defaults:
-  - /pipeline: nail
+  - /pipeline: student_prefix
   - /task: modadd_nail
   - /model: teacher_inferred
   - /optim: opd

@@ -9,6 +9,11 @@ from nanogpt.trainers.native_student_prefix import (
 
 
 def run_nail(cfg: NailConfig, *, launcher_command: list[str]) -> None:
+    """Legacy NAIL entrypoint for the shared student-prefix backend.
+
+    New neutral configs may use `pipeline=student_prefix`; both paths delegate
+    to `run_student_prefix` and preserve the same greedy-default method family.
+    """
     run_student_prefix(cfg, launcher_command=launcher_command)
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import shutil
 import socket
 import subprocess
@@ -269,7 +270,8 @@ class HydraConfigTests(unittest.TestCase):
             default_method_family=projected.method_family,
         )
 
-        self.assertEqual(cfg.pipeline.name, "nail")
+        self.assertEqual(cfg.pipeline.name, "student_prefix")
+        self.assertEqual(projected.method_family, "nail")
         self.assertEqual(projected.loss, "forward")
         self.assertEqual(projected.teacher_signal, "mc")
         self.assertEqual(projected.rollout_temperature_override, 1.0)
@@ -286,7 +288,8 @@ class HydraConfigTests(unittest.TestCase):
             default_method_family=projected.method_family,
         )
 
-        self.assertEqual(cfg.pipeline.name, "nail")
+        self.assertEqual(cfg.pipeline.name, "student_prefix")
+        self.assertEqual(projected.method_family, "nail")
         self.assertEqual(projected.task, "modadd")
         self.assertEqual(projected.loss, "forward")
         self.assertEqual(projected.teacher_signal, "mc")
@@ -312,6 +315,30 @@ class HydraConfigTests(unittest.TestCase):
         self.assertEqual(opd_f_state["resolved_method_name"], "OPD-F")
         self.assertEqual(nail_state["resolved_rollout_temperature"], 0.0)
         self.assertEqual(opd_f_state["resolved_rollout_temperature"], 1.0)
+
+    def test_student_prefix_pipeline_alias_matches_legacy_nail_projection(self):
+        # `student_prefix` is the neutral backend name; `nail` remains a legacy
+        # alias with the same greedy-default method family.
+        legacy = project_nail_config(_compose_app("experiment=s5_nail"))
+        alias_cfg = _compose_app("experiment=s5_nail", "pipeline=student_prefix")
+        alias = project_nail_config(alias_cfg)
+
+        self.assertEqual(alias_cfg.pipeline.name, "student_prefix")
+        self.assertEqual(legacy.method_family, "nail")
+        self.assertEqual(alias.method_family, "nail")
+        self.assertEqual(alias.loss, legacy.loss)
+        self.assertEqual(alias.teacher_signal, legacy.teacher_signal)
+        self.assertEqual(
+            alias.rollout_temperature_override,
+            legacy.rollout_temperature_override,
+        )
+
+    def test_legacy_nail_pipeline_still_projects(self):
+        cfg = _compose_app("experiment=s5_nail", "pipeline=nail")
+        projected = project_nail_config(cfg)
+
+        self.assertEqual(cfg.pipeline.name, "nail")
+        self.assertEqual(projected.method_family, "nail")
 
     def test_s5_nail_reverse_full_projection_wires_full_reverse_controls(self):
         cfg = _compose_app(
@@ -405,6 +432,38 @@ class HydraConfigTests(unittest.TestCase):
                 self.assertIn("pipeline:", result.stdout)
                 self.assertIn("run:", result.stdout)
                 self.assertNotIn("experiment:", result.stdout)
+
+    def test_reader_docs_links_and_experiment_aliases_exist(self):
+        docs = [
+            REPO_ROOT / "README.md",
+            REPO_ROOT / "experiment_log.md",
+            REPO_ROOT / "docs" / "methods.md",
+        ]
+        markdown_link = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+        experiment_ref = re.compile(r"\bexperiment=([A-Za-z0-9_]+)\b")
+
+        for doc_path in docs[:2]:
+            text = doc_path.read_text(encoding="utf-8")
+            for target in markdown_link.findall(text):
+                target = target.strip()
+                if (
+                    target.startswith(("http://", "https://", "mailto:", "#"))
+                    or target == ""
+                ):
+                    continue
+                local = target.split("#", 1)[0]
+                self.assertTrue(
+                    (doc_path.parent / local).exists(),
+                    f"{doc_path.name} links to missing file {target!r}",
+                )
+
+        for doc_path in docs:
+            text = doc_path.read_text(encoding="utf-8")
+            for experiment in experiment_ref.findall(text):
+                self.assertTrue(
+                    (REPO_ROOT / "hydra_configs" / "experiment" / f"{experiment}.yaml").exists(),
+                    f"{doc_path.name} references missing experiment={experiment}",
+                )
 
     def test_all_supported_sweeps_compose(self):
         sweep_matrix = {

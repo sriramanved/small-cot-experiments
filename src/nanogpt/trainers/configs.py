@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 
 from nanogpt.config_schema import AppConfig, TorchrunConfig
@@ -244,14 +245,22 @@ def project_pretrain_config(cfg: AppConfig) -> PretrainConfig:
 def _project_student_prefix_config(
     cfg: AppConfig,
     *,
-    expected_pipeline: str,
+    expected_pipeline: str | Iterable[str],
+    method_family: str,
     config_cls: type[StudentPrefixConfig],
 ) -> StudentPrefixConfig:
-    if cfg.pipeline.name != expected_pipeline:
-        raise ValueError(f"expected pipeline={expected_pipeline!r}, got {cfg.pipeline.name!r}")
+    expected_names = (
+        {expected_pipeline}
+        if isinstance(expected_pipeline, str)
+        else set(expected_pipeline)
+    )
+    if cfg.pipeline.name not in expected_names:
+        expected_text = "/".join(sorted(expected_names))
+        raise ValueError(f"expected pipeline={expected_text!r}, got {cfg.pipeline.name!r}")
     if cfg.runtime.torchrun.nproc_per_node != 1 or cfg.runtime.torchrun.nnodes != 1:
+        pipeline_label = cfg.pipeline.name.upper()
         raise ValueError(
-            f"{expected_pipeline.upper()} pipelines are single-process only; leave "
+            f"{pipeline_label} pipelines are single-process only; leave "
             "runtime.torchrun at 1"
         )
     if cfg.task.objective not in (None, ""):
@@ -260,7 +269,7 @@ def _project_student_prefix_config(
             "task.objective is only supported for legacy metadata parsing."
         )
     return config_cls(
-        method_family=expected_pipeline,
+        method_family=method_family,
         task=cfg.task.task,
         teacher_checkpoint=cfg.task.teacher_checkpoint,
         prompt_bank_dir=cfg.task.prompt_bank_dir,
@@ -313,6 +322,7 @@ def project_opd_config(cfg: AppConfig) -> OpdConfig:
     return _project_student_prefix_config(
         cfg,
         expected_pipeline="opd",
+        method_family="opd",
         config_cls=OpdConfig,
     )
 
@@ -320,6 +330,7 @@ def project_opd_config(cfg: AppConfig) -> OpdConfig:
 def project_nail_config(cfg: AppConfig) -> NailConfig:
     return _project_student_prefix_config(
         cfg,
-        expected_pipeline="nail",
+        expected_pipeline={"nail", "student_prefix"},
+        method_family="nail",
         config_cls=NailConfig,
     )

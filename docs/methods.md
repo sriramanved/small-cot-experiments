@@ -13,9 +13,10 @@ knobs:
   `student_prefix`, implemented by `src/nanogpt/trainers/native_student_prefix.py`
 
 `student_prefix` is the shared backend for NAIL-F, NAIL-R, OPD-F, and OPD-R.
-The historical Hydra pipeline names remain compatibility entrypoints:
-`pipeline=nail` exposes the greedy-default backend path and the OPD-F alias,
-while `pipeline=opd` exposes the sampled-default OPD-R path.
+Use `pipeline=student_prefix` for new student-prefix configs. Historical Hydra
+pipeline names remain compatibility entrypoints: `pipeline=nail` is the old
+greedy-default name, while `pipeline=opd` is the sampled-default OPD-R
+entrypoint over the same `run_student_prefix` trainer.
 
 | Paper method | Backend/trainer | Prefix policy | Loss sample | Teacher signal | Canonical launch |
 |---|---|---|---|---|---|
@@ -27,6 +28,41 @@ while `pipeline=opd` exposes the sampled-default OPD-R path.
 
 OPD-F shares the student-prefix backend with NAIL-F/R, but it is conceptually
 OPD because it uses sampled student prefixes rather than greedy prefixes.
+
+## Paper Object To Code
+
+| Paper object | Code object/function | Notes |
+|---|---|---|
+| `\bar\pi_\theta` greedy rollout policy | `rollout_student(..., temperature=0.0)` in `src/nanogpt/methods/student_prefix.py` | Prefix collection policy for NAIL-F/R. |
+| `\pi_\theta(\cdot | prefix)` loss-side student distribution | `p_answer_logits` in `run_student_prefix` | Gradients flow through this distribution at fixed visited prefixes. |
+| Noisy teacher `\pi^\star_\eta` | `cached_teacher_token_probs` plus `compute_teacher_token_probs` | Clean teacher logits are queried on learner prefixes, then the noisy law is applied. |
+| Forward MC loss | `forward_kl_simple_loss` / `forward_mc_loss` | Uses a token sampled from the noisy teacher distribution. |
+| Full forward KL | `forward_kl_full_loss` / `forward_full_kl_loss` | Uses the full noisy teacher distribution. |
+| Reverse MC estimator | `reverse_kl_tm_loss` / `reverse_kl_mc_loss` | Score-function estimator with gradients only through current loss-side student logits. |
+| Auxiliary token | `sample_student_aux_actions` | NAIL-R draws this separately from greedy rollout tokens. |
+| Rollout token reused for OPD-R | `select_reverse_mc_actions(method_family="opd", ...)` | Reuses sampled rollout actions when the rollout distribution matches the loss distribution. |
+| Rollout temperature | `task.rollout_temperature_override` | Controls prefix collection only. |
+| Loss temperature | `task.loss_temperature_override` | Controls the loss-side student distribution where supported; it does not change prefix collection. |
+| Teacher signal type | `task.teacher_signal=mc|full` | Selects sampled teacher token versus full teacher distribution. |
+| Local loss direction | `task.loss=forward|reverse|mixed|jsd` | Selects the per-prefix objective. |
+
+## Code Walkthrough By Training Step
+
+Student-prefix online methods all pass through `run_student_prefix` in
+`src/nanogpt/trainers/native_student_prefix.py`.
+
+| Step | Function / source | Invariant |
+|---|---|---|
+| Config normalization / legacy aliases | `normalize_student_prefix_method`, `src/nanogpt/methods/student_prefix.py` | Legacy objective strings normalize to canonical `loss`, `teacher_signal`, and resolved temperatures before metadata is written. |
+| Prompt batch selection | `FixedPromptCycle.next_batch_indices`, `src/nanogpt/methods/student_prefix.py` | All online methods train on the selected prompt-bank subset without changing the prompt order semantics. |
+| Student rollout / prefix collection | `rollout_student`, `src/nanogpt/methods/student_prefix.py` | Rollout temperature controls only the visited prefixes; rollout is under `torch.no_grad()`. |
+| Clean teacher logits | `cached_teacher_token_probs`, `src/nanogpt/methods/student_prefix.py` | The frozen clean teacher is queried on learner-induced prefixes. |
+| Noisy teacher law application | `compute_teacher_token_probs`, `semantic_key_noise_probs`, random-suffix helpers in `src/nanogpt/methods/student_prefix.py` | `task.teacher_law` and `task.eta` transform clean teacher logits into noisy next-token distributions. |
+| NAIL-F / OPD-F action selection | `sample_teacher_actions` or full `teacher_probs` in `run_student_prefix` | MC forward uses a teacher-sampled token; full forward uses the full noisy teacher distribution. |
+| NAIL-R action selection | `sample_student_aux_actions` via `select_reverse_mc_actions` | NAIL-R samples a fresh auxiliary student token at the fixed greedy prefix. |
+| OPD-R action selection | `select_reverse_mc_actions(method_family="opd", ...)` | OPD-R reuses the sampled rollout token when rollout and loss distributions match; mismatched temperatures are surrogates. |
+| Loss computation | `forward_kl_simple_loss`, `forward_kl_full_loss`, `reverse_kl_tm_loss`, `reverse_kl_full_loss`, `mixed_kl_loss_from_components`, `jsd_mc_loss` | Loss gradients update the current next-token distribution at fixed prefixes, not the rollout sampling path. |
+| Metadata/logging | `build_run_metadata`, `save_run_metadata`, `maybe_init_wandb` | `run_meta.json` includes `resolved_method_name`, rollout policy/temperature, `loss`, `teacher_signal`, and compatibility fields when present. |
 
 ## LogLossBC
 

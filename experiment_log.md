@@ -16,8 +16,8 @@ The public entrypoint is Hydra:
 python -m nanogpt.run <overrides>
 ```
 
-For the compact per-method notation map, config knobs, and source pointers, see
-[`docs/methods.md`](docs/methods.md).
+For the compact method taxonomy, paper-equation mapping, and per-step
+implementation walkthrough, see [`docs/methods.md`](docs/methods.md).
 
 That entrypoint is implemented in `src/nanogpt/run.py`. It materializes the
 Hydra config with `src/nanogpt/config_schema.py` and dispatches to the selected
@@ -43,9 +43,8 @@ pipeline through `src/nanogpt/pipelines/__init__.py`.
 | Naming helpers | `src/nanogpt/utils/resolvers.py` | Defines generated prompt-bank, dataset, run, and output directory names. |
 | Plot/audit helpers | `scripts/`, `notebooks/`, `debugging-log/` | Useful for analysis, but not the primary launch API. |
 
-The attached paper also describes GSM8K experiments. This repository's
-supported Hydra surface is for the synthetic S5 and modular-addition suites;
-there is no checked-in GSM8K Hydra pipeline in this repo snapshot.
+Scope note: this repository covers the synthetic S5 and modular-addition
+experiments. GSM8K code is maintained separately.
 
 ## Implementation Backend Vs Paper Method
 
@@ -58,7 +57,9 @@ loss used on visited prefixes. The code exposes those choices separately:
 - The local teacher/student comparison is controlled by `task.loss` and
   `task.teacher_signal`.
 - The shared online implementation backend is `student_prefix`, implemented by
-  `src/nanogpt/trainers/native_student_prefix.py`.
+  `src/nanogpt/trainers/native_student_prefix.py`. Use
+  `pipeline=student_prefix` for new configs; `pipeline=nail` remains a legacy
+  alias, and `pipeline=opd` is the historical sampled-default OPD-R entrypoint.
 
 The online implementations are stopped-prefix empirical objectives. They match
 the appendix implementation choices, but should not be read as literal
@@ -75,8 +76,9 @@ differentiation through the augmented trajectory law.
 OPD-F shares the student-prefix backend with NAIL-F/R, but it is conceptually
 OPD because it uses sampled student prefixes rather than greedy prefixes. The
 older `experiment=s5_nail task.rollout_temperature_override=1.0` and
-`experiment=modadd_nail task.rollout_temperature_override=1.0` paths still work,
-but the OPD-F aliases above are the reader-facing launch surface.
+`experiment=modadd_nail task.rollout_temperature_override=1.0` paths still work
+for compatibility, but the OPD-F aliases above are the reader-facing launch
+surface.
 
 Full-distribution forward variants use `task.teacher_signal=full task.loss=forward`.
 Forward/reverse interpolation uses

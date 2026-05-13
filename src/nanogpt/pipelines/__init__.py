@@ -13,16 +13,15 @@ from nanogpt.trainers.configs import (
 
 def run_pipeline(cfg: AppConfig, *, launcher_command: list[str]) -> None:
     # Hydra experiments pick one of these pipelines. See `experiment_log.md`
-    # for the paper-to-code map; e.g. LogLossBC uses `pretrain` on a rendered
-    # offline dataset, while NAIL-F/R and OPD-F/R use the student_prefix backend.
-    # `pipeline=nail` is a historical entrypoint and also backs OPD-F aliases.
+    # for the paper-to-code map. `pipeline=student_prefix` is the neutral online
+    # backend; `pipeline=nail` remains a legacy alias for the same code path.
     if cfg.pipeline.name == "pretrain":
         run_pretrain(project_pretrain_config(cfg), launcher_command=launcher_command)
         return
     if cfg.pipeline.name == "opd":
         run_opd(project_opd_config(cfg), launcher_command=launcher_command)
         return
-    if cfg.pipeline.name == "nail":
+    if cfg.pipeline.name in {"nail", "student_prefix"}:
         run_nail(project_nail_config(cfg), launcher_command=launcher_command)
         return
     if cfg.pipeline.name == "modadd_prompt_bank":

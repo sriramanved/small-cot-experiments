@@ -723,7 +723,14 @@ def build_run_metadata(
 
 
 def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str]) -> None:
-    """Train a student-prefix method on a fixed prompt-bank subset."""
+    """Train NAIL-F/R or OPD-F/R on learner-induced prefixes.
+
+    This is the shared `student_prefix` backend. It samples or greedily collects
+    prefixes under `torch.no_grad()`, queries the frozen noisy teacher on those
+    fixed prefixes, and then computes the configured per-prefix loss. Gradients
+    update only the current student logits used in the loss; they do not flow
+    through rollout sampling, prompt selection, or teacher feedback.
+    """
     validate_config(cfg)
     if int(os.environ.get("WORLD_SIZE", "1")) != 1:
         raise RuntimeError(
@@ -1236,8 +1243,8 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                     step_metrics.update(reverse_metrics)
             elif cfg.teacher_signal == "mc" and cfg.loss == "forward":
                 # Forward loss on greedy prefixes is NAIL-F; the same loss on
-                # sampled prefixes is OPD-F even though the historical Hydra
-                # entrypoint may still be `pipeline=nail`.
+                # sampled prefixes is OPD-F; legacy override-based launches
+                # may still arrive through `pipeline=nail`.
                 assert teacher_targets is not None
                 assert log_teacher_target is not None
                 loss, objective_stats = forward_kl_simple_loss(

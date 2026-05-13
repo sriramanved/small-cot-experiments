@@ -4,10 +4,9 @@ This repository contains the synthetic noisy imitation learning experiments for
 LogLossBC, NAIL-F, NAIL-R, OPD-F, and OPD-R on S5 and modular-addition tasks.
 
 Readers coming from the paper should start with
-[`docs/methods.md`](docs/methods.md) and [`experiment_log.md`](experiment_log.md).
-They map paper method names and notation to the Hydra entrypoints, config
-variables, source files, artifacts, and S5 / modular-addition command templates
-in this repo.
+[`experiment_log.md`](experiment_log.md) for commands and reproducibility, then
+read [`docs/methods.md`](docs/methods.md) for the method taxonomy and
+implementation semantics.
 
 ## Reader's Guide
 
@@ -29,9 +28,10 @@ direction or surrogate is optimized.
 ## Implementation Backend Vs Paper Method
 
 `student_prefix` is the shared implementation backend for NAIL-F, NAIL-R,
-OPD-F, and OPD-R. Historical Hydra pipeline names still appear in configs:
-`pipeline=nail` is the greedy-default student-prefix entrypoint and also backs
-the OPD-F aliases, while `pipeline=opd` is the sampled-default OPD-R entrypoint.
+OPD-F, and OPD-R. Use `pipeline=student_prefix` for new student-prefix configs.
+Historical Hydra pipeline names still work: `pipeline=nail` is the old
+greedy-default name, while `pipeline=opd` is the sampled-default OPD-R
+entrypoint.
 Paper method names are presets over rollout temperature, loss direction, and
 teacher signal.
 
@@ -60,10 +60,8 @@ OPD because it uses sampled student prefixes rather than greedy prefixes.
 | Teacher token | `teacher_targets` sampled by `sample_teacher_actions` |
 | Auxiliary student token | `aux_actions` from `sample_student_aux_actions` |
 
-The repo currently supports the synthetic S5 and modular-addition workflows via
-Hydra. The paper also discusses GSM8K-style experiments, but this checkout does
-not include a first-class GSM8K Hydra pipeline; reuse the student-prefix method
-code only after adding the corresponding task/prompt-bank surface.
+Scope note: this repo covers the synthetic S5 and modular-addition experiments.
+GSM8K code is maintained separately.
 
 Some implementation objectives are empirical stopped-prefix surrogates of the
 literal augmented-law objectives in the theory. In particular, rollout samples
@@ -94,9 +92,9 @@ pip install -e .
 - `pretrain`: clean teacher training and LogLossBC on rendered datasets.
 - `s5_prompt_bank` / `modadd_prompt_bank`: generate clean prompt banks.
 - `s5_render` / `modadd_render`: render offline noisy datasets.
-- `opd`: historical OPD-R entrypoint over the student-prefix backend.
-- `nail`: historical greedy-default student-prefix entrypoint for NAIL-F/R;
-  the paper-facing OPD-F aliases also use this backend.
+- `student_prefix`: neutral online backend for NAIL-F/R and OPD-F aliases.
+- `opd`: historical sampled-default OPD-R entrypoint over the same backend.
+- `nail`: legacy greedy-default alias for the student-prefix backend.
 
 ## Common Runs
 
@@ -140,6 +138,12 @@ Run OPD-F:
 
 ```sh
 python -m nanogpt.run experiment=s5_opd_forward
+```
+
+Modular-addition OPD-F:
+
+```sh
+python -m nanogpt.run experiment=modadd_opd_forward
 ```
 
 Run NAIL-R with greedy prefix collection and auxiliary reverse-KL actions:

@@ -141,13 +141,12 @@ def normalize_student_prefix_method(
     *,
     default_method_family: str | None = None,
 ) -> dict[str, Any]:
-    """Canonicalize the Hydra method knobs into the paper's two choices.
+    """Canonicalize Hydra knobs into the paper-facing student-prefix method.
 
-    `method_family` fixes the default prefix policy (OPD-F/R sampled,
-    NAIL-F/R greedy). `teacher_signal` and `loss` fix whether the local teacher
-    comparison is MC or full-distribution and which KL direction/surrogate is
-    optimized. Keeping these knobs separate is the main code-level translation
-    of the paper's rollout-law versus per-prefix-loss distinction.
+    NAIL-F/R and OPD-F/R are selected by prefix policy, local loss direction,
+    and teacher signal. This helper also normalizes legacy checkpoint objective
+    strings into canonical `loss` and `teacher_signal` fields. It does not touch
+    tensors or RNG; it only resolves metadata and launch-time defaults.
     """
     method_family = _lookup(value, "method_family") or default_method_family
     teacher_signal = _lookup(value, "teacher_signal")
@@ -322,11 +321,13 @@ def rollout_student(
     device: str | torch.device,
     autocast_context=nullcontext(),
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Collect fixed prefixes from the student rollout policy.
+    """Collect stopped learner prefixes for NAIL-F/R and OPD-F/R.
 
-    The rollout temperature controls only which prefixes are visited. The
-    trainer later recomputes logits on those stopped prefixes and optimizes the
-    loss-side distribution, normally the temperature-one student distribution.
+    `temperature=0.0` gives the greedy rollout policy used by NAIL-F/R;
+    positive temperatures sample OPD-style learner prefixes. The returned
+    actions/log_q come from the rollout distribution only. Gradients do not flow
+    through this sampling path; the trainer later recomputes loss-side logits on
+    the fixed prefixes.
     """
     prompt = prompt_ids.to(device=device, dtype=torch.long, non_blocking=True)
     batch_size, prompt_len = prompt.shape
@@ -662,11 +663,13 @@ def sample_student_aux_actions(
     *,
     temperature: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Sample auxiliary actions from the student loss distribution.
+    """Sample NAIL-R auxiliary actions from the fixed-prefix student policy.
 
-    NAIL-R uses these samples for the reverse-KL estimator instead of reusing
-    the greedy rollout token. The rollout token chooses the prefix; this
-    auxiliary token is a separate draw from the fixed-prefix student policy.
+    Inputs are loss-side logits recomputed on already-collected prefixes. NAIL-R
+    uses these samples for the reverse-KL estimator instead of reusing the
+    greedy rollout token. Returned actions/log_q are detached sampling records;
+    gradients later flow through the reverse loss's current `student_logits`,
+    not through this draw.
     """
     if temperature is not None and temperature <= 0:
         raise ValueError("sample_student_aux_actions temperature must be > 0 when set.")
@@ -720,12 +723,13 @@ def reverse_kl_tm_loss(
     teacher_probs: torch.Tensor,
     eps: float = 1e-10,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Score-function surrogate for reverse KL with teacher-probability weights.
+    """MC reverse-KL score-function estimator for NAIL-R and OPD-R.
 
-    This is the MC reverse-KL estimator used by OPD-R and by NAIL-R once
-    the prefix distribution has been chosen. `actions` and `log_q` describe the
-    sampling distribution; gradients intentionally flow only through `log_p`
-    from the current loss-side logits.
+    `actions` and `log_q` come from the student sampling distribution used by
+    the estimator: OPD-R usually reuses sampled rollout actions, while NAIL-R
+    passes fresh auxiliary actions. Teacher probabilities are fixed feedback on
+    the visited prefixes. Gradients flow only through `log_p` from current
+    loss-side logits; rollout log_q and teacher feedback are treated as stopped.
     """
     teacher_action_probs = teacher_probs.gather(2, actions.unsqueeze(-1)).squeeze(-1)
     log_teacher = torch.log(teacher_action_probs.clamp_min(eps))
@@ -765,7 +769,12 @@ def reverse_kl_full_loss(
     teacher_probs: torch.Tensor,
     eps: float = 1e-10,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Exact per-token KL(student || teacher) when the teacher law is available."""
+    """Full-distribution reverse KL on fixed learner prefixes.
+
+    This exact `KL(student || teacher)` variant uses the full noisy teacher
+    distribution at each visited prefix. The prefixes and teacher probabilities
+    are stopped; gradients flow through the current student distribution.
+    """
     student_log_probs = F.log_softmax(student_logits.float(), dim=-1)
     student_probs = student_log_probs.exp()
     teacher_log_probs = torch.log(teacher_probs.clamp_min(eps))
@@ -802,10 +811,12 @@ def forward_kl_simple_loss(
     temperature: float | None = None,
     eps: float = 1e-10,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Monte Carlo teacher-sample surrogate for forward KL.
+    """MC forward loss for NAIL-F and OPD-F on visited prefixes.
 
-    This is the NAIL-F/OPD-F hard-label update: sample a teacher action at the
-    visited prefix, then do next-token cross entropy on that sampled token.
+    `teacher_targets` are sampled from the noisy teacher distribution at fixed
+    learner prefixes. Greedy prefixes make this NAIL-F; sampled prefixes make it
+    OPD-F. Gradients flow through the student log-probability of the sampled
+    teacher token, not through teacher sampling or prefix rollout.
     """
     teacher_target_probs = teacher_probs.gather(2, teacher_targets.unsqueeze(-1)).squeeze(-1)
     log_teacher_target = torch.log(teacher_target_probs.clamp_min(eps))
@@ -911,7 +922,13 @@ def forward_kl_full_loss(
     temperature: float | None = None,
     eps: float = 1e-10,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Exact forward KL against the full noisy teacher distribution."""
+    """Full-distribution forward KL for NAIL-F/OPD-F-style prefixes.
+
+    `teacher_probs` is the complete noisy teacher distribution on fixed learner
+    prefixes. Gradients flow through the current student logits under the
+    optional loss temperature; neither teacher probabilities nor prefix rollout
+    are differentiated.
+    """
     token_kl, teacher_ce, teacher_entropy = teacher_forward_kl(
         teacher_probs,
         student_logits,
@@ -933,7 +950,12 @@ def forward_full_kl_loss(
     temperature: float | None = None,
     eps: float = 1e-10,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Canonical name for exact per-prefix KL(teacher || student)."""
+    """Canonical name for NAIL-F/OPD-F full-distribution forward KL.
+
+    Inputs are the same fixed-prefix logits and full teacher probabilities as
+    `forward_kl_full_loss`; this wrapper exists so reader-facing docs can avoid
+    legacy naming while keeping checkpoint/test compatibility.
+    """
     return forward_kl_full_loss(
         student_logits,
         teacher_probs=teacher_probs,
@@ -958,12 +980,13 @@ def cached_teacher_token_probs(
     device: str | torch.device,
     autocast_context=nullcontext(),
 ) -> torch.Tensor:
-    """Query the frozen teacher along already-collected rollout prefixes.
+    """Query `pi*_eta` on fixed learner prefixes for all online methods.
 
-    In the language of the paper, this evaluates the noisy expert on
-    learner-induced prefixes. NAIL-F/R and OPD-F/R differ in how `actions` were
-    rolled out; this function only supplies the teacher distribution on those
-    fixed prefixes.
+    `prompt_ids` plus rollout `actions` define the learner-induced prefixes:
+    greedy for NAIL-F/R, sampled for OPD-F/R. The clean teacher is frozen and
+    queried under `torch.no_grad()`, then `teacher_law` and `eta` turn clean
+    logits into noisy teacher probabilities. No gradients flow through teacher
+    queries or noisy-law application.
     """
     torch_device = torch.device(device)
     prompt = prompt_ids.to(device=torch_device, dtype=torch.long, non_blocking=True)
