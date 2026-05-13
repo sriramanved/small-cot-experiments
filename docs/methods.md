@@ -12,12 +12,9 @@ knobs:
 - Implementation backend:
   `student_prefix`, implemented by `src/nanogpt/trainers/native_student_prefix.py`
 
-`student_prefix` is the shared backend for NAIL-F, NAIL-R, OPD-F, and OPD-R.
-Use `pipeline=student_prefix` for new student-prefix configs. Historical Hydra
-pipeline names remain compatibility entrypoints: `pipeline=nail` is the old
-greedy-default name. OPD-R uses the `opd` pipeline entrypoint, but that
-entrypoint delegates to the shared `run_student_prefix` backend with sampled
-rollout defaults.
+`student_prefix` is the shared implementation backend for the stopped-prefix online objectives. NAIL-F, NAIL-R, OPD-F, and OPD-R all eventually call the same `run_student_prefix` trainer, but their public launch surfaces differ for compatibility and paper-facing clarity.
+
+For new configs that directly target this shared backend, prefer `pipeline=student_prefix`. There is a legacy `pipeline=nail` name that remains supported as the old greedy-default alias. OPD-R is launched through the `opd` pipeline entrypoint, but that entrypoint simply delegates to `run_student_prefix` with sampled-rollout defaults; there is not a second OPD-R implementation.
 
 | Paper method | Backend/trainer | Prefix policy | Loss sample | Teacher signal | Canonical launch |
 |---|---|---|---|---|---|
@@ -26,6 +23,8 @@ rollout defaults.
 | NAIL-R | `student_prefix` / `native_student_prefix.py` | Greedy student prefixes | Fresh auxiliary student token | `mc` | `experiment=s5_nail_reverse_mc_fixed` / `experiment=modadd_nail_reverse_mc_fixed` |
 | OPD-F | `student_prefix` / `native_student_prefix.py` | Sampled student prefixes | Teacher-sampled token for MC forward loss | `mc`, or `full` for full KL | `experiment=s5_opd_forward` / `experiment=modadd_opd_forward` |
 | OPD-R | `student_prefix` / `native_student_prefix.py` | Sampled student prefixes | Rollout token reused as reverse sample | `mc` | `experiment=s5_opd` / `experiment=modadd_opd` |
+
+The “Backend/trainer” column describes the implementation code path, while the “Canonical launch” column describes the user-facing experiment preset. These are not always identical because some names are preserved for compatibility.
 
 OPD-F shares the student-prefix backend with NAIL-F/R, but it is conceptually
 OPD because it uses sampled student prefixes rather than greedy prefixes.

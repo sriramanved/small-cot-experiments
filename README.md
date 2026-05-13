@@ -27,13 +27,9 @@ direction or surrogate is optimized.
 
 ## Implementation Backend Vs Paper Method
 
-`student_prefix` is the shared implementation backend for NAIL-F, NAIL-R,
-OPD-F, and OPD-R. Use `pipeline=student_prefix` for new student-prefix configs.
-Historical Hydra pipeline names still work: `pipeline=nail` is the old
-greedy-default name, while `pipeline=opd` is the sampled-default OPD-R
-entrypoint.
-Paper method names are presets over rollout temperature, loss direction, and
-teacher signal.
+`student_prefix` is the neutral name for the shared stopped-prefix online backend. It is the implementation used underneath NAIL-F, NAIL-R, OPD-F, and OPD-R. The public pipeline names are partly historical: `pipeline=student_prefix` is the preferred neutral backend name for new direct configs, `pipeline=nail` remains the old greedy-default alias, and `pipeline=opd` remains the paper-facing OPD-R entrypoint. The `opd` entrypoint delegates to the same `run_student_prefix` trainer, so there is not a separate OPD-R implementation.
+
+Paper method names should be read as presets over rollout temperature, loss direction, and teacher signal, not as separate trainer implementations.
 
 | Paper method | Backend/trainer | Prefix policy | Loss sample | Teacher signal | Canonical launch |
 |---|---|---|---|---|---|
