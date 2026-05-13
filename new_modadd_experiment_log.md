@@ -37,6 +37,11 @@ Task:
 - Target mode: chain-of-thought running sums
 - Each prompt contains `m` input residues followed by an equals token.
 - Each target contains the sequence of `m` running sums modulo `p`.
+- Tokenization: these synthetic runs do not use GPT-2/BPE tokenization. They use
+  the task-specific symbolic vocabulary from `data/modular_addition/task.py`;
+  for `p = 7`, the vocabulary is residues `0` through `6` plus `=`, so
+  `vocab_size = 8`. This is effectively character/symbol-level tokenization
+  over the modular-addition alphabet.
 
 Prompt bank:
 
@@ -761,4 +766,3 @@ greedy rollout, NAIL-reverse with greedy rollout, NAIL-forward with sampled
 rollout, and TM OPD. All methods used evaluation interval `500`; online methods
 used one pass over the 3M prompt subset, giving `46875` training iterations at
 batch size `64`.
-

@@ -32,6 +32,11 @@ For the S5, `m = 21` task, we first trained a clean expert with online CoT train
   - `s5_m = 21`
   - `teacher_depth = 1`
   - `teacher_seed = 20260417`
+- Tokenization:
+  - The synthetic S5 runs do not use GPT-2/BPE tokenization. They use the
+    task-specific symbolic vocabulary from `data/s5_cot/task.py`: `(`, `)`,
+    `=`, and digits `1` through `5`, for `VOCAB_SIZE = 8`. This is effectively
+    character/symbol-level tokenization over the S5 alphabet.
 - Model:
   - `n_layer = 1`
   - `n_head = 8`
