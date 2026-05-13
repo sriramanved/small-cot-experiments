@@ -13,6 +13,7 @@ from nanogpt.methods.student_prefix import (
     compute_teacher_log_probs,
     compute_teacher_token_probs,
     extract_answer_logits,
+    normalize_student_prefix_method,
     teacher_forward_kl,
 )
 from nanogpt.trainers.nail import validate_args as validate_nail_args
@@ -290,6 +291,22 @@ class OpdObjectiveTests(unittest.TestCase):
                 loss_temperature_override=0.7,
             )
         )
+
+    def test_legacy_objective_names_normalize_to_canonical_fields(self):
+        # Compatibility only: old objective strings stay readable, but new
+        # configs should spell out task.loss and task.teacher_signal.
+        state = normalize_student_prefix_method(
+            {
+                "objective": "reverse_kl_tm",
+                "student_temperature": 1.0,
+            }
+        )
+
+        self.assertEqual(state["teacher_signal"], "mc")
+        self.assertEqual(state["loss"], "reverse")
+        self.assertEqual(state["legacy_objective"], "reverse_kl_tm")
+        self.assertEqual(state["resolved_rollout_temperature"], 1.0)
+        self.assertEqual(state["resolved_method_name"], "OPD-R")
 
     def test_teacher_laws_diverge_on_digit_and_nondigit_cases(self):
         digit_case_logits = torch.zeros((1, 1, VOCAB_SIZE), dtype=torch.float32)

@@ -33,6 +33,8 @@ from data.synthetic.random_suffix_noise import (
 # where that separation is made concrete. See `experiment_log.md` for the table
 # mapping NAIL-F/R and OPD-F/R to these switches.
 
+IMPLEMENTATION_BACKEND = "student_prefix"
+
 DEFAULT_ROLLOUT_TEMPERATURE = {
     # OPD-R / OPD-F collect sampled student prefixes by default.
     "opd": 1.0,
@@ -40,6 +42,19 @@ DEFAULT_ROLLOUT_TEMPERATURE = {
     "nail": 0.0,
 }
 
+# ---------------------------------------------------------------------------
+# Legacy checkpoint/config aliases. Do not use in new configs.
+#
+# Older runs encoded the local loss and teacher feedback type in a single
+# objective string, and sometimes used one student-temperature field for both
+# rollout and loss-side distributions. New launches should use:
+#   task.loss = forward / reverse / mixed / jsd
+#   task.teacher_signal = mc / full
+#   task.rollout_temperature_override
+#   task.loss_temperature_override
+# The aliases below are kept so old checkpoints, run_meta.json files, and
+# analysis artifacts normalize to the canonical fields at load time.
+# ---------------------------------------------------------------------------
 LEGACY_OBJECTIVE_MAP = {
     "forward_kl_simple": ("mc", "forward"),
     "forward_kl_full": ("full", "forward"),
@@ -66,6 +81,37 @@ def default_rollout_temperature(method_family: str) -> float:
         return DEFAULT_ROLLOUT_TEMPERATURE[method_family]
     except KeyError as exc:
         raise ValueError(f"unknown method_family {method_family!r}") from exc
+
+
+def rollout_policy_name(rollout_temperature: float) -> str:
+    return "greedy" if float(rollout_temperature) == 0.0 else "sampled"
+
+
+def resolved_paper_method_name(
+    *,
+    method_family: str,
+    loss: str,
+    rollout_temperature: float,
+) -> str:
+    """Infer the paper-facing method name from backend knobs.
+
+    The forward objective is NAIL-F on greedy learner prefixes and OPD-F on
+    sampled learner prefixes. Reverse MC uses the backend family as well because
+    NAIL-R draws a fresh auxiliary student action, while OPD-R reuses the
+    sampled rollout action.
+    """
+    policy = rollout_policy_name(rollout_temperature)
+    if loss == "forward":
+        return "NAIL-F" if policy == "greedy" else "OPD-F"
+    if loss == "reverse" and method_family == "opd":
+        return "OPD-R" if policy == "sampled" else "OPD-R (greedy-rollout surrogate)"
+    if loss == "reverse" and method_family == "nail":
+        return "NAIL-R" if policy == "greedy" else "NAIL-R (sampled-rollout surrogate)"
+    if loss == "mixed":
+        return "Mixed KL"
+    if loss == "jsd":
+        return "JSD"
+    return f"student_prefix/{loss}"
 
 
 def legacy_objective_to_teacher_signal_loss(objective: str) -> tuple[str, str]:
@@ -141,16 +187,27 @@ def normalize_student_prefix_method(
     if resolved_loss is None and objective not in (None, "") and str(loss) == "forward":
         resolved_loss = legacy_loss_temperature
 
-    return {
+    resolved_rollout = float(resolved_rollout)
+    state = {
         "method_family": str(method_family),
         "teacher_signal": str(teacher_signal),
         "loss": str(loss),
         "kl_beta": kl_beta,
         "rollout_temperature_override": rollout_override,
         "loss_temperature_override": loss_override,
-        "resolved_rollout_temperature": float(resolved_rollout),
+        "resolved_rollout_temperature": resolved_rollout,
         "resolved_loss_temperature": None if resolved_loss is None else float(resolved_loss),
+        "resolved_rollout_policy": rollout_policy_name(resolved_rollout),
+        "resolved_method_name": resolved_paper_method_name(
+            method_family=str(method_family),
+            loss=str(loss),
+            rollout_temperature=resolved_rollout,
+        ),
+        "implementation_backend": IMPLEMENTATION_BACKEND,
     }
+    if objective not in (None, ""):
+        state["legacy_objective"] = str(objective)
+    return state
 
 
 def format_temperature_tag(temperature: float | None) -> str:
@@ -684,6 +741,24 @@ def reverse_kl_tm_loss(
     }
 
 
+def reverse_kl_mc_loss(
+    student_logits: torch.Tensor,
+    actions: torch.Tensor,
+    *,
+    log_q: torch.Tensor,
+    teacher_probs: torch.Tensor,
+    eps: float = 1e-10,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Canonical name for the MC reverse-KL score-function helper."""
+    return reverse_kl_tm_loss(
+        student_logits,
+        actions,
+        log_q=log_q,
+        teacher_probs=teacher_probs,
+        eps=eps,
+    )
+
+
 def reverse_kl_full_loss(
     student_logits: torch.Tensor,
     *,
@@ -703,6 +778,20 @@ def reverse_kl_full_loss(
         "student_teacher_ce": student_teacher_ce,
         "student_entropy": student_entropy,
     }
+
+
+def reverse_full_kl_loss(
+    student_logits: torch.Tensor,
+    *,
+    teacher_probs: torch.Tensor,
+    eps: float = 1e-10,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Canonical name for exact per-prefix KL(student || teacher)."""
+    return reverse_kl_full_loss(
+        student_logits,
+        teacher_probs=teacher_probs,
+        eps=eps,
+    )
 
 
 def forward_kl_simple_loss(
@@ -730,6 +819,24 @@ def forward_kl_simple_loss(
         "log_student_target": log_student_target,
         "log_teacher_target": log_teacher_target,
     }
+
+
+def forward_mc_loss(
+    student_logits: torch.Tensor,
+    teacher_targets: torch.Tensor,
+    *,
+    teacher_probs: torch.Tensor,
+    temperature: float | None = None,
+    eps: float = 1e-10,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Canonical name for the MC teacher-sample forward update."""
+    return forward_kl_simple_loss(
+        student_logits,
+        teacher_targets,
+        teacher_probs=teacher_probs,
+        temperature=temperature,
+        eps=eps,
+    )
 
 
 def mixed_kl_loss_from_components(
@@ -817,6 +924,22 @@ def forward_kl_full_loss(
         "teacher_ce": teacher_ce,
         "teacher_entropy": teacher_entropy,
     }
+
+
+def forward_full_kl_loss(
+    student_logits: torch.Tensor,
+    *,
+    teacher_probs: torch.Tensor,
+    temperature: float | None = None,
+    eps: float = 1e-10,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Canonical name for exact per-prefix KL(teacher || student)."""
+    return forward_kl_full_loss(
+        student_logits,
+        teacher_probs=teacher_probs,
+        temperature=temperature,
+        eps=eps,
+    )
 
 
 @torch.no_grad()

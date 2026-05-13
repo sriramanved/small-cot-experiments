@@ -11,8 +11,8 @@ from nanogpt.utils.resolvers import register_resolvers
 
 
 # Paper-reader orientation:
-# `experiment_log.md` is the repo-level guide from paper method names
-# (LogLossBC, NAIL-F/R, OPD-F/R) to these Hydra entrypoints and config fields.
+# `docs/methods.md` and `experiment_log.md` map paper method names
+# (LogLossBC, NAIL-F/R, OPD-F/R) to Hydra entrypoints and config fields.
 register_resolvers()
 
 

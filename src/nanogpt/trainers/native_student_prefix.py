@@ -66,12 +66,16 @@ from nanogpt_checkpoint import (
     load_nanogpt_model,
 )
 
-# Native single-process trainer for NAIL-F/R and OPD-F/R synthetic experiments.
-# This is the main implementation of the student-prefix methods in the paper. The
-# offline LogLossBC baseline instead goes through `workers/pretrain_body.py`.
-# See `experiment_log.md` for command templates and method-name mapping.
+# Native single-process implementation backend for student-prefix experiments.
+# Paper methods are presets over this backend: NAIL-F/R use greedy prefixes,
+# OPD-F/R use sampled prefixes, and LogLossBC stays in `workers/pretrain_body.py`.
+# Historical Hydra pipeline names (`nail`, `opd`) remain for compatibility; use
+# `resolved_method_name` in run metadata for the paper-facing label.
 
 def validate_config(cfg: StudentPrefixConfig) -> None:
+    # `method_family` is a historical pipeline/default-rollout selector, not a
+    # paper method name. `resolved_method_name` in metadata is the reader-facing
+    # NAIL-F/R or OPD-F/R label.
     method_family = getattr(cfg, "method_family", None)
     teacher_signal = getattr(cfg, "teacher_signal", None)
     loss = getattr(cfg, "loss", None)
@@ -311,6 +315,9 @@ def canonical_student_prefix_metadata(
             else None
         ),
         "method_family": method_state["method_family"],
+        "implementation_backend": method_state["implementation_backend"],
+        "resolved_method_name": method_state["resolved_method_name"],
+        "resolved_rollout_policy": method_state["resolved_rollout_policy"],
         "teacher_signal": method_state["teacher_signal"],
         "loss": method_state["loss"],
         "kl_beta": method_state["kl_beta"],
@@ -680,6 +687,8 @@ def build_run_metadata(
         "subset_size": cfg.subset_size,
         "eta": cfg.eta,
         "teacher_law": cfg.teacher_law,
+        "implementation_backend": method_state["implementation_backend"],
+        "resolved_method_name": method_state["resolved_method_name"],
         "method_family": cfg.method_family,
         "teacher_signal": cfg.teacher_signal,
         "loss": cfg.loss,
@@ -688,7 +697,8 @@ def build_run_metadata(
         "loss_temperature_override": cfg.loss_temperature_override,
         "resolved_rollout_temperature": rollout_temperature,
         "resolved_loss_temperature": method_state["resolved_loss_temperature"],
-        "rollout_policy": "greedy" if rollout_temperature == 0.0 else "sampled",
+        "resolved_rollout_policy": method_state["resolved_rollout_policy"],
+        "rollout_policy": method_state["resolved_rollout_policy"],
         "reverse_action_source": reverse_action_source,
         "shuffle_prompts": cfg.shuffle_prompts,
         "single_epoch": cfg.single_epoch,
@@ -707,6 +717,8 @@ def build_run_metadata(
         metadata["random_suffix_noise"] = random_suffix_noise_config_from_obj(
             cfg.random_suffix_noise
         ).to_dict()
+    if "legacy_objective" in method_state:
+        metadata["legacy_objective"] = method_state["legacy_objective"]
     return metadata
 
 
@@ -855,10 +867,18 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
             "final_answer_len": prompt_bank.final_answer_len,
             "answer_len": prompt_bank.answer_len,
             "target_span": prompt_bank.meta.get("target_span", "cot_with_final_answer_suffix"),
+            "implementation_backend": method_state["implementation_backend"],
+            "resolved_method_name": method_state["resolved_method_name"],
+            "resolved_rollout_policy": method_state["resolved_rollout_policy"],
+            "teacher_signal": method_state["teacher_signal"],
+            "loss": method_state["loss"],
+            "kl_beta": method_state["kl_beta"],
             "resolved_rollout_temperature": method_state["resolved_rollout_temperature"],
             "resolved_loss_temperature": method_state["resolved_loss_temperature"],
         }
     )
+    if "legacy_objective" in method_state:
+        config["legacy_objective"] = method_state["legacy_objective"]
     wandb = maybe_init_wandb(
         enabled=cfg.wandb_log,
         project=cfg.wandb_project,
@@ -1215,6 +1235,9 @@ def run_student_prefix(cfg: StudentPrefixConfig, *, launcher_command: list[str])
                     }
                     step_metrics.update(reverse_metrics)
             elif cfg.teacher_signal == "mc" and cfg.loss == "forward":
+                # Forward loss on greedy prefixes is NAIL-F; the same loss on
+                # sampled prefixes is OPD-F even though the historical Hydra
+                # entrypoint may still be `pipeline=nail`.
                 assert teacher_targets is not None
                 assert log_teacher_target is not None
                 loss, objective_stats = forward_kl_simple_loss(

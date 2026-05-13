@@ -80,6 +80,8 @@ class PretrainConfig:
 
 @dataclass
 class StudentPrefixConfig:
+    # Historical pipeline/default-rollout family (`nail` or `opd`). Paper method
+    # names are resolved later from this plus loss and rollout temperature.
     method_family: str
     task: str
     teacher_checkpoint: str

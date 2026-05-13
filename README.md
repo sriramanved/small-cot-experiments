@@ -4,9 +4,10 @@ This repository contains the synthetic noisy imitation learning experiments for
 LogLossBC, NAIL-F, NAIL-R, OPD-F, and OPD-R on S5 and modular-addition tasks.
 
 Readers coming from the paper should start with
-[`experiment_log.md`](experiment_log.md). It maps paper method names and
-notation to the Hydra entrypoints, config variables, source files, artifacts,
-and S5 / modular-addition command templates in this repo.
+[`docs/methods.md`](docs/methods.md) and [`experiment_log.md`](experiment_log.md).
+They map paper method names and notation to the Hydra entrypoints, config
+variables, source files, artifacts, and S5 / modular-addition command templates
+in this repo.
 
 ## Reader's Guide
 
@@ -25,15 +26,25 @@ direction or surrogate is optimized.
 | Modular-addition task and render path | `data/modular_addition/task.py`, `data/modular_addition/offline_render.py` |
 | Absorbing random-suffix law | `data/synthetic/random_suffix_noise.py` |
 
-| Paper method | Implementation surface | Prefix policy | Per-prefix supervision |
-|---|---|---|---|
-| LogLossBC | `pipeline=pretrain`, `experiment=s5_noisy_bc` / `modadd_noisy_bc` | Fixed noisy teacher rollouts rendered before training | Cross-entropy on rendered tokens, or optional saved teacher probabilities |
-| NAIL-F | `pipeline=nail`, `task.loss=forward`, `task.teacher_signal=mc`, rollout temp `0.0` | Greedy student rollout | Teacher-sampled token from the noisy law |
-| NAIL-R | `pipeline=nail`, `task.loss=reverse`, `task.teacher_signal=mc`, rollout temp `0.0` | Greedy student rollout | Auxiliary token sampled from the student loss distribution |
-| OPD-F | `pipeline=nail`, `task.loss=forward`, `task.teacher_signal=mc`, rollout temp `1.0` | Sampled student rollout | Teacher-sampled token from the noisy law |
-| OPD-R | `pipeline=opd`, `task.loss=reverse`, `task.teacher_signal=mc` | Sampled student rollout | Rollout token reused as the reverse-KL sample |
-| Full KL variants | `task.teacher_signal=full` | Same as selected pipeline/temperature | Exact teacher distribution instead of MC teacher token |
-| Mixed / JSD variants | `task.loss=mixed` or `jsd`, `task.kl_beta=<beta>` | Student-prefix endpoint | `beta` weights the reverse/student side in code |
+## Implementation Backend Vs Paper Method
+
+`student_prefix` is the shared implementation backend for NAIL-F, NAIL-R,
+OPD-F, and OPD-R. Historical Hydra pipeline names still appear in configs:
+`pipeline=nail` is the greedy-default student-prefix entrypoint and also backs
+the OPD-F aliases, while `pipeline=opd` is the sampled-default OPD-R entrypoint.
+Paper method names are presets over rollout temperature, loss direction, and
+teacher signal.
+
+| Paper method | Backend/trainer | Prefix policy | Loss sample | Teacher signal | Canonical launch |
+|---|---|---|---|---|---|
+| LogLossBC | `pretrain` / `src/nanogpt/workers/pretrain_body.py` | Fixed noisy expert rollouts | Rendered token, or saved teacher distribution | None online | `experiment=s5_noisy_bc` / `experiment=modadd_noisy_bc` |
+| NAIL-F | `student_prefix` / `src/nanogpt/trainers/native_student_prefix.py` | Greedy student prefixes | Teacher-sampled token for MC forward loss | `mc`, or `full` for full KL | `experiment=s5_nail` / `experiment=modadd_nail` |
+| NAIL-R | `student_prefix` / `src/nanogpt/trainers/native_student_prefix.py` | Greedy student prefixes | Fresh auxiliary student token | `mc` | `experiment=s5_nail_reverse_mc_fixed` / `experiment=modadd_nail_reverse_mc_fixed` |
+| OPD-F | `student_prefix` / `src/nanogpt/trainers/native_student_prefix.py` | Sampled student prefixes | Teacher-sampled token for MC forward loss | `mc`, or `full` for full KL | `experiment=s5_opd_forward` / `experiment=modadd_opd_forward` |
+| OPD-R | `student_prefix` / `src/nanogpt/trainers/native_student_prefix.py` | Sampled student prefixes | Rollout token reused as reverse sample | `mc` | `experiment=s5_opd` / `experiment=modadd_opd` |
+
+OPD-F shares the student-prefix backend with NAIL-F/R, but it is conceptually
+OPD because it uses sampled student prefixes rather than greedy prefixes.
 
 | Paper notation / concept | Code name |
 |---|---|
@@ -83,8 +94,9 @@ pip install -e .
 - `pretrain`: clean teacher training and LogLossBC on rendered datasets.
 - `s5_prompt_bank` / `modadd_prompt_bank`: generate clean prompt banks.
 - `s5_render` / `modadd_render`: render offline noisy datasets.
-- `opd`: OPD-R with student-sampled prefixes.
-- `nail`: NAIL-F, NAIL-R, and OPD-F through the student-prefix trainer.
+- `opd`: historical OPD-R entrypoint over the student-prefix backend.
+- `nail`: historical greedy-default student-prefix entrypoint for NAIL-F/R;
+  the paper-facing OPD-F aliases also use this backend.
 
 ## Common Runs
 
@@ -122,6 +134,12 @@ Run NAIL-F:
 
 ```sh
 python -m nanogpt.run experiment=s5_nail
+```
+
+Run OPD-F:
+
+```sh
+python -m nanogpt.run experiment=s5_opd_forward
 ```
 
 Run NAIL-R with greedy prefix collection and auxiliary reverse-KL actions:
@@ -165,6 +183,9 @@ Student-prefix method configs use:
 
 Legacy `task.objective` metadata is still readable for old checkpoints and
 analysis scripts, but it is not a supported launch control for native runs.
+Old objective strings such as `forward_kl_simple`, `forward_kl_full`,
+`reverse_kl_simple`, `reverse_kl_tm`, and `reverse_kl_full` normalize to the
+canonical fields at load time and should not be used for new runs.
 
 ## Offline Datasets
 

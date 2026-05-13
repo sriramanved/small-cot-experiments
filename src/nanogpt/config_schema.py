@@ -103,7 +103,7 @@ class TaskConfig:
     - `teacher_checkpoint` is the frozen clean expert.
     - `teacher_law` selects the noisy expert construction.
     - `loss`, `teacher_signal`, and rollout/loss temperatures select the
-      LogLossBC, NAIL-F/R, and OPD-F/R variants.
+      paper method preset; the online implementation backend is student_prefix.
     """
 
     dataset: str = "s5_cot"
@@ -149,8 +149,11 @@ class TaskConfig:
     rollout_temperature_override: Optional[float] = None
     # Optional loss-side temperature for forward/mixed/JSD ablations.
     loss_temperature_override: Optional[float] = None
-    # Legacy objective/temperature fields are parsed for old checkpoints and
-    # analysis metadata only; native launches should use the explicit fields.
+    # ------------------------------------------------------------------
+    # Legacy checkpoint/config aliases. Do not use in new configs.
+    # Old checkpoints and analysis metadata may contain these fields; native
+    # launches should use the explicit canonical knobs above.
+    # ------------------------------------------------------------------
     objective: Optional[str] = None
     student_temperature: Optional[float] = None
     student_rollout_temperature: Optional[float] = None

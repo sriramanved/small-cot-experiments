@@ -19,6 +19,7 @@ from data.s5_cot.task import VOCAB_SIZE, sample_cot_example_ids_from_rng
 from model import GPT, GPTConfig
 from nanogpt.config_schema import materialize_config
 from nanogpt.methods.student_prefix import jsd_mc_loss as method_jsd_mc_loss
+from nanogpt.methods.student_prefix import normalize_student_prefix_method
 from nanogpt.methods.student_prefix import reverse_kl_tm_loss as method_reverse_kl_tm_loss
 from nanogpt.trainers.nail import run_nail
 from nanogpt.trainers.configs import (
@@ -258,6 +259,60 @@ class HydraConfigTests(unittest.TestCase):
         self.assertEqual(projected.rollout_temperature_override, 0.2)
         self.assertTrue(projected.shuffle_prompts)
 
+    def test_s5_opd_forward_alias_resolves_to_sampled_forward_loss(self):
+        # OPD-F shares the student-prefix backend with NAIL-F, but differs in
+        # prefix policy: sampled rollout instead of greedy rollout.
+        cfg = _compose_app("experiment=s5_opd_forward")
+        projected = project_nail_config(cfg)
+        state = normalize_student_prefix_method(
+            projected.config_dict(),
+            default_method_family=projected.method_family,
+        )
+
+        self.assertEqual(cfg.pipeline.name, "nail")
+        self.assertEqual(projected.loss, "forward")
+        self.assertEqual(projected.teacher_signal, "mc")
+        self.assertEqual(projected.rollout_temperature_override, 1.0)
+        self.assertEqual(state["resolved_rollout_temperature"], 1.0)
+        self.assertEqual(state["resolved_rollout_policy"], "sampled")
+        self.assertEqual(state["resolved_method_name"], "OPD-F")
+        self.assertIn("s5-opd-forward-mc", cfg.run.name)
+
+    def test_modadd_opd_forward_alias_resolves_to_sampled_forward_loss(self):
+        cfg = _compose_app("experiment=modadd_opd_forward")
+        projected = project_nail_config(cfg)
+        state = normalize_student_prefix_method(
+            projected.config_dict(),
+            default_method_family=projected.method_family,
+        )
+
+        self.assertEqual(cfg.pipeline.name, "nail")
+        self.assertEqual(projected.task, "modadd")
+        self.assertEqual(projected.loss, "forward")
+        self.assertEqual(projected.teacher_signal, "mc")
+        self.assertEqual(state["resolved_rollout_temperature"], 1.0)
+        self.assertEqual(state["resolved_method_name"], "OPD-F")
+        self.assertIn("modadd-opd-forward-mc", cfg.run.name)
+
+    def test_opd_forward_and_nail_forward_differ_only_by_prefix_policy(self):
+        nail = project_nail_config(_compose_app("experiment=s5_nail"))
+        opd_f = project_nail_config(_compose_app("experiment=s5_opd_forward"))
+        nail_state = normalize_student_prefix_method(
+            nail.config_dict(),
+            default_method_family=nail.method_family,
+        )
+        opd_f_state = normalize_student_prefix_method(
+            opd_f.config_dict(),
+            default_method_family=opd_f.method_family,
+        )
+
+        self.assertEqual(nail.loss, opd_f.loss)
+        self.assertEqual(nail.teacher_signal, opd_f.teacher_signal)
+        self.assertEqual(nail_state["resolved_method_name"], "NAIL-F")
+        self.assertEqual(opd_f_state["resolved_method_name"], "OPD-F")
+        self.assertEqual(nail_state["resolved_rollout_temperature"], 0.0)
+        self.assertEqual(opd_f_state["resolved_rollout_temperature"], 1.0)
+
     def test_s5_nail_reverse_full_projection_wires_full_reverse_controls(self):
         cfg = _compose_app(
             "experiment=s5_nail_reverse_full",
@@ -332,11 +387,13 @@ class HydraConfigTests(unittest.TestCase):
             "modadd_base_p7_m30",
             "modadd_noisy_bc",
             "s5_opd",
+            "s5_opd_forward",
             "s5_nail",
             "s5_nail_reverse_full",
             "s5_nail_reverse_mc_fixed",
             "s5_nail_reverse_debug",
             "modadd_opd",
+            "modadd_opd_forward",
             "modadd_nail",
             "modadd_nail_reverse_full",
             "modadd_nail_reverse_mc_fixed",

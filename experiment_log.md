@@ -16,6 +16,9 @@ The public entrypoint is Hydra:
 python -m nanogpt.run <overrides>
 ```
 
+For the compact per-method notation map, config knobs, and source pointers, see
+[`docs/methods.md`](docs/methods.md).
+
 That entrypoint is implemented in `src/nanogpt/run.py`. It materializes the
 Hydra config with `src/nanogpt/config_schema.py` and dispatches to the selected
 pipeline through `src/nanogpt/pipelines/__init__.py`.
@@ -44,31 +47,41 @@ The attached paper also describes GSM8K experiments. This repository's
 supported Hydra surface is for the synthetic S5 and modular-addition suites;
 there is no checked-in GSM8K Hydra pipeline in this repo snapshot.
 
-## Paper Names To Configs
+## Implementation Backend Vs Paper Method
 
 The paper distinguishes the rollout distribution from the divergence or token
-loss used on visited prefixes. The code exposes those two choices separately:
+loss used on visited prefixes. The code exposes those choices separately:
 
 - Prefix collection is controlled by `task.rollout_temperature_override`.
   NAIL-F and NAIL-R use greedy rollout temperature `0.0`; OPD-F and OPD-R use
   sampled rollout temperature `1.0`.
 - The local teacher/student comparison is controlled by `task.loss` and
   `task.teacher_signal`.
+- The shared online implementation backend is `student_prefix`, implemented by
+  `src/nanogpt/trainers/native_student_prefix.py`.
 
 The online implementations are stopped-prefix empirical objectives. They match
 the appendix implementation choices, but should not be read as literal
 differentiation through the augmented trajectory law.
 
-| Paper method | Hydra surface | Important overrides |
-|---|---|---|
-| LogLossBC / SFT | `experiment=modadd_noisy_bc` or `experiment=s5_noisy_bc` | Consumes a rendered offline dataset. Uses `pipeline=pretrain`. |
-| NAIL-F | `experiment=modadd_nail` or `experiment=s5_nail` | `task.loss=forward task.teacher_signal=mc task.rollout_temperature_override=0.0` |
-| NAIL-R | `experiment=modadd_nail` or `experiment=s5_nail` | `task.loss=reverse task.teacher_signal=mc task.rollout_temperature_override=0.0` |
-| OPD-F | `experiment=modadd_nail` or `experiment=s5_nail` | `task.loss=forward task.teacher_signal=mc task.rollout_temperature_override=1.0`; native `opd` only supports reverse loss. |
-| OPD-R | `experiment=modadd_opd` or `experiment=s5_opd` | `task.loss=reverse task.teacher_signal=mc`; rollout temperature is sampled by default. |
-| Full-distribution NAIL-F or OPD-F | `task.teacher_signal=full task.loss=forward` | Uses exact teacher distributions instead of sampled teacher tokens. |
-| Full-distribution NAIL-R or OPD-R | `task.teacher_signal=full task.loss=reverse` | Uses exact per-token `KL(student || teacher)`. |
-| Forward/reverse interpolation | `task.loss=mixed task.teacher_signal=mc task.kl_beta=<beta>` | `beta=0` is forward-heavy; `beta=1` is reverse-heavy. |
+| Paper method | Backend/trainer | Prefix policy | Loss sample | Teacher signal | Canonical launch |
+|---|---|---|---|---|---|
+| LogLossBC | `pretrain` / `src/nanogpt/workers/pretrain_body.py` | Fixed noisy expert rollouts | Rendered token, or saved teacher distribution | None online | `experiment=s5_noisy_bc` / `experiment=modadd_noisy_bc` |
+| NAIL-F | `student_prefix` / `src/nanogpt/trainers/native_student_prefix.py` | Greedy student prefixes | Teacher-sampled token for MC forward loss | `mc`, or `full` for full KL | `experiment=s5_nail` / `experiment=modadd_nail` |
+| NAIL-R | `student_prefix` / `src/nanogpt/trainers/native_student_prefix.py` | Greedy student prefixes | Fresh auxiliary student token | `mc` | `experiment=s5_nail_reverse_mc_fixed` / `experiment=modadd_nail_reverse_mc_fixed` |
+| OPD-F | `student_prefix` / `src/nanogpt/trainers/native_student_prefix.py` | Sampled student prefixes | Teacher-sampled token for MC forward loss | `mc`, or `full` for full KL | `experiment=s5_opd_forward` / `experiment=modadd_opd_forward` |
+| OPD-R | `student_prefix` / `src/nanogpt/trainers/native_student_prefix.py` | Sampled student prefixes | Rollout token reused as reverse sample | `mc` | `experiment=s5_opd` / `experiment=modadd_opd` |
+
+OPD-F shares the student-prefix backend with NAIL-F/R, but it is conceptually
+OPD because it uses sampled student prefixes rather than greedy prefixes. The
+older `experiment=s5_nail task.rollout_temperature_override=1.0` and
+`experiment=modadd_nail task.rollout_temperature_override=1.0` paths still work,
+but the OPD-F aliases above are the reader-facing launch surface.
+
+Full-distribution forward variants use `task.teacher_signal=full task.loss=forward`.
+Forward/reverse interpolation uses
+`task.loss=mixed task.teacher_signal=mc task.kl_beta=<beta>`, where `beta=0` is
+forward-heavy and `beta=1` is reverse-heavy.
 
 The main online implementation is `run_student_prefix` in
 `src/nanogpt/trainers/native_student_prefix.py`. In each step it:
@@ -243,13 +256,20 @@ launched:
 
 - `launcher_command.txt`: exact Hydra command.
 - `launcher_config.json`: materialized config.
-- `run_meta.json`: student-prefix metadata, including resolved rollout
-  temperature and teacher law.
+- `run_meta.json`: student-prefix metadata, including `resolved_method_name`,
+  resolved rollout temperature, rollout policy, teacher signal, loss, and
+  teacher law.
 - `meta.json`: prompt-bank or offline-dataset metadata.
 - `eval_history.jsonl`: evaluation curve points.
 - `last_eval.json`: most recent evaluation summary.
 - `ckpt.pt`: rolling checkpoint.
 - `completed.txt`: written by completed student-prefix runs.
+
+Compatibility note: old checkpoints/configs may contain legacy objective
+strings such as `forward_kl_simple`, `forward_kl_full`, `reverse_kl_simple`,
+`reverse_kl_tm`, and `reverse_kl_full`, or legacy temperature fields such as
+`student_temperature` and `student_rollout_temperature`. These are normalized at
+load time and should not be used for new runs.
 
 The main clean evaluation metrics are:
 
@@ -368,7 +388,7 @@ done
 for eta in 0.0 0.2; do
   eta_tag=${eta/./p}
   for seed in 20260417 20260418 20260419; do
-    python -m nanogpt.run experiment=modadd_nail \
+    python -m nanogpt.run experiment=modadd_nail_reverse_mc_fixed \
       task.modadd_p=7 task.modadd_m=31 \
       task.n_train=15000000 task.n_val=5000 \
       task.bank_seed=1337 task.teacher_seed=20260417 task.render_seed=$seed \
@@ -397,7 +417,7 @@ OPD-F uses the forward loss with sampled rollouts.
 for eta in 0.0 0.2; do
   eta_tag=${eta/./p}
   for seed in 20260417 20260418 20260419; do
-    python -m nanogpt.run experiment=modadd_nail \
+    python -m nanogpt.run experiment=modadd_opd_forward \
       task.modadd_p=7 task.modadd_m=31 \
       task.n_train=15000000 task.n_val=5000 \
       task.bank_seed=1337 task.teacher_seed=20260417 task.render_seed=$seed \
@@ -405,7 +425,6 @@ for eta in 0.0 0.2; do
       task.prompt_bank_dir=data/modadd_clean_prompt_bank_p7_m31_n15000000_val5000 \
       task.teacher_checkpoint=reruns/modadd_p7_m31_teacher20260417/out-modadd-cot-p7-m31-depth1-seed20260417 \
       task.teacher_law=random_suffix_after_error task.eta=$eta \
-      task.loss=forward task.teacher_signal=mc task.rollout_temperature_override=1.0 \
       task.random_suffix_noise.seed=$seed task.random_suffix_noise.apply_to=modadd \
       optim.seed=$seed optim.eval_interval=500 \
       run.name=modadd-rsuffix-opd-f-eta${eta_tag}-seed${seed} \
@@ -460,6 +479,7 @@ s5_cot or s5_cot_len21
 s5_noisy_render
 s5_noisy_bc
 s5_nail
+s5_opd_forward
 s5_opd
 s5_nail_reverse_mc_fixed
 s5_noisy_bc_full_dist
@@ -539,7 +559,7 @@ python -m nanogpt.run experiment=s5_nail \
 <summary>Run S5 NAIL-R</summary>
 
 ```bash
-python -m nanogpt.run experiment=s5_nail \
+python -m nanogpt.run experiment=s5_nail_reverse_mc_fixed \
   task.s5_m=21 \
   task.bank_seed=1337 task.teacher_seed=20260417 task.render_seed=20260417 \
   task.n_train=15000000 task.n_val=5000 task.subset_size=8000000 \
@@ -558,14 +578,13 @@ python -m nanogpt.run experiment=s5_nail \
 OPD-F uses the forward loss with sampled rollouts.
 
 ```bash
-python -m nanogpt.run experiment=s5_nail \
+python -m nanogpt.run experiment=s5_opd_forward \
   task.s5_m=21 \
   task.bank_seed=1337 task.teacher_seed=20260417 task.render_seed=20260417 \
   task.n_train=15000000 task.n_val=5000 task.subset_size=8000000 \
   task.prompt_bank_dir=data/s5_clean_prompt_bank_m21_n15000000_val5000 \
   task.teacher_checkpoint=reruns/s5_m21_teacher20260417/out-s5-cot-m21-depth1-seed20260417 \
   task.teacher_law=distributional_noise task.eta=0.1 \
-  task.loss=forward task.teacher_signal=mc task.rollout_temperature_override=1.0 \
   optim.seed=20260417
 ```
 

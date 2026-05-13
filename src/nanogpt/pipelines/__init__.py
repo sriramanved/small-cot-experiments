@@ -14,7 +14,8 @@ from nanogpt.trainers.configs import (
 def run_pipeline(cfg: AppConfig, *, launcher_command: list[str]) -> None:
     # Hydra experiments pick one of these pipelines. See `experiment_log.md`
     # for the paper-to-code map; e.g. LogLossBC uses `pretrain` on a rendered
-    # offline dataset, while NAIL-F/R and OPD-F/R use student-prefix trainers.
+    # offline dataset, while NAIL-F/R and OPD-F/R use the student_prefix backend.
+    # `pipeline=nail` is a historical entrypoint and also backs OPD-F aliases.
     if cfg.pipeline.name == "pretrain":
         run_pretrain(project_pretrain_config(cfg), launcher_command=launcher_command)
         return
